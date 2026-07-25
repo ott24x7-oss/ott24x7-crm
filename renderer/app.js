@@ -518,8 +518,16 @@ RENDER.extractor = (b) => {
   function exportGoogle() {
     const withNums = (rows || []).filter(r => r.number);
     if (!withNums.length) return toast('Extract numbers first', 'err');
-    const g = withNums.map(r => ({ Name: r.name || ('WhatsApp ' + r.number), 'Given Name': r.name || r.number, 'Phone 1 - Type': 'Mobile', 'Phone 1 - Value': '+' + String(r.number).replace(/\D/g, '') }));
-    downloadCsv('google-contacts.csv', g, ['Name', 'Given Name', 'Phone 1 - Type', 'Phone 1 - Value']);
+    const cols = ['First Name', 'Middle Name', 'Last Name', 'Phonetic First Name', 'Phonetic Middle Name', 'Phonetic Last Name', 'Name Prefix', 'Name Suffix', 'Nickname', 'File As', 'Organization Name', 'Organization Title', 'Organization Department', 'Birthday', 'Notes', 'Photo', 'Labels', 'Phone 1 - Label', 'Phone 1 - Value'];
+    const g = withNums.map(r => {
+      const o = {}; cols.forEach(c => (o[c] = ''));
+      o['First Name'] = r.name || r.number;
+      o['Labels'] = '* myContacts';
+      o['Phone 1 - Label'] = 'Mobile';
+      o['Phone 1 - Value'] = '+' + String(r.number).replace(/\D/g, '');
+      return o;
+    });
+    downloadCsv('google-contacts.csv', g, cols);
     toast(`Exported ${g.length} for Google Contacts`);
   }
   b.append(
