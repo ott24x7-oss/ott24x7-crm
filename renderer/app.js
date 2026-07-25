@@ -93,6 +93,7 @@ async function enterApp() {
   else $('#waEmpty').style.display = 'flex';
   setInterval(pollStatus, 2500);
   startScheduler();
+  try { ott.onUpdateReady(() => toast('Update downloaded — restart the app to apply', 'ok')); } catch (_) {}
 }
 
 function addAccount() {
@@ -195,22 +196,33 @@ async function sendText(number, text) {
   try { return await waExec(expr); } catch (e) { return { ok: false, err: String(e) }; }
 }
 async function isConnected() { try { return await waExec("(async()=>{try{return (await WPP.conn.isAuthenticated())===true}catch(e){return false}})()"); } catch { return false; } }
+async function sendMedia(number, dataUrl, caption, filename) {
+  const jid = JSON.stringify(digits(number) + '@c.us');
+  const content = JSON.stringify(dataUrl);
+  const cap = JSON.stringify(spin(withSignature(caption || '')));
+  const fn = JSON.stringify(filename || 'file');
+  const expr = `(async()=>{try{await WPP.chat.sendFileMessage(${jid},${content},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  try { return await waExec(expr); } catch (e) { return { ok: false, err: String(e) }; }
+}
 
 // ================= feature renderers =================
 const RENDER = {};
 
 RENDER.broadcast = (b) => {
-  const numbers = el('textarea', { placeholder: '919876543210\n14155552671', style: { minHeight: '150px', fontFamily: 'JetBrains Mono, monospace' } });
+  const numbers = el('textarea', { placeholder: '919876543210\n14155552671', style: { minHeight: '140px', fontFamily: 'JetBrains Mono, monospace' } });
   const msg = el('textarea', { placeholder: 'Hi! {Hello|Hey} — from ott24x7 CRM' });
   const dMin = el('input', { type: 'number', value: '4', min: '1' });
   const dMax = el('input', { type: 'number', value: '9', min: '1' });
   const bar = el('div', { className: 'bar' }); const log = el('div', { className: 'log' });
+  const att = attachControl();
   let running = false;
   const start = el('button', { className: 'btn primary', onclick: run }, 'Start sending');
   const stop = el('button', { className: 'btn ghost', disabled: true, onclick: () => { running = false; } }, 'Stop');
   b.append(
     lbl('Numbers (one per line, with country code)', numbers),
-    lbl('Message  ·  {a|b} = spin, signature auto-appended if enabled', msg),
+    el('div', { className: 'row' }, importBtn(numbers)),
+    lbl('Message / caption  ·  {a|b} = spin, signature auto-appended', msg),
+    att.node,
     el('div', { className: 'row' }, lbl('Delay min (s)', dMin), lbl('Delay max (s)', dMax)),
     quickInsert(msg),
     el('div', { className: 'row' }, start, stop),
@@ -220,14 +232,15 @@ RENDER.broadcast = (b) => {
     if (running) return;
     const nums = numbers.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (!nums.length) return toast('Add numbers', 'err');
-    if (!msg.value.trim()) return toast('Write a message', 'err');
+    if (!msg.value.trim() && !att.get()) return toast('Write a message or attach a file', 'err');
     if (!(await isConnected())) return toast('WhatsApp not linked on this account', 'err');
     running = true; start.disabled = true; stop.disabled = false; log.innerHTML = ''; bar.style.width = '0%';
     const dmin = Math.max(1, +dMin.value || 4), dmax = Math.max(dmin, +dMax.value || 9);
-    let ok = 0, fail = 0, done = 0;
+    const file = att.get(); let ok = 0, fail = 0, done = 0;
     for (const n of nums) {
       if (!running) { line(log, 'Stopped.', 'bad'); break; }
-      const r = await sendText(n, msg.value.trim()); done++;
+      const r = file ? await sendMedia(n, file.data, msg.value.trim(), file.name) : await sendText(n, msg.value.trim());
+      done++;
       if (r.ok) { ok++; line(log, `✓ ${n}`, 'ok'); } else { fail++; line(log, `✗ ${n} — ${r.err || 'failed'}`, 'bad'); }
       bar.style.width = Math.round(done / nums.length * 100) + '%';
       if (running && done < nums.length) await sleep((dmin + Math.random() * (dmax - dmin)) * 1000);
@@ -239,13 +252,15 @@ RENDER.broadcast = (b) => {
 
 RENDER.direct = (b) => {
   const num = el('input', { placeholder: '919876543210' });
-  const msg = el('textarea', { placeholder: 'Your message' });
-  b.append(lbl('Number (with country code)', num), lbl('Message', msg), quickInsert(msg),
+  const msg = el('textarea', { placeholder: 'Your message / caption' });
+  const att = attachControl();
+  b.append(lbl('Number (with country code)', num), lbl('Message / caption', msg), att.node, quickInsert(msg),
     el('button', { className: 'btn primary', onclick: async () => {
       if (!digits(num.value)) return toast('Enter a number', 'err');
-      if (!msg.value.trim()) return toast('Write a message', 'err');
+      if (!msg.value.trim() && !att.get()) return toast('Write a message or attach a file', 'err');
       if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
-      const r = await sendText(num.value, msg.value.trim());
+      const file = att.get();
+      const r = file ? await sendMedia(num.value, file.data, msg.value.trim(), file.name) : await sendText(num.value, msg.value.trim());
       toast(r.ok ? 'Message sent' : 'Failed: ' + (r.err || ''), r.ok ? 'ok' : 'err');
     } }, 'Send message'));
 };
@@ -295,6 +310,7 @@ RENDER.filter = (b) => {
   const out = el('div', { className: 'log' }); let results = [];
   b.append(el('div', { className: 'fp-note' }, 'Checks which numbers have an active WhatsApp account (uses the linked account).'),
     lbl('Numbers', nums),
+    el('div', { className: 'row' }, importBtn(nums)),
     el('div', { className: 'row' },
       el('button', { className: 'btn primary', onclick: run }, 'Check numbers'),
       el('button', { className: 'btn ghost', onclick: () => { if (results.length) downloadCsv('wa-number-filter.csv', results, ['number', 'onWhatsApp']); } }, 'Export CSV')),
@@ -472,7 +488,7 @@ RENDER.schedule = (b) => {
       el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_schedule', store.get('ott_schedule', []).filter(x => x.id !== j.id)); draw(); } }, j.status === 'pending' ? 'Cancel' : 'Remove'))));
   };
   b.append(el('div', { className: 'fp-note' }, 'Schedules a broadcast on THIS account. Fires only while the app stays open.'),
-    lbl('Numbers', numbers), lbl('Message', msg),
+    lbl('Numbers', numbers), el('div', { className: 'row' }, importBtn(numbers)), lbl('Message', msg),
     el('div', { className: 'row' }, lbl('Send at', when), lbl('Delay min', dMin), lbl('Delay max', dMax)),
     el('button', { className: 'btn primary', onclick: () => {
       const nums = numbers.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -559,6 +575,35 @@ RENDER.guard = (b) => {
       applyGuard(activeId); toast('Group Guard saved');
     } }, 'Save & apply'));
 };
+
+// ================= import & attach builders =================
+function importBtn(target) {
+  const inp = el('input', { type: 'file', accept: '.csv,.txt,.xlsx,.xls', style: { display: 'none' }, onchange: async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = await ott.importNumbers(f.path);
+    if (r.ok) { const cur = target.value.trim(); target.value = (cur ? cur + '\n' : '') + r.numbers.join('\n'); toast(`Imported ${r.numbers.length} numbers`); }
+    else toast('Import failed', 'err');
+    e.target.value = '';
+  } });
+  const wrap = el('span', {}); wrap.append(el('button', { className: 'btn ghost small', onclick: () => inp.click() }, 'Import CSV / Excel'), inp);
+  return wrap;
+}
+// Attach an image/video/document; returns {node, get()}.
+function attachControl() {
+  let file = null;
+  const label = el('span', { className: 'muted', style: { fontSize: '12.5px' } }, 'No file attached');
+  const clear = el('button', { className: 'btn ghost small', style: { display: 'none' }, onclick: () => { file = null; label.textContent = 'No file attached'; clear.style.display = 'none'; } }, 'Remove');
+  const inp = el('input', { type: 'file', accept: 'image/*,video/*,.pdf', style: { display: 'none' }, onchange: (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
+    const reader = new FileReader();
+    reader.onload = () => { file = { data: reader.result, name: f.name }; label.textContent = 'Attached: ' + f.name; clear.style.display = 'inline-flex'; };
+    reader.readAsDataURL(f);
+  } });
+  const node = el('div', { className: 'row', style: { alignItems: 'center' } },
+    el('button', { className: 'btn ghost small', onclick: () => inp.click() }, 'Attach media'), label, clear, inp);
+  return { node, get: () => file };
+}
 
 // ================= tiny utils =================
 function chk(checked) { return el('input', { type: 'checkbox', checked, style: { width: 'auto' } }); }

@@ -6,6 +6,17 @@ const license = require('./license.js');
 
 let win;
 
+// Extract phone-number-like tokens (7–15 digits) from arbitrary text.
+function extractNumbers(text) {
+  const out = [];
+  const seen = new Set();
+  for (const m of String(text).matchAll(/\d[\d\s\-()]{5,}\d/g)) {
+    const d = m[0].replace(/\D/g, '');
+    if (d.length >= 7 && d.length <= 15 && !seen.has(d)) { seen.add(d); out.push(d); }
+  }
+  return out;
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200,
@@ -49,6 +60,27 @@ ipcMain.handle('app:config', () => ({
   product: config.PRODUCT_SLUG,
 }));
 
+// Import numbers from a .csv / .txt / .xlsx / .xls file.
+ipcMain.handle('app:importNumbers', async (_e, filePath) => {
+  try {
+    const ext = path.extname(filePath || '').toLowerCase();
+    let text = '';
+    if (ext === '.xlsx' || ext === '.xls') {
+      const XLSX = require('xlsx');
+      const wb = XLSX.readFile(filePath);
+      for (const sheet of wb.SheetNames) {
+        text += XLSX.utils.sheet_to_csv(wb.Sheets[sheet]) + '\n';
+      }
+    } else {
+      text = fs.readFileSync(filePath, 'utf8');
+    }
+    const numbers = extractNumbers(text);
+    return { ok: true, numbers };
+  } catch (e) {
+    return { ok: false, err: String(e && e.message || e) };
+  }
+});
+
 // Translate via Google's public endpoint from the main process (no CORS).
 ipcMain.handle('app:translate', async (_e, { text, tl }) => {
   try {
@@ -61,6 +93,17 @@ ipcMain.handle('app:translate', async (_e, { text, tl }) => {
   }
 });
 
+function initAutoUpdate() {
+  // Only in a packaged build; checks the public releases repo for a newer version.
+  if (!app.isPackaged) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = true;
+    autoUpdater.on('update-downloaded', () => { win?.webContents.send('app:update-ready'); });
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  } catch (e) { /* updater unavailable — ignore */ }
+}
+
 app.whenReady().then(() => {
   // Smoke mode: boot the main process and quit (CI/verification, no GUI needed).
   if (process.env.OTT_SMOKE) {
@@ -69,6 +112,7 @@ app.whenReady().then(() => {
     return;
   }
   createWindow();
+  initAutoUpdate();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 

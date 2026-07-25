@@ -1,6 +1,6 @@
 {
   "name": "ott24x7-crm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "ott24x7 CRM — WhatsApp CRM/sender on the open-source WPPConnect engine",
   "author": "ott24x7",
   "main": "electron/main.js",
@@ -12,13 +12,35 @@
   "build": {
     "appId": "com.ott24x7.crm",
     "productName": "ott24x7 CRM",
-    "directories": { "output": "release" },
-    "files": ["electron/**", "renderer/**", "assets/**", "config.js"],
-    "win": { "icon": "assets/ott24x7.ico", "target": "nsis" }
+    "artifactName": "ott24x7-CRM-Setup-${version}.exe",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**",
+      "renderer/**",
+      "assets/**",
+      "config.js"
+    ],
+    "win": {
+      "icon": "assets/ott24x7.ico",
+      "target": "nsis"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ott24x7-oss",
+        "repo": "ott24x7-crm-releases"
+      }
+    ]
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8",
-    "cross-env": "^7.0.3"
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "xlsx": "^0.18.5"
   }
 }
