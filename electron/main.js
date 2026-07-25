@@ -81,6 +81,16 @@ ipcMain.handle('app:importNumbers', async (_e, filePath) => {
   }
 });
 
+// Durable data store in userData (survives app updates — NSIS never touches userData).
+function dataDir() { const d = path.join(app.getPath('userData'), 'data'); fs.mkdirSync(d, { recursive: true }); return d; }
+ipcMain.handle('persist:load', (_e, key) => {
+  try { const p = path.join(dataDir(), key.replace(/[^\w-]/g, '') + '.json'); if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}
+  return null;
+});
+ipcMain.handle('persist:save', (_e, key, value) => {
+  try { fs.writeFileSync(path.join(dataDir(), key.replace(/[^\w-]/g, '') + '.json'), JSON.stringify(value)); return true; } catch (e) { return false; }
+});
+
 // Translate via Google's public endpoint from the main process (no CORS).
 ipcMain.handle('app:translate', async (_e, { text, tl }) => {
   try {

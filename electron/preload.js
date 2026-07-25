@@ -15,5 +15,7 @@ contextBridge.exposeInMainWorld('ott', {
   config: () => ipcRenderer.invoke('app:config'),
   translate: (text, tl) => ipcRenderer.invoke('app:translate', { text, tl }),
   importNumbers: (filePath) => ipcRenderer.invoke('app:importNumbers', filePath),
+  persistLoad: (key) => ipcRenderer.invoke('persist:load', key),
+  persistSave: (key, value) => ipcRenderer.invoke('persist:save', key, value),
   onUpdateReady: (cb) => ipcRenderer.on('app:update-ready', cb),
 });

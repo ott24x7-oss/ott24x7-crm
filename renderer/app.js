@@ -8,7 +8,26 @@ const el = (t, p = {}, ...kids) => {
 };
 const svg = (d) => { const s = document.createElement('span'); s.style.display = 'inline-flex'; s.innerHTML = d; return s.firstChild; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { try { toast('Storage full — attachment too large for a saved item', 'err'); } catch (_) {} return false; } } };
+// Keys mirrored to a durable file in userData so they survive every app update.
+const PERSIST_KEYS = ['ott_quick', 'ott_offers'];
+const store = {
+  get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set: (k, v) => {
+    try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { try { toast('Storage full — attachment too large for a saved item', 'err'); } catch (_) {} return false; }
+    if (PERSIST_KEYS.includes(k) && window.ott && ott.persistSave) ott.persistSave(k, v);
+    return true;
+  },
+};
+// Restore durable data (file wins; else migrate existing localStorage → file).
+async function restorePersisted() {
+  for (const key of PERSIST_KEYS) {
+    try {
+      const fv = await ott.persistLoad(key);
+      if (fv != null) localStorage.setItem(key, JSON.stringify(fv));
+      else { const ls = store.get(key, null); if (ls != null) await ott.persistSave(key, ls); }
+    } catch (_) {}
+  }
+}
 let toastTimer;
 function toast(msg, kind = 'ok') { const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + kind; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = 'toast hidden'), 2600); }
 function downloadCsv(name, rows, cols) {
@@ -34,6 +53,7 @@ const IC = {
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>',
   chats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M7 9h10M7 13h6"/></svg>',
   eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+  rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>',
 };
 
 const FEATURES = [
@@ -48,6 +68,7 @@ const FEATURES = [
   { id: 'filter', name: 'Number Filter', icon: IC.filter, impl: true },
   { id: 'grouputils', name: 'Group Utilities', icon: IC.group, impl: true },
   { divider: 'Tools' },
+  { id: 'autopost', name: 'Auto Offer Post', icon: IC.rocket, impl: true },
   { id: 'blur', name: 'Blur Settings', icon: IC.eye, impl: true },
   { id: 'link', name: 'Link Generator', icon: IC.link, impl: true },
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
@@ -83,6 +104,7 @@ const partOf = (id) => `persist:wa-${id}`;
 
 async function enterApp() {
   $('#gate').classList.add('hidden'); $('#app').classList.remove('hidden');
+  await restorePersisted();
   engineSrc = await ott.getEngine();
   renderRail();
   $('#addAccountTop').onclick = addAccount;
@@ -650,6 +672,79 @@ function applyBlur(accId) {
   wv.executeJavaScript(js).catch(() => {});
 }
 
+// ================= Auto Offer Post =================
+RENDER.autopost = (b) => {
+  const cfg = store.get('ott_offers', { on: false, accId: activeId, timezone: 'Asia/Kolkata', startHour: 9, endHour: 22, intervalMin: 60, targets: [], offers: [], nextIndex: 0, lastPostTs: 0, logs: [] });
+  cfg.offers = cfg.offers || []; cfg.targets = cfg.targets || []; cfg.logs = cfg.logs || [];
+  const save = () => store.set('ott_offers', cfg);
+
+  const chip = el('span', { className: 'chip ' + (cfg.on ? 'on' : 'off') }, cfg.on ? 'Running' : 'Off');
+  const on = chk(cfg.on);
+  on.onchange = () => { cfg.on = on.checked; chip.className = 'chip ' + (cfg.on ? 'on' : 'off'); chip.textContent = cfg.on ? 'Running' : 'Off'; save(); updateTimer(); };
+
+  const accSel = el('select'); accounts.forEach(a => accSel.append(el('option', { value: a.id }, a.name))); accSel.value = cfg.accId || activeId; accSel.onchange = () => { cfg.accId = accSel.value; save(); };
+  const tz = el('select'); ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Karachi', 'Asia/Dhaka', 'Asia/Jakarta', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'Australia/Sydney', 'UTC'].forEach(z => tz.append(el('option', { value: z }, z))); tz.value = cfg.timezone || 'Asia/Kolkata'; tz.onchange = () => { cfg.timezone = tz.value; save(); updateTimer(); };
+  const sh = el('input', { type: 'number', min: '0', max: '23', value: String(cfg.startHour ?? 9), style: { maxWidth: '80px' } });
+  const eh = el('input', { type: 'number', min: '1', max: '24', value: String(cfg.endHour ?? 22), style: { maxWidth: '80px' } });
+  const iv = el('input', { type: 'number', min: '1', value: String(cfg.intervalMin || 60), style: { maxWidth: '90px' } });
+  [sh, eh, iv].forEach(x => x.onchange = () => { cfg.startHour = +sh.value || 0; cfg.endHour = +eh.value || 24; cfg.intervalMin = Math.max(1, +iv.value || 60); save(); updateTimer(); });
+
+  // targets
+  const gbox = el('div', {}); let tlist = null;
+  const tsum = el('div', { className: 'muted', style: { fontSize: '12px' } }, cfg.targets.length ? cfg.targets.length + ' groups selected' : 'No target groups selected');
+  async function loadTargets() {
+    if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+    const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
+    if (!gs.length) return toast('No groups found', 'err');
+    tlist = checkList(gs, new Set(cfg.targets)); gbox.innerHTML = ''; gbox.append(tlist.node); toast(`${gs.length} groups`);
+  }
+  const saveTargets = () => { if (!tlist) return toast('Load groups first', 'err'); cfg.targets = tlist.selected().map(x => x.jid); tsum.textContent = cfg.targets.length + ' groups selected'; save(); toast('Targets saved'); };
+
+  // offers
+  const offText = el('textarea', { placeholder: 'Offer text / caption' });
+  const offAtt = attachControl('*');
+  const offList = el('div', { className: 'rules' });
+  const drawOffers = () => {
+    offList.innerHTML = ''; if (!cfg.offers.length) offList.append(el('div', { className: 'muted' }, 'No offers yet.'));
+    cfg.offers.forEach((o, i) => offList.append(el('div', { className: 'qr-item' },
+      el('div', { className: 'txt' }, el('b', {}, (o.data ? '📎 ' : '') + (o.text || o.filename || 'offer').slice(0, 30)), el('div', { className: 'muted', style: { fontSize: '12px' } }, (o.text || '').slice(0, 50))),
+      el('button', { className: 'btn small ghost', onclick: () => { cfg.offers.splice(i, 1); drawOffers(); save(); } }, '✕'))));
+  };
+  const addOffer = () => { const f = offAtt.get(); if (!offText.value.trim() && !f) return toast('Add offer text or a file', 'err'); cfg.offers.push({ text: offText.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined }); if (save()) { offText.value = ''; drawOffers(); toast('Offer saved'); } };
+
+  // timer + logs
+  const timerEl = el('div', { className: 'fp-note' }, '—');
+  const logs = el('div', { className: 'log' });
+  const drawLogs = () => { logs.innerHTML = ''; if (!cfg.logs.length) { line(logs, 'No posts yet.'); return; } cfg.logs.slice(0, 30).forEach(l => line(logs, `${new Date(l.ts).toLocaleString()} — ${l.text} (${l.ok} ok${l.fail ? ', ' + l.fail + ' fail' : ''})${l.manual ? ' [manual]' : ''}`, l.ok ? 'ok' : 'bad')); };
+  function updateTimer() {
+    const c = store.get('ott_offers', cfg);
+    if (!c.on) return void (timerEl.textContent = 'Auto-post is off.');
+    if (!(c.offers || []).length || !(c.targets || []).length) return void (timerEl.textContent = 'Add offers and target groups.');
+    const h = hourInTz(c.timezone);
+    if (h < (c.startHour ?? 9) || h >= (c.endHour ?? 22)) return void (timerEl.textContent = `Outside window — resumes at ${c.startHour}:00 ${c.timezone}.`);
+    const ms = ((c.lastPostTs || 0) + (c.intervalMin || 60) * 60000) - Date.now();
+    timerEl.textContent = ms <= 0 ? 'Next post: due now…' : `Next post in ${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+  }
+  const timerIv = setInterval(() => { if (!document.body.contains(timerEl)) return clearInterval(timerIv); updateTimer(); }, 1000);
+
+  b.append(
+    el('div', { className: 'fp-note' }, 'Automatically posts your offers to selected groups on a schedule. Runs while the app is open.'),
+    el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, on, 'Enable auto-post', chip),
+    el('div', { className: 'row' }, lbl('Post from account', accSel), lbl('Timezone', tz)),
+    el('div', { className: 'row' }, lbl('Start hour (0-23)', sh), lbl('End hour (1-24)', eh), lbl('Every N minutes', iv)),
+    timerEl,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
+    el('div', { className: 'fp-note' }, 'Target groups:'),
+    el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: loadTargets }, 'Load groups'), el('button', { className: 'btn small', onclick: saveTargets }, 'Save targets')), tsum, gbox,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
+    el('div', { className: 'fp-note' }, 'Offers (posted in rotation):'),
+    lbl('Offer text / caption', offText), offAtt.node, el('button', { className: 'btn', onclick: addOffer }, '＋ Add offer'), offList,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
+    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: () => postOffer(true) }, 'Post now'), el('button', { className: 'btn ghost', onclick: () => { cfg.logs = []; save(); drawLogs(); } }, 'Clear logs')),
+    lbl('Logs', logs));
+  drawOffers(); drawLogs(); updateTimer();
+};
+
 function renderSoon(b, f) {
   b.append(el('div', { className: 'fp-note' }, `“${f.name}” is planned for the next update. Multi-account, Broadcast, Autoreply, Quick Replies, Number Filter, Data Extractor, Link Generator, Direct Message, Translation and Signature are live now.`));
 }
@@ -688,7 +783,53 @@ function startScheduler() {
     const now = Date.now();
     for (const job of store.get('ott_schedule', [])) if (job.status === 'pending' && new Date(job.when).getTime() <= now) { setJobStatus('ott_schedule', job.id, 'sending'); runSchedule(job); }
     for (const r of store.get('ott_reminders', [])) if (r.status === 'pending' && new Date(r.when).getTime() <= now) { setJobStatus('ott_reminders', r.id, 'firing'); fireReminder(r); }
+    autopostTick();
   }, 15000);
+}
+
+// ---- Auto Offer Post ----
+function hourInTz(tz) {
+  try { return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz || 'Asia/Kolkata', hour: '2-digit', hour12: false }).format(new Date()), 10) % 24; }
+  catch (e) { return new Date().getHours(); }
+}
+let _autopostBusy = false;
+async function autopostTick() {
+  if (_autopostBusy) return;
+  const cfg = store.get('ott_offers', null);
+  if (!cfg || !cfg.on || !(cfg.offers || []).length || !(cfg.targets || []).length) return;
+  const h = hourInTz(cfg.timezone);
+  if (h < (cfg.startHour ?? 9) || h >= (cfg.endHour ?? 22)) return;
+  const interval = (cfg.intervalMin || 60) * 60000;
+  if (cfg.lastPostTs && (Date.now() - cfg.lastPostTs) < interval) return;
+  await postOffer(false);
+}
+async function postOffer(manual) {
+  const cfg = store.get('ott_offers', null);
+  if (!cfg || !(cfg.offers || []).length || !(cfg.targets || []).length) { if (manual) toast('Add an offer and target groups first', 'err'); return; }
+  _autopostBusy = true;
+  try {
+    const idx = (cfg.nextIndex || 0) % cfg.offers.length;
+    const offer = cfg.offers[idx];
+    const accId = cfg.accId && document.querySelector(`webview[data-acc="${cfg.accId}"]`) ? cfg.accId : activeId;
+    let ok = 0, fail = 0;
+    for (const jid of cfg.targets) {
+      const r = offer.data ? await sendMediaToJidOn(accId, jid, offer.data, offer.text, offer.filename) : await sendToJidOn(accId, jid, offer.text);
+      r.ok ? ok++ : fail++; await sleep(1500);
+    }
+    cfg.lastPostTs = Date.now(); cfg.nextIndex = (idx + 1) % cfg.offers.length;
+    cfg.logs = [{ ts: Date.now(), text: (offer.text || offer.filename || 'offer').slice(0, 40), ok, fail, manual: !!manual }, ...(cfg.logs || [])].slice(0, 60);
+    store.set('ott_offers', cfg);
+    if (openFeatureId === 'autopost') refreshPanel('autopost');
+    if (manual) toast(`Posted to ${ok}/${cfg.targets.length} groups`);
+  } finally { _autopostBusy = false; }
+}
+async function sendToJidOn(accId, jid, text) {
+  const body = JSON.stringify(spin(text || ''));
+  return waExecOn(accId, `(async()=>{try{await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+}
+async function sendMediaToJidOn(accId, jid, dataUrl, caption, filename) {
+  const c = JSON.stringify(dataUrl), cap = JSON.stringify(spin(caption || '')), fn = JSON.stringify(filename || 'file');
+  return waExecOn(accId, `(async()=>{try{await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
 function setJobStatus(key, id, status, extra) { const arr = store.get(key, []); const j = arr.find(x => x.id === id); if (j) { j.status = status; if (extra) Object.assign(j, extra); store.set(key, arr); } }
 async function runSchedule(job) {
@@ -982,11 +1123,11 @@ async function sendMediaToJid(jid, dataUrl, caption, filename) {
   const c = JSON.stringify(dataUrl), cap = JSON.stringify(spin(withSignature(caption || ''))), fn = JSON.stringify(filename || 'file');
   return waExec(`(async()=>{try{await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
-function checkList(items) {
+function checkList(items, preselect) {
   const all = el('input', { type: 'checkbox', style: { width: 'auto' } });
   const head = el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '8px', fontWeight: '600' } }, all, `Select all (${items.length})`);
   const list = el('div', { className: 'checklist-body' });
-  const rows = items.map(it => { const c = chk(false); list.append(el('label', { className: 'checkrow' }, c, `${it.name || jidNumber(it.jid)} `, el('span', { className: 'muted', style: { fontSize: '11px' } }, jidNumber(it.jid)))); return { c, it }; });
+  const rows = items.map(it => { const c = chk(!!(preselect && preselect.has(it.jid))); list.append(el('label', { className: 'checkrow' }, c, `${it.name || jidNumber(it.jid)} `, el('span', { className: 'muted', style: { fontSize: '11px' } }, jidNumber(it.jid)))); return { c, it }; });
   all.onchange = () => rows.forEach(x => x.c.checked = all.checked);
   return { node: el('div', {}, head, list), selected: () => rows.filter(x => x.c.checked).map(x => x.it) };
 }
