@@ -133,7 +133,7 @@ function createWebview(acc) {
 function switchAccount(id) {
   activeId = id;
   $('#waEmpty').style.display = 'none';
-  document.querySelectorAll('#waStage webview').forEach(w => { w.style.display = w.dataset.acc === id ? 'block' : 'none'; });
+  document.querySelectorAll('#waStage webview').forEach(w => { w.style.display = w.dataset.acc === id ? 'flex' : 'none'; });
   renderTabs();
 }
 function activeWv() { return activeId ? document.querySelector(`webview[data-acc="${activeId}"]`) : null; }
