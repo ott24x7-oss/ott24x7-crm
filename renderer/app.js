@@ -96,6 +96,21 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList.add('hidden'); }
 
+// ---- Auto-update wiring (registered at load so the popup event is never missed) ----
+let _updChecking = false;
+try {
+  ott.onUpdateAvailable(d => showUpdatePopup(d.version));
+  ott.onUpdateProgress(d => setUpdateProgress(d.percent));
+  ott.onUpdateDownloaded(() => setUpdateDownloaded());
+  ott.onUpdateNone(() => { if (_updChecking) { toast('You’re on the latest version ✓'); _updChecking = false; } });
+  ott.onUpdateError(() => { if (_updChecking) { toast('Update check failed — check your connection', 'err'); _updChecking = false; } });
+} catch (_) {}
+// Click the version pill to check for updates manually.
+window.addEventListener('DOMContentLoaded', () => {
+  const v = document.querySelector('.ver');
+  if (v) { v.style.cursor = 'pointer'; v.title = 'Check for updates'; v.addEventListener('click', () => { _updChecking = true; toast('Checking for updates…'); try { ott.checkUpdate && ott.checkUpdate(); } catch (_) {} }); }
+});
+
 // Start (or resume) a device-bound 7-day free trial.
 async function startTrial() {
   const m = $('#gateMsg'); m.className = 'msg'; m.textContent = 'Starting free trial…';
@@ -203,11 +218,8 @@ async function enterApp() {
   setInterval(drainLeadQueues, 2500);
   setInterval(recheckLicense, 300000); // re-validate license every 5 min (suspend takes effect live)
   startScheduler();
-  try {
-    ott.onUpdateAvailable(d => showUpdatePopup(d.version));
-    ott.onUpdateProgress(d => setUpdateProgress(d.percent));
-    ott.onUpdateDownloaded(() => setUpdateDownloaded());
-  } catch (_) {}
+  // Trigger an update check now that the app is loaded (listeners are attached at script load).
+  try { ott.checkUpdate && ott.checkUpdate(); } catch (_) {}
 }
 
 async function addAccount() {

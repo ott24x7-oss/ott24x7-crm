@@ -134,12 +134,15 @@ function initAutoUpdate() {
     autoUpdater.autoDownload = false;              // ask the user first (popup)
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.on('update-available', (info) => win?.webContents.send('update:available', { version: info.version }));
+    autoUpdater.on('update-not-available', () => win?.webContents.send('update:none'));
     autoUpdater.on('download-progress', (p) => win?.webContents.send('update:progress', { percent: Math.round(p.percent || 0) }));
     autoUpdater.on('update-downloaded', () => win?.webContents.send('update:downloaded'));
-    autoUpdater.on('error', () => {});
+    autoUpdater.on('error', (err) => win?.webContents.send('update:error', { message: String(err && err.message || err) }));
     ipcMain.handle('update:download', () => { try { autoUpdater.downloadUpdate(); } catch (e) {} });
     ipcMain.handle('update:install', () => { try { autoUpdater.quitAndInstall(); } catch (e) {} });
-    autoUpdater.checkForUpdates().catch(() => {});
+    ipcMain.handle('update:check', () => { try { return autoUpdater.checkForUpdates().catch(() => {}); } catch (e) {} });
+    // Delay the first check so the renderer has attached its update listeners.
+    setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 6000);
     setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 30 * 60000);
   } catch (e) { /* updater unavailable — ignore */ }
 }

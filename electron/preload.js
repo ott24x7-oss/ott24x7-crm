@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('ott', {
   onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (e, d) => cb(d)),
   onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (e, d) => cb(d)),
   onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', () => cb()),
+  onUpdateNone: (cb) => ipcRenderer.on('update:none', () => cb()),
+  onUpdateError: (cb) => ipcRenderer.on('update:error', (e, d) => cb(d)),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
 });
