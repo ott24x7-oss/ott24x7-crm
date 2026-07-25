@@ -9,7 +9,7 @@ const el = (t, p = {}, ...kids) => {
 const svg = (d) => { const s = document.createElement('span'); s.style.display = 'inline-flex'; s.innerHTML = d; return s.firstChild; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Keys mirrored to a durable file in userData so they survive every app update.
-const PERSIST_KEYS = ['ott_quick', 'ott_offers'];
+const PERSIST_KEYS = ['ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs', 'ott_invoice_cfg', 'ott_invoices'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -54,10 +54,14 @@ const IC = {
   chats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M7 9h10M7 13h6"/></svg>',
   eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
   rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>',
+  lead: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>',
+  invoice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6M9 9h1"/></svg>',
 };
 
 const FEATURES = [
   { id: 'chatfilters', name: 'Chat Filters', icon: IC.chats, impl: true, sub: [['all', 'All'], ['unread', 'Unread'], ['groups', 'Groups'], ['chats', 'Chats'], ['contacts', 'Contacts'], ['noncontacts', 'Non-contacts']] },
+  { id: 'leads', name: 'Lead Manager', icon: IC.lead, impl: true },
+  { id: 'invoice', name: 'Invoice', icon: IC.invoice, impl: true },
   { id: 'broadcast', name: 'Broadcast', icon: IC.broadcast, impl: true },
   { id: 'autoreply', name: 'Autoreply BOT', icon: IC.bot, impl: true },
   { id: 'guard', name: 'Group Guard', icon: IC.shield, impl: true },
@@ -119,6 +123,7 @@ async function enterApp() {
   if (accounts.length) switchAccount(accounts[0].id);
   else $('#waEmpty').style.display = 'flex';
   setInterval(pollStatus, 2500);
+  setInterval(drainLeadQueues, 2500);
   startScheduler();
   try { ott.onUpdateReady(() => toast('Update downloaded — restart the app to apply', 'ok')); } catch (_) {}
 }
@@ -151,7 +156,7 @@ function createWebview(acc) {
   wv.style.display = 'none';
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
@@ -745,6 +750,289 @@ RENDER.autopost = (b) => {
   drawOffers(); drawLogs(); updateTimer();
 };
 
+// ================= Lead Manager =================
+// Inject a "+ Lead" button into each chat header + capture incoming replies (for stop-on-reply).
+function applyLeadButton(accId) {
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const js = `(function(){
+    if(!window.__ott_lead_init){window.__ott_lead_init=true;window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];
+      try{WPP.on('chat.new_message',function(m){try{if(!m)return;var body=(m.body||'');if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});return;}var u=m.from&&m.from.user;if(u)window.__ott_inq.push(u);}catch(e){}});}catch(e){}
+      setInterval(place,2500);
+    }
+    function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){var u=(c.id&&c.id.user)||'';var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;window.__ott_leadq.push({number:u,name:nm});var b=document.getElementById('ott-lead-btn');if(b){b.textContent='\\u2713 Lead saved';setTimeout(function(){b.textContent='\\uFF0B Lead';},1500);}}}catch(e){}}
+    function place(){var header=document.querySelector('#main header');if(!header||document.getElementById('ott-lead-btn'))return;var b=document.createElement('button');b.id='ott-lead-btn';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:#12b866;color:#fff;border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
+    place();
+  })();`;
+  wv.executeJavaScript(js).catch(() => {});
+}
+async function drainLeadQueues() {
+  const w = activeWv(); if (!w) return;
+  const data = await w.executeJavaScript('(function(){var a=window.__ott_leadq||[];var b=window.__ott_inq||[];var c=window.__ott_cmdq||[];window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];return {leads:a,incoming:b,cmds:c};})()').catch(() => null);
+  if (!data) return;
+  (data.leads || []).forEach(saveLead);
+  if ((data.incoming || []).length) markRepliedLeads(data.incoming);
+  (data.cmds || []).forEach(processInvoiceCommand);
+}
+function parseInvoiceCommand(body) {
+  const lines = String(body).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  if (lines.length > 1 && /^\/invoice$/i.test(lines[0])) {
+    const customer = { name: '', phone: '', email: '', address: '', gstin: '', state: '' }; const items = []; let discount = 0, notes = '', template = '';
+    for (const l of lines.slice(1)) {
+      const idx = l.indexOf(':'); if (idx < 0) continue;
+      const k = l.slice(0, idx).trim().toLowerCase(), val = l.slice(idx + 1).trim();
+      if (k === 'to') customer.name = val; else if (k === 'phone') customer.phone = val; else if (k === 'email') customer.email = val;
+      else if (k === 'address') customer.address = val; else if (k === 'gstin') customer.gstin = val; else if (k === 'state') customer.state = val;
+      else if (k === 'discount') discount = +val || 0; else if (k === 'notes') notes = val; else if (k === 'template') template = val;
+      else if (k === 'item') { const p = val.split('|').map(x => x.trim()); items.push({ desc: p[0] || '', qty: +p[1] || 1, price: +p[2] || 0, hsn: p[3] || '', gst: +p[4] || 0 }); }
+    }
+    return { customer, items, discount, notes, template };
+  }
+  const rest = lines.join(' ').replace(/^\/invoice/i, '').trim();
+  const parts = rest.split('|').map(x => x.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const customer = { name: parts[0] || '', phone: parts[1] || '', email: '', address: '', gstin: '', state: '' };
+  const items = []; let discount = 0;
+  for (const p of parts.slice(2)) { if (/^discount\s*=/.test(p)) { discount = +p.split('=')[1] || 0; continue; } const s = p.split(':'); items.push({ desc: s[0] || '', qty: +s[1] || 1, price: +s[2] || 0, hsn: '', gst: 0 }); }
+  return { customer, items, discount, notes: '', template: '' };
+}
+async function processInvoiceCommand(cmd) {
+  const parsed = parseInvoiceCommand(cmd.body); if (!parsed || !parsed.items.length) return;
+  const cfg = store.get('ott_invoice_cfg', null); if (!cfg || !cfg.name) { toast('/invoice: set up Business in the Invoice tab first', 'err'); return; }
+  const v = invoiceCompute(parsed.items.filter(i => i.desc), parsed.discount, cfg, parsed.customer);
+  if (!v.rows.length) return;
+  const number = (cfg.prefix || 'INV-') + String(cfg.counter || 1).padStart(4, '0');
+  const inv = { ...v, number, date: new Date().toLocaleDateString('en-IN'), cfg, customer: parsed.customer, template: parsed.template || cfg.template || 'classic', notes: parsed.notes };
+  const res = await ott.renderInvoicePdf(invoiceHtml(inv)); if (!res.ok) { toast('/invoice PDF failed', 'err'); return; }
+  const jid = digits(parsed.customer.phone) ? digits(parsed.customer.phone) + '@c.us' : cmd.chatId;
+  if (!jid) return;
+  await sendMediaToJidOn(activeId, jid, res.data, 'Invoice ' + number, number + '.pdf');
+  cfg.counter = (cfg.counter || 1) + 1; store.set('ott_invoice_cfg', cfg);
+  logInvoice({ inv, number, customer: parsed.customer });
+  toast('Invoice ' + number + ' generated via /invoice');
+}
+function saveLead(it) {
+  const num = digits(it.number || ''); if (!num) return;
+  const leads = store.get('ott_leads', []);
+  if (leads.some(L => L.number === num)) { toast((it.name || num) + ' is already a lead'); return; }
+  leads.unshift({ id: 'L' + Date.now() + Math.random().toString(36).slice(2, 6), number: num, name: it.name || num, status: 'new', notes: '', source: 'chat', createdTs: Date.now(), accId: activeId, seqId: null, seqStep: 0, seqActive: false, seqNextTs: 0, logs: [] });
+  store.set('ott_leads', leads); toast('Lead saved: ' + (it.name || num));
+  if (openFeatureId === 'leads') refreshPanel('leads');
+}
+function markRepliedLeads(nums) {
+  const set = new Set(nums.map(n => digits(String(n)))); const leads = store.get('ott_leads', []); const seqs = store.get('ott_lead_seqs', []); let ch = false;
+  for (const L of leads) if (L.seqActive && set.has(L.number)) { const seq = seqs.find(s => s.id === L.seqId); if (!seq || seq.stopOnReply !== false) { L.seqActive = false; L.logs = [{ ts: Date.now(), text: 'Follow-up stopped (lead replied)', ok: true }, ...(L.logs || [])].slice(0, 30); ch = true; } }
+  if (ch) { store.set('ott_leads', leads); if (openFeatureId === 'leads') refreshPanel('leads'); }
+}
+function updateLead(id, patch) { const leads = store.get('ott_leads', []); const L = leads.find(x => x.id === id); if (L) { Object.assign(L, patch); store.set('ott_leads', leads); } }
+function deleteLead(id) { store.set('ott_leads', store.get('ott_leads', []).filter(x => x.id !== id)); }
+const stepDelayMs = (s) => (s.delayValue || 0) * ({ minutes: 60000, hours: 3600000, days: 86400000 }[s.delayUnit] || 86400000);
+function startSequence(leadId, seqId) {
+  const seq = store.get('ott_lead_seqs', []).find(s => s.id === seqId); if (!seq || !seq.steps.length) return;
+  const leads = store.get('ott_leads', []); const L = leads.find(x => x.id === leadId); if (!L) return;
+  L.seqId = seqId; L.seqStep = 0; L.seqActive = true; L.seqNextTs = Date.now() + stepDelayMs(seq.steps[0]); L.status = 'followup';
+  L.logs = [{ ts: Date.now(), text: 'Follow-up "' + seq.name + '" started', ok: true }, ...(L.logs || [])].slice(0, 30);
+  store.set('ott_leads', leads); toast('Follow-up started');
+}
+function leadFollowupTick() {
+  const leads = store.get('ott_leads', []); const seqs = store.get('ott_lead_seqs', []); const now = Date.now(); let ch = false;
+  for (const L of leads) {
+    if (!L.seqActive || !L.seqId) continue;
+    const seq = seqs.find(s => s.id === L.seqId); if (!seq || !seq.steps.length) { L.seqActive = false; ch = true; continue; }
+    if (L.seqNextTs && L.seqNextTs <= now) {
+      const step = seq.steps[L.seqStep]; if (step) sendFollowup(L, step);
+      L.seqStep++;
+      if (L.seqStep >= seq.steps.length) { L.seqActive = false; L.logs = [{ ts: now, text: 'Sequence completed', ok: true }, ...(L.logs || [])].slice(0, 30); }
+      else L.seqNextTs = now + stepDelayMs(seq.steps[L.seqStep]);
+      ch = true;
+    }
+  }
+  if (ch) { store.set('ott_leads', leads); if (openFeatureId === 'leads') refreshPanel('leads'); }
+}
+async function sendFollowup(L, step) {
+  const accId = L.accId && document.querySelector(`webview[data-acc="${L.accId}"]`) ? L.accId : activeId;
+  const jid = digits(L.number) + '@c.us';
+  const r = step.data ? await sendMediaToJidOn(accId, jid, step.data, step.text, step.filename) : await sendToJidOn(accId, jid, step.text);
+  const leads = store.get('ott_leads', []); const LL = leads.find(x => x.id === L.id);
+  if (LL) { LL.logs = [{ ts: Date.now(), text: (step.text || step.filename || 'follow-up').slice(0, 40), ok: r.ok }, ...(LL.logs || [])].slice(0, 30); store.set('ott_leads', leads); }
+}
+
+RENDER.leads = (b) => {
+  const mode = el('select'); [['leads', 'Leads'], ['seqs', 'Follow-up Sequences']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  const boxc = el('div', {});
+  mode.onchange = render;
+  b.append(el('div', { className: 'fp-note' }, 'Save any chat as a lead with the “＋ Lead” button in its header, track status, and auto-send follow-ups.'), lbl('View', mode), boxc);
+  render();
+  function render() { boxc.innerHTML = ''; mode.value === 'leads' ? leadsView() : seqsView(); }
+
+  function leadsView() {
+    const filter = el('select'); [['all', 'All'], ['new', 'New'], ['contacted', 'Contacted'], ['followup', 'Follow-up'], ['won', 'Won'], ['lost', 'Lost']].forEach(([v, n]) => filter.append(el('option', { value: v }, n)));
+    const search = el('input', { placeholder: 'Search name / number' });
+    const list = el('div', {});
+    const draw = () => {
+      list.innerHTML = '';
+      const q = (search.value || '').toLowerCase(), f = filter.value;
+      const leads = store.get('ott_leads', []).filter(L => (f === 'all' || L.status === f) && (!q || (L.name || '').toLowerCase().includes(q) || L.number.includes(q)));
+      if (!leads.length) { list.append(el('div', { className: 'muted' }, 'No leads yet. Open a chat and click “＋ Lead”.')); return; }
+      leads.forEach(L => list.append(leadCard(L, draw)));
+    };
+    filter.onchange = draw; search.oninput = draw;
+    boxc.append(el('div', { className: 'row' }, lbl('Status', filter), lbl('Search', search)), list);
+    draw();
+  }
+  function leadCard(L, refresh) {
+    const seqs = store.get('ott_lead_seqs', []);
+    const statusSel = el('select'); ['new', 'contacted', 'followup', 'won', 'lost'].forEach(s => statusSel.append(el('option', { value: s }, s))); statusSel.value = L.status;
+    statusSel.onchange = () => updateLead(L.id, { status: statusSel.value });
+    const seqSel = el('select'); seqSel.append(el('option', { value: '' }, '— sequence —')); seqs.forEach(s => seqSel.append(el('option', { value: s.id }, s.name)));
+    const next = L.seqActive && L.seqNextTs ? '  · next ' + new Date(L.seqNextTs).toLocaleString() : '';
+    return el('div', { className: 'card', style: { padding: '12px 14px', marginBottom: '8px' } },
+      el('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' } },
+        el('div', {}, el('b', {}, L.name || L.number), el('div', { className: 'muted', style: { fontSize: '12px' } }, L.number + (L.seqActive ? '  · follow-up active' + next : ''))),
+        statusTag(L.status)),
+      L.notes ? el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '6px' } }, '📝 ' + L.notes) : null,
+      el('div', { className: 'row', style: { marginTop: '8px' } }, statusSel,
+        el('button', { className: 'btn small', onclick: async () => { const m = await promptModal('Message ' + (L.name || L.number), 'Type a message'); if (m) { const r = await sendToJidOn(L.accId || activeId, digits(L.number) + '@c.us', m); toast(r.ok ? 'Sent' : 'Failed', r.ok ? 'ok' : 'err'); } } }, 'Message')),
+      el('div', { className: 'row', style: { marginTop: '6px' } }, seqSel,
+        el('button', { className: 'btn small', onclick: () => { if (!seqSel.value) return toast('Pick a sequence', 'err'); startSequence(L.id, seqSel.value); refresh(); } }, 'Start follow-up'),
+        L.seqActive ? el('button', { className: 'btn small ghost', onclick: () => { updateLead(L.id, { seqActive: false }); refresh(); } }, 'Stop') : null),
+      el('div', { className: 'row', style: { marginTop: '6px' } },
+        el('button', { className: 'btn small ghost', onclick: async () => { const n = await promptModal('Note for ' + (L.name || L.number), 'Add a note', L.notes || ''); if (n != null) { updateLead(L.id, { notes: n }); refresh(); } } }, 'Note'),
+        el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: () => { if (confirm('Delete this lead?')) { deleteLead(L.id); refresh(); } } }, 'Delete')));
+  }
+
+  function seqsView() {
+    const name = el('input', { placeholder: 'Sequence name' });
+    const stopReply = chk(true);
+    let steps = []; const stepsBox = el('div', { className: 'rules' });
+    const stepText = el('textarea', { placeholder: 'Step message / caption' });
+    const stepAtt = attachControl('*'); stepAtt.node.style.display = 'flex';
+    const dval = el('input', { type: 'number', value: '1', min: '0', style: { maxWidth: '80px' } });
+    const dunit = el('select'); ['minutes', 'hours', 'days'].forEach(u => dunit.append(el('option', { value: u }, u))); dunit.value = 'days';
+    const drawSteps = () => { stepsBox.innerHTML = ''; if (!steps.length) stepsBox.append(el('div', { className: 'muted' }, 'No steps yet.')); steps.forEach((s, i) => stepsBox.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, 'After ' + s.delayValue + ' ' + s.delayUnit), el('div', { className: 'muted', style: { fontSize: '12px' } }, (s.data ? '📎 ' : '') + (s.text || s.filename || '').slice(0, 50))), el('button', { className: 'btn small ghost', onclick: () => { steps.splice(i, 1); drawSteps(); } }, '✕')))); };
+    const listSeqs = el('div', {});
+    const drawList = () => { listSeqs.innerHTML = ''; const seqs = store.get('ott_lead_seqs', []); if (!seqs.length) { listSeqs.append(el('div', { className: 'muted' }, 'No sequences.')); return; } seqs.forEach(s => listSeqs.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, s.name), el('div', { className: 'muted', style: { fontSize: '12px' } }, s.steps.length + ' steps' + (s.stopOnReply ? ' · stops on reply' : ''))), el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_lead_seqs', store.get('ott_lead_seqs', []).filter(x => x.id !== s.id)); drawList(); } }, 'Delete')))); };
+    boxc.append(
+      el('div', { className: 'fp-note' }, 'A sequence auto-sends its steps to a lead at the set delays, once you start it on that lead.'),
+      lbl('Name', name), chkRow(stopReply, 'Stop follow-ups when the lead replies'),
+      el('div', { className: 'fp-note' }, 'Add a step:'),
+      lbl('Message', stepText), stepAtt.node,
+      el('div', { className: 'row' }, lbl('Send after', dval), lbl('Unit', dunit), el('button', { className: 'btn small', onclick: () => { const f = stepAtt.get(); if (!stepText.value.trim() && !f) return toast('Add step message or file', 'err'); steps.push({ text: stepText.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, delayValue: Math.max(0, +dval.value || 0), delayUnit: dunit.value }); stepText.value = ''; drawSteps(); } }, '＋ Add step')),
+      stepsBox,
+      el('button', { className: 'btn primary', onclick: () => { if (!name.value.trim()) return toast('Name the sequence', 'err'); if (!steps.length) return toast('Add at least one step', 'err'); const seqs = store.get('ott_lead_seqs', []); seqs.push({ id: 'S' + Date.now(), name: name.value.trim(), stopOnReply: stopReply.checked, steps: steps.slice() }); if (store.set('ott_lead_seqs', seqs)) { name.value = ''; steps = []; drawSteps(); drawList(); toast('Sequence saved'); } } }, 'Save sequence'),
+      el('div', { style: { borderTop: '1px solid var(--line)', margin: '6px 0' } }),
+      lbl('Saved sequences', listSeqs));
+    drawSteps(); drawList();
+  }
+};
+
+// ================= Invoice =================
+const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function toWordsINR(num) {
+  num = Math.round(num); if (num === 0) return 'Zero Rupees Only';
+  const a = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const two = n => n < 20 ? a[n] : b[Math.floor(n / 10)] + (n % 10 ? ' ' + a[n % 10] : '');
+  const three = n => (n >= 100 ? a[Math.floor(n / 100)] + ' Hundred' + (n % 100 ? ' ' : '') : '') + (n % 100 ? two(n % 100) : '');
+  let out = ''; const cr = Math.floor(num / 1e7); num %= 1e7; const l = Math.floor(num / 1e5); num %= 1e5; const t = Math.floor(num / 1e3); num %= 1e3;
+  if (cr) out += three(cr) + ' Crore '; if (l) out += two(l) + ' Lakh '; if (t) out += two(t) + ' Thousand '; if (num) out += three(num);
+  return out.trim() + ' Rupees Only';
+}
+function invoiceCompute(items, discount, cfg, customer) {
+  const gstOn = !!cfg.gstEnabled;
+  const intra = gstOn && cfg.state && customer.state && String(cfg.state).trim() === String(customer.state).trim();
+  let subtotal = 0, gstTotal = 0, cgst = 0, sgst = 0, igst = 0;
+  const rows = items.map(it => {
+    const qty = +it.qty || 0, price = +it.price || 0, pct = gstOn ? (+it.gst || 0) : 0;
+    const amount = qty * price, g = amount * pct / 100; subtotal += amount; gstTotal += g;
+    if (intra) { cgst += g / 2; sgst += g / 2; } else igst += g;
+    return { desc: it.desc, qty, price, hsn: it.hsn || '', pct, amount, gst: g };
+  });
+  const grandRaw = subtotal - (discount || 0) + gstTotal; const grand = Math.round(grandRaw);
+  return { rows, subtotal, discount: discount || 0, gstTotal, cgst, sgst, igst, intra, gstOn, roundOff: grand - grandRaw, grandTotal: grand, amountWords: toWordsINR(grand) };
+}
+function invoiceHtml(v) {
+  const c = v.cfg, cust = v.customer, gst = v.gstOn;
+  const accent = v.template === 'taxpro' ? '#059669' : v.template === 'minimal' ? '#334155' : '#2563eb';
+  const money = n => '₹' + (Math.round(n * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const br = s => escHtml(s).replace(/\n/g, '<br>');
+  const head = `<tr><th>#</th><th>Item</th>${gst ? '<th>HSN</th>' : ''}<th class=r>Qty</th><th class=r>Rate</th>${gst ? '<th class=r>GST</th>' : ''}<th class=r>Amount</th></tr>`;
+  const body = v.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${escHtml(r.desc)}</td>${gst ? `<td>${escHtml(r.hsn)}</td>` : ''}<td class=r>${r.qty}</td><td class=r>${money(r.price)}</td>${gst ? `<td class=r>${r.pct}%</td>` : ''}<td class=r>${money(r.amount)}</td></tr>`).join('');
+  const taxRows = gst ? (v.intra ? `<tr><td>CGST</td><td class=r>${money(v.cgst)}</td></tr><tr><td>SGST</td><td class=r>${money(v.sgst)}</td></tr>` : `<tr><td>IGST</td><td class=r>${money(v.igst)}</td></tr>`) : '';
+  const logo = c.logo ? `<img src="${c.logo}" style="max-height:64px;max-width:200px;object-fit:contain">` : `<div style="font-size:22px;font-weight:800;color:${accent}">${escHtml(c.name || 'Your Business')}</div>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;color:#1f2937;font-size:12px;padding:28px}.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${accent};padding-bottom:14px}.biz{font-size:11px;color:#4b5563;line-height:1.5;margin-top:6px}.title{text-align:right}.title h1{font-size:26px;color:${accent};letter-spacing:1px}.title .meta{font-size:11px;color:#4b5563;margin-top:6px;line-height:1.6}.parties{display:flex;justify-content:space-between;margin:18px 0}.box{width:48%}.box .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:4px}.box .nm{font-weight:700;font-size:13px}.box .sub{font-size:11px;color:#4b5563;line-height:1.5}table{width:100%;border-collapse:collapse;margin-top:8px}th{background:${accent};color:#fff;font-size:11px;text-align:left;padding:8px 10px}td{padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px}.r{text-align:right}.totals{display:flex;justify-content:flex-end;margin-top:14px}.totals table{width:280px}.totals td{border:none;padding:5px 10px}.totals .grand td{border-top:2px solid ${accent};font-weight:800;font-size:14px;color:${accent}}.words{margin-top:14px;font-size:11px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px}.foot{margin-top:22px;font-size:10px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:10px;display:flex;justify-content:space-between}</style></head><body>
+  <div class="top"><div>${logo}<div class="biz">${br(c.address || '')}${c.phone ? '<br>' + escHtml(c.phone) : ''}${c.email ? ' · ' + escHtml(c.email) : ''}${gst && c.gstin ? '<br>GSTIN: ' + escHtml(c.gstin) : ''}</div></div><div class="title"><h1>${gst ? 'TAX INVOICE' : 'INVOICE'}</h1><div class="meta"><b>${escHtml(v.number)}</b><br>Date: ${escHtml(v.date)}</div></div></div>
+  <div class="parties"><div class="box"><div class="lbl">Bill To</div><div class="nm">${escHtml(cust.name)}</div><div class="sub">${br(cust.address || '')}${cust.phone ? '<br>' + escHtml(cust.phone) : ''}${gst && cust.gstin ? '<br>GSTIN: ' + escHtml(cust.gstin) : ''}</div></div></div>
+  <table><thead>${head}</thead><tbody>${body}</tbody></table>
+  <div class="totals"><table><tr><td>Subtotal</td><td class=r>${money(v.subtotal)}</td></tr>${v.discount ? `<tr><td>Discount</td><td class=r>- ${money(v.discount)}</td></tr>` : ''}${taxRows}${v.roundOff ? `<tr><td>Round off</td><td class=r>${money(v.roundOff)}</td></tr>` : ''}<tr class="grand"><td>Grand Total</td><td class=r>${money(v.grandTotal)}</td></tr></table></div>
+  <div class="words"><b>Amount in words:</b> ${escHtml(v.amountWords)}</div>${v.notes ? `<div class="words"><b>Notes:</b> ${escHtml(v.notes)}</div>` : ''}${c.bank ? `<div class="words"><b>Payment details:</b><br>${br(c.bank)}</div>` : ''}
+  <div class="foot"><span>Thank you for your business.</span><span>${escHtml(c.name || '')}</span></div></body></html>`;
+}
+function logInvoice(r) { const inv = store.get('ott_invoices', []); inv.unshift({ number: r.number, name: r.customer.name, phone: r.customer.phone, total: r.inv.grandTotal, ts: Date.now() }); store.set('ott_invoices', inv.slice(0, 200)); }
+
+RENDER.invoice = (b) => {
+  const cfg = store.get('ott_invoice_cfg', { name: '', address: '', gstin: '', state: '', gstEnabled: true, logo: '', phone: '', email: '', bank: '', prefix: 'INV-', counter: 1, template: 'classic' });
+  const saveCfg = () => store.set('ott_invoice_cfg', cfg);
+  const inp = (v, ph) => el('input', { value: v || '', placeholder: ph || '' });
+  const ta = (v, ph) => { const t = el('textarea', { placeholder: ph || '' }); t.value = v || ''; return t; };
+  const mode = el('select'); [['create', 'Create Invoice'], ['business', 'Business Settings']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  const boxc = el('div', {}); mode.onchange = render;
+  b.append(el('div', { className: 'fp-note' }, 'Generate GST invoices and send them as a PDF on WhatsApp. Set up your business first.'), lbl('View', mode), boxc);
+  if (!cfg.name) mode.value = 'business';
+  render();
+  function render() { boxc.innerHTML = ''; mode.value === 'create' ? createView() : businessView(); }
+
+  function businessView() {
+    const name = inp(cfg.name, 'Business name'), addr = ta(cfg.address, 'Address'), gstin = inp(cfg.gstin, 'GSTIN'), state = inp(cfg.state, 'State code e.g. 29'), phone = inp(cfg.phone, 'Phone'), email = inp(cfg.email, 'Email'), bank = ta(cfg.bank, 'Bank / UPI details'), prefix = inp(cfg.prefix, 'INV-'), counter = el('input', { type: 'number', value: String(cfg.counter || 1) });
+    const gstOn = chk(cfg.gstEnabled); const logoAtt = attachControl('image/*'); logoAtt.node.style.display = 'flex';
+    boxc.append(lbl('Business name', name), lbl('Address', addr), chkRow(gstOn, 'GST invoices (CGST/SGST/IGST)'),
+      el('div', { className: 'row' }, lbl('GSTIN', gstin), lbl('Home state code', state)),
+      el('div', { className: 'row' }, lbl('Phone', phone), lbl('Email', email)), lbl('Bank / UPI details', bank),
+      el('div', { className: 'row' }, lbl('Invoice prefix', prefix), lbl('Next number', counter)), lbl('Logo (optional)', logoAtt.node),
+      el('button', { className: 'btn primary', onclick: () => { Object.assign(cfg, { name: name.value.trim(), address: addr.value, gstin: gstin.value.trim(), state: state.value.trim(), gstEnabled: gstOn.checked, phone: phone.value.trim(), email: email.value.trim(), bank: bank.value, prefix: prefix.value.trim() || 'INV-', counter: +counter.value || 1 }); const f = logoAtt.get(); if (f) cfg.logo = f.data; if (saveCfg()) { toast('Business saved'); } } }, 'Save business'));
+  }
+  function createView() {
+    const cn = inp('', 'Customer name'), cp = inp('', 'Customer phone (country code)'), ce = inp('', 'Email (optional)'), ca = ta('', 'Address'), cg = inp('', 'GSTIN (optional)'), cs = inp('', 'State code');
+    let items = [{ desc: '', qty: 1, price: 0, hsn: '', gst: 18 }];
+    const itemsBox = el('div', {});
+    const drawItems = () => {
+      itemsBox.innerHTML = '';
+      items.forEach((it, i) => {
+        const d = el('input', { value: it.desc, placeholder: 'Item' }); const q = el('input', { type: 'number', value: String(it.qty), style: { maxWidth: '58px' } }); const p = el('input', { type: 'number', value: String(it.price), style: { maxWidth: '86px' } });
+        const h = cfg.gstEnabled ? el('input', { value: it.hsn, placeholder: 'HSN', style: { maxWidth: '78px' } }) : null;
+        const g = cfg.gstEnabled ? el('input', { type: 'number', value: String(it.gst), placeholder: 'GST%', style: { maxWidth: '66px' } }) : null;
+        d.oninput = () => it.desc = d.value; q.oninput = () => it.qty = +q.value; p.oninput = () => it.price = +p.value; if (h) h.oninput = () => it.hsn = h.value; if (g) g.oninput = () => it.gst = +g.value;
+        itemsBox.append(el('div', { className: 'row', style: { marginBottom: '4px' } }, d, q, p, ...(h ? [h] : []), ...(g ? [g] : []), el('button', { className: 'btn small ghost', onclick: () => { items.splice(i, 1); drawItems(); } }, '✕')));
+      });
+    };
+    const discount = el('input', { type: 'number', value: '0' }); const notes = ta('', 'Notes (optional)');
+    const tmpl = el('select'); [['classic', 'Classic Blue'], ['minimal', 'Minimal'], ['taxpro', 'GST Tax Pro']].forEach(([v, n]) => tmpl.append(el('option', { value: v }, n))); tmpl.value = cfg.template || 'classic';
+    async function build() {
+      if (!cfg.name) { toast('Set up Business first', 'err'); return null; }
+      if (!cn.value.trim()) { toast('Customer name required', 'err'); return null; }
+      const customer = { name: cn.value.trim(), phone: cp.value.trim(), email: ce.value.trim(), address: ca.value.trim(), gstin: cg.value.trim(), state: cs.value.trim() };
+      const v = invoiceCompute(items.filter(it => it.desc.trim()), +discount.value || 0, cfg, customer);
+      if (!v.rows.length) { toast('Add at least one item', 'err'); return null; }
+      const number = (cfg.prefix || 'INV-') + String(cfg.counter || 1).padStart(4, '0');
+      const inv = { ...v, number, date: new Date().toLocaleDateString('en-IN'), cfg, customer, template: tmpl.value, notes: notes.value.trim() };
+      const res = await ott.renderInvoicePdf(invoiceHtml(inv));
+      if (!res.ok) { toast('PDF failed: ' + (res.err || ''), 'err'); return null; }
+      cfg.template = tmpl.value;
+      return { inv, pdf: res.data, number, customer };
+    }
+    boxc.append(el('div', { className: 'fp-note' }, 'Customer'),
+      el('div', { className: 'row' }, lbl('Name', cn), lbl('Phone', cp)),
+      el('div', { className: 'row' }, lbl('Email', ce), lbl('State code', cs)), lbl('Address', ca), cfg.gstEnabled ? lbl('Customer GSTIN', cg) : null,
+      el('div', { className: 'fp-note' }, 'Items  ·  desc / qty / rate' + (cfg.gstEnabled ? ' / HSN / GST%' : '')), itemsBox,
+      el('button', { className: 'btn small', onclick: () => { items.push({ desc: '', qty: 1, price: 0, hsn: '', gst: 18 }); drawItems(); } }, '＋ Add item'),
+      el('div', { className: 'row' }, lbl('Discount ₹', discount), lbl('Template', tmpl)), lbl('Notes', notes),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn', onclick: async () => { const r = await build(); if (r) { el('a', { href: r.pdf, download: r.number + '.pdf' }).click(); toast('PDF downloaded'); cfg.counter = (cfg.counter || 1) + 1; saveCfg(); logInvoice(r); } } }, 'Download PDF'),
+        el('button', { className: 'btn primary', onclick: async () => { const r = await build(); if (r) { if (!digits(r.customer.phone)) return toast('Customer phone needed to send', 'err'); const sr = await sendMediaToJidOn(activeId, digits(r.customer.phone) + '@c.us', r.pdf, 'Invoice ' + r.number, r.number + '.pdf'); toast(sr.ok ? 'Invoice sent to ' + r.customer.name : 'Send failed', sr.ok ? 'ok' : 'err'); cfg.counter = (cfg.counter || 1) + 1; saveCfg(); logInvoice(r); } } }, 'Generate & Send')));
+    drawItems();
+  }
+};
+
 function renderSoon(b, f) {
   b.append(el('div', { className: 'fp-note' }, `“${f.name}” is planned for the next update. Multi-account, Broadcast, Autoreply, Quick Replies, Number Filter, Data Extractor, Link Generator, Direct Message, Translation and Signature are live now.`));
 }
@@ -784,6 +1072,7 @@ function startScheduler() {
     for (const job of store.get('ott_schedule', [])) if (job.status === 'pending' && new Date(job.when).getTime() <= now) { setJobStatus('ott_schedule', job.id, 'sending'); runSchedule(job); }
     for (const r of store.get('ott_reminders', [])) if (r.status === 'pending' && new Date(r.when).getTime() <= now) { setJobStatus('ott_reminders', r.id, 'firing'); fireReminder(r); }
     autopostTick();
+    leadFollowupTick();
   }, 15000);
 }
 

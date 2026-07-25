@@ -91,6 +91,25 @@ ipcMain.handle('persist:save', (_e, key, value) => {
   try { fs.writeFileSync(path.join(dataDir(), key.replace(/[^\w-]/g, '') + '.json'), JSON.stringify(value)); return true; } catch (e) { return false; }
 });
 
+// Render invoice HTML → PDF (base64 data URL) using Electron's built-in Chromium.
+ipcMain.handle('invoice:pdf', async (_e, html) => {
+  let win2, tmp;
+  try {
+    tmp = path.join(app.getPath('temp'), 'ott-invoice-' + Date.now() + '.html');
+    fs.writeFileSync(tmp, String(html), 'utf8');
+    win2 = new BrowserWindow({ show: false, width: 800, height: 1120, webPreferences: { offscreen: true, javascript: false } });
+    await win2.loadFile(tmp);
+    await new Promise((r) => setTimeout(r, 350));
+    const buf = await win2.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { marginType: 'none' } });
+    return { ok: true, data: 'data:application/pdf;base64,' + buf.toString('base64') };
+  } catch (e) {
+    return { ok: false, err: String(e && e.message || e) };
+  } finally {
+    try { if (win2) win2.destroy(); } catch (_) {}
+    try { if (tmp) fs.unlinkSync(tmp); } catch (_) {}
+  }
+});
+
 // Translate via Google's public endpoint from the main process (no CORS).
 ipcMain.handle('app:translate', async (_e, { text, tl }) => {
   try {

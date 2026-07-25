@@ -17,5 +17,6 @@ contextBridge.exposeInMainWorld('ott', {
   importNumbers: (filePath) => ipcRenderer.invoke('app:importNumbers', filePath),
   persistLoad: (key) => ipcRenderer.invoke('persist:load', key),
   persistSave: (key, value) => ipcRenderer.invoke('persist:save', key, value),
+  renderInvoicePdf: (html) => ipcRenderer.invoke('invoice:pdf', html),
   onUpdateReady: (cb) => ipcRenderer.on('app:update-ready', cb),
 });
