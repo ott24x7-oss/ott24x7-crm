@@ -2,7 +2,7 @@
 // Override any of these with environment variables at launch.
 module.exports = {
   // Your deployed license server (Railway). No trailing slash.
-  LICENSE_SERVER: process.env.LICENSE_SERVER || 'https://ott24x7-license-production.up.railway.app',
+  LICENSE_SERVER: process.env.LICENSE_SERVER || 'https://crm.ott24x7.com',
 
   // Must match a product slug in the license server.
   PRODUCT_SLUG: process.env.PRODUCT_SLUG || 'ott24x7-crm',
