@@ -37,13 +37,13 @@ const IC = {
 const FEATURES = [
   { id: 'broadcast', name: 'Broadcast', icon: IC.broadcast, impl: true },
   { id: 'autoreply', name: 'Autoreply BOT', icon: IC.bot, impl: true },
-  { id: 'guard', name: 'Group Guard', icon: IC.shield },
-  { id: 'schedule', name: 'Schedule', icon: IC.clock },
-  { id: 'reminder', name: 'Reminder', icon: IC.bell },
+  { id: 'guard', name: 'Group Guard', icon: IC.shield, impl: true },
+  { id: 'schedule', name: 'Schedule', icon: IC.clock, impl: true },
+  { id: 'reminder', name: 'Reminder', icon: IC.bell, impl: true },
   { id: 'quick', name: 'Quick Replies', icon: IC.reply, impl: true },
   { id: 'extractor', name: 'Data Extractor', icon: IC.users, impl: true },
   { id: 'filter', name: 'Number Filter', icon: IC.filter, impl: true },
-  { id: 'grouputils', name: 'Group Utilities', icon: IC.group },
+  { id: 'grouputils', name: 'Group Utilities', icon: IC.group, impl: true },
   { id: 'link', name: 'Link Generator', icon: IC.link, impl: true },
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
   { id: 'translate', name: 'Message Translation', icon: IC.languages, impl: true },
@@ -92,6 +92,7 @@ async function enterApp() {
   if (accounts.length) switchAccount(accounts[0].id);
   else $('#waEmpty').style.display = 'flex';
   setInterval(pollStatus, 2500);
+  startScheduler();
 }
 
 function addAccount() {
@@ -122,7 +123,7 @@ function createWebview(acc) {
   wv.style.display = 'none';
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
@@ -401,7 +402,167 @@ function applyAutoreply(accId) {
   wv.executeJavaScript(js).catch(() => {});
 }
 
+// ================= exec/send on a specific account =================
+async function waExecOn(accId, expr) { const w = document.querySelector(`webview[data-acc="${accId}"]`); if (!w) throw new Error('no account'); return w.executeJavaScript(expr); }
+async function sendTextOn(accId, number, text) {
+  const jid = JSON.stringify(digits(number) + '@c.us'); const body = JSON.stringify(spin(withSignature(text)));
+  const expr = `(async()=>{try{await WPP.chat.sendTextMessage(${jid},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  try { return await waExecOn(accId, expr); } catch (e) { return { ok: false, err: String(e) }; }
+}
+async function isConnectedOn(accId) { try { return await waExecOn(accId, "(async()=>{try{return (await WPP.conn.isAuthenticated())===true}catch(e){return false}})()"); } catch { return false; } }
+
+// ================= scheduler (Schedule + Reminder) =================
+let schedulerStarted = false;
+function startScheduler() {
+  if (schedulerStarted) return; schedulerStarted = true;
+  setInterval(() => {
+    const now = Date.now();
+    for (const job of store.get('ott_schedule', [])) if (job.status === 'pending' && new Date(job.when).getTime() <= now) { setJobStatus('ott_schedule', job.id, 'sending'); runSchedule(job); }
+    for (const r of store.get('ott_reminders', [])) if (r.status === 'pending' && new Date(r.when).getTime() <= now) { setJobStatus('ott_reminders', r.id, 'firing'); fireReminder(r); }
+  }, 15000);
+}
+function setJobStatus(key, id, status, extra) { const arr = store.get(key, []); const j = arr.find(x => x.id === id); if (j) { j.status = status; if (extra) Object.assign(j, extra); store.set(key, arr); } }
+async function runSchedule(job) {
+  if (!(await isConnectedOn(job.accId))) { setJobStatus('ott_schedule', job.id, 'failed'); toast(`Scheduled broadcast failed: ${job.accName} not linked`, 'err'); refreshPanel('schedule'); return; }
+  let ok = 0, fail = 0;
+  for (const n of job.numbers) { const r = await sendTextOn(job.accId, n, job.message); r.ok ? ok++ : fail++; await sleep((job.delayMin + Math.random() * (job.delayMax - job.delayMin)) * 1000); }
+  setJobStatus('ott_schedule', job.id, 'sent', { ok, fail }); toast(`Scheduled broadcast sent: ${ok}/${job.numbers.length}`); refreshPanel('schedule');
+}
+async function fireReminder(r) {
+  if (r.number && await isConnectedOn(r.accId)) await sendTextOn(r.accId, r.number, r.text);
+  try { new Notification('ott24x7 CRM · Reminder', { body: r.text }); } catch (_) {}
+  toast('Reminder: ' + r.text.slice(0, 40)); setJobStatus('ott_reminders', r.id, 'done'); refreshPanel('reminder');
+}
+function refreshPanel(id) { if (openFeatureId === id) { const f = FEATURES.find(x => x.id === id); if (f) openFeature(f); } }
+
+// ================= Group Guard injection =================
+function applyGuard(accId) {
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const cfg = store.get(`ott_guard_${accId}`, { on: false, deleteLinks: true, removeUser: false, banned: [] });
+  const conf = cfg.on ? cfg : { on: false };
+  const js = `window.__ott_guard=${JSON.stringify(conf)};
+    if(!window.__ott_guard_init){window.__ott_guard_init=true;try{WPP.on('chat.new_message',async(m)=>{try{
+      const g=window.__ott_guard; if(!g||!g.on||!m||m.fromMe)return;
+      const chatId=m.from&&(m.from._serialized||m.from); if(!chatId||!String(chatId).endsWith('@g.us'))return;
+      const body=(m.body||''); const low=body.toLowerCase();
+      const hasLink=/(https?:\\/\\/|www\\.|wa\\.me|t\\.me|chat\\.whatsapp\\.com|bit\\.ly)/i.test(body);
+      const hasBanned=(g.banned||[]).some(w=>w&&low.includes(String(w).toLowerCase()));
+      if((g.deleteLinks&&hasLink)||hasBanned){
+        try{await WPP.chat.deleteMessage(chatId,[m.id&&(m.id._serialized||m.id)],true,true)}catch(e){}
+        if(g.removeUser){try{const s=m.author&&(m.author._serialized||m.author); if(s)await WPP.group.removeParticipants(chatId,[s])}catch(e){}}
+      }
+    }catch(e){}});}catch(e){}}`;
+  wv.executeJavaScript(js).catch(() => {});
+}
+
+// ================= Schedule feature =================
+RENDER.schedule = (b) => {
+  const acc = accounts.find(a => a.id === activeId);
+  const numbers = el('textarea', { placeholder: 'One number per line', style: { minHeight: '120px', fontFamily: 'JetBrains Mono, monospace' } });
+  const msg = el('textarea', { placeholder: 'Message · {a|b} spin, signature auto-appended' });
+  const when = el('input', { type: 'datetime-local' });
+  const dMin = el('input', { type: 'number', value: '4', min: '1' }); const dMax = el('input', { type: 'number', value: '9', min: '1' });
+  const list = el('div', { className: 'rules' });
+  const draw = () => {
+    list.innerHTML = ''; const jobs = store.get('ott_schedule', []).filter(j => j.accId === activeId).reverse();
+    if (!jobs.length) list.append(el('div', { className: 'muted' }, 'No scheduled broadcasts.'));
+    jobs.forEach(j => list.append(el('div', { className: 'qr-item' },
+      el('div', { className: 'txt' }, el('b', {}, new Date(j.when).toLocaleString()),
+        el('div', { className: 'muted', style: { fontSize: '12px' } }, `${j.numbers.length} recipients · ${j.status}${j.ok != null ? ` (${j.ok} sent)` : ''}`)),
+      el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_schedule', store.get('ott_schedule', []).filter(x => x.id !== j.id)); draw(); } }, j.status === 'pending' ? 'Cancel' : 'Remove'))));
+  };
+  b.append(el('div', { className: 'fp-note' }, 'Schedules a broadcast on THIS account. Fires only while the app stays open.'),
+    lbl('Numbers', numbers), lbl('Message', msg),
+    el('div', { className: 'row' }, lbl('Send at', when), lbl('Delay min', dMin), lbl('Delay max', dMax)),
+    el('button', { className: 'btn primary', onclick: () => {
+      const nums = numbers.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (!nums.length) return toast('Add numbers', 'err'); if (!msg.value.trim()) return toast('Write a message', 'err');
+      if (!when.value) return toast('Pick a date & time', 'err'); const t = new Date(when.value).getTime();
+      if (isNaN(t) || t <= Date.now()) return toast('Pick a future time', 'err');
+      const jobs = store.get('ott_schedule', []);
+      jobs.push({ id: 's' + Date.now(), accId: activeId, accName: acc ? acc.name : '', numbers: nums, message: msg.value.trim(), when: new Date(t).toISOString(), delayMin: +dMin.value || 4, delayMax: +dMax.value || 9, status: 'pending', ok: null });
+      store.set('ott_schedule', jobs); numbers.value = msg.value = ''; draw(); toast('Broadcast scheduled');
+    } }, 'Schedule broadcast'),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }), list);
+  draw();
+};
+
+// ================= Reminder feature =================
+RENDER.reminder = (b) => {
+  const number = el('input', { placeholder: 'Number to message (with country code)' });
+  const text = el('textarea', { placeholder: 'Reminder message' });
+  const when = el('input', { type: 'datetime-local' });
+  const list = el('div', { className: 'rules' });
+  const draw = () => {
+    list.innerHTML = ''; const rs = store.get('ott_reminders', []).filter(r => r.accId === activeId).reverse();
+    if (!rs.length) list.append(el('div', { className: 'muted' }, 'No reminders.'));
+    rs.forEach(r => list.append(el('div', { className: 'qr-item' },
+      el('div', { className: 'txt' }, el('b', {}, new Date(r.when).toLocaleString()), el('div', { className: 'muted', style: { fontSize: '12px' } }, `${r.number || 'alert only'} · ${r.status}`)),
+      el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_reminders', store.get('ott_reminders', []).filter(x => x.id !== r.id)); draw(); } }, r.status === 'pending' ? 'Cancel' : 'Remove'))));
+  };
+  b.append(el('div', { className: 'fp-note' }, 'At the set time this sends a WhatsApp message (if a number is given) and shows a desktop alert. Fires only while the app stays open.'),
+    lbl('Number (optional — leave blank for alert only)', number), lbl('Message', text), lbl('Remind at', when),
+    el('button', { className: 'btn primary', onclick: () => {
+      if (!text.value.trim()) return toast('Write a message', 'err'); if (!when.value) return toast('Pick a time', 'err');
+      const t = new Date(when.value).getTime(); if (isNaN(t) || t <= Date.now()) return toast('Pick a future time', 'err');
+      const rs = store.get('ott_reminders', []); rs.push({ id: 'r' + Date.now(), accId: activeId, number: digits(number.value), text: text.value.trim(), when: new Date(t).toISOString(), status: 'pending' });
+      store.set('ott_reminders', rs); number.value = text.value = ''; draw(); toast('Reminder set');
+      try { if (Notification.permission === 'default') Notification.requestPermission(); } catch (_) {}
+    } }, 'Set reminder'),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }), list);
+  draw();
+};
+
+// ================= Group Utilities =================
+async function loadGroupsInto(sel) {
+  if (!(await isConnected())) { toast('WhatsApp not linked', 'err'); return 0; }
+  const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({id:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||x.id._serialized}))}catch(e){return[]}})()").catch(() => []);
+  sel.innerHTML = ''; if (!gs.length) { sel.append(el('option', {}, 'No groups')); return 0; }
+  gs.forEach(g => sel.append(el('option', { value: g.id }, g.name))); return gs.length;
+}
+RENDER.grouputils = (b) => {
+  const sel = el('select'); const msg = el('textarea', { placeholder: 'Message to send to the selected group' }); const out = el('div', { className: 'log' });
+  b.append(el('div', { className: 'fp-note' }, 'Manage groups on THIS account. Invite link, leave, and admin actions require the right group permissions.'),
+    lbl('Group', sel),
+    el('div', { className: 'row' }, el('button', { className: 'btn', onclick: async () => { const n = await loadGroupsInto(sel); if (n) toast(`${n} groups loaded`); } }, 'Load groups'),
+      el('button', { className: 'btn', onclick: async () => {
+        const gid = sel.value; if (!gid) return toast('Load & pick a group', 'err');
+        const code = await waExec(`(async()=>{try{return await WPP.group.getInviteCode(${JSON.stringify(gid)})}catch(e){return ''}})()`).catch(() => '');
+        if (code) { const link = 'https://chat.whatsapp.com/' + code; navigator.clipboard.writeText(link); line(out, 'Invite: ' + link, 'ok'); toast('Invite link copied'); }
+        else toast('Need admin or failed', 'err');
+      } }, 'Get invite link')),
+    lbl('Message to group', msg), quickInsert(msg),
+    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: async () => {
+        const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!msg.value.trim()) return toast('Write a message', 'err');
+        const body = JSON.stringify(spin(withSignature(msg.value.trim())));
+        const r = await waExec(`(async()=>{try{await WPP.chat.sendTextMessage(${JSON.stringify(gid)},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+        line(out, r.ok ? '✓ Sent to group' : '✗ ' + (r.err || 'failed'), r.ok ? 'ok' : 'bad'); toast(r.ok ? 'Sent to group' : 'Failed', r.ok ? 'ok' : 'err');
+      } }, 'Send to group'),
+      el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: async () => {
+        const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!confirm('Leave this group?')) return;
+        const r = await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(gid)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+        toast(r.ok ? 'Left group' : 'Failed', r.ok ? 'ok' : 'err'); if (r.ok) loadGroupsInto(sel);
+      } }, 'Leave group')),
+    out);
+};
+
+// ================= Group Guard =================
+RENDER.guard = (b) => {
+  const key = `ott_guard_${activeId}`; const cfg = store.get(key, { on: false, deleteLinks: true, removeUser: false, banned: [] });
+  const on = chk(cfg.on), dl = chk(cfg.deleteLinks), rm = chk(cfg.removeUser);
+  const banned = el('textarea', { value: (cfg.banned || []).join('\n'), placeholder: 'One banned word/phrase per line' });
+  b.append(el('div', { className: 'fp-note' }, 'Protects groups where THIS account is admin. On a matching message it deletes it (and can remove the sender). Requires admin rights in the group.'),
+    chkRow(on, 'Enable Group Guard'), chkRow(dl, 'Delete messages containing links'), chkRow(rm, 'Remove the sender too'),
+    lbl('Banned words / phrases', banned),
+    el('button', { className: 'btn primary', onclick: () => {
+      store.set(key, { on: on.checked, deleteLinks: dl.checked, removeUser: rm.checked, banned: banned.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean) });
+      applyGuard(activeId); toast('Group Guard saved');
+    } }, 'Save & apply'));
+};
+
 // ================= tiny utils =================
+function chk(checked) { return el('input', { type: 'checkbox', checked, style: { width: 'auto' } }); }
+function chkRow(input, label) { return el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, input, label); }
 function lbl(t, c) { return el('label', {}, t, c); }
 function line(box, text, cls) { const s = el('span', cls ? { className: cls } : {}); s.textContent = text + '\n'; box.append(s); box.scrollTop = box.scrollHeight; }
 function quickInsert(target) {
