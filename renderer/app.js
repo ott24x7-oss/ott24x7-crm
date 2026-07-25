@@ -478,32 +478,94 @@ RENDER.signature = (b) => {
     el('button', { className: 'btn primary', onclick: () => { store.set('ott_sig', { on: on.checked, text: txt.value }); toast('Signature saved'); } }, 'Save signature'));
 };
 
+// Backfill a category field on older quick replies.
+function migrateQuick() {
+  const qs = store.get('ott_quick', []); let ch = false;
+  for (const q of qs) if (q.category === undefined) { q.category = ''; ch = true; }
+  if (ch) store.set('ott_quick', qs);
+}
+// Send a saved product/offer straight to the currently open WhatsApp chat.
+async function sendQuickToActiveChat(it) {
+  const wv = document.querySelector(`webview[data-acc="${activeId}"]`);
+  if (!wv || !wv.dataset.injected) { toast('Open a WhatsApp chat first', 'err'); return; }
+  const payload = JSON.stringify({ text: spin(it.text || ''), data: it.data || null, filename: it.filename || 'file' });
+  const js = `(function(){try{var q=${payload};var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(!c)return 'nochat';if(q.data){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename,createChat:true});}else{WPP.chat.sendTextMessage(c.id,q.text,{createChat:true});}return 'ok';}catch(e){return 'err:'+(e&&e.message);}})()`;
+  const r = await wv.executeJavaScript(js).catch(() => 'err');
+  if (r === 'ok') toast('Sent to open chat');
+  else if (r === 'nochat') toast('Open a chat in WhatsApp first', 'err');
+  else toast('Send failed', 'err');
+}
+
 RENDER.quick = (b) => {
+  migrateQuick();
   const refreshChips = () => { accounts.forEach(a => applyQuickReplies(a.id)); };
-  const list = el('div', { className: 'rules' });
-  const draw = () => {
-    list.innerHTML = ''; const qs = store.get('ott_quick', []);
-    if (!qs.length) list.append(el('div', { className: 'muted' }, 'No quick replies yet.'));
-    qs.forEach((q, i) => list.append(el('div', { className: 'qr-item' },
-      el('div', { className: 'txt' }, el('b', {}, (q.data ? '📎 ' : '') + (q.title || '(untitled)')), el('div', { className: 'muted', style: { fontSize: '12px' } }, (q.text || (q.filename || '')).slice(0, 60))),
-      el('button', { className: 'btn small ghost', onclick: () => { const qs2 = store.get('ott_quick', []); qs2.splice(i, 1); store.set('ott_quick', qs2); draw(); refreshChips(); } }, 'Delete'))));
-  };
-  const title = el('input', { placeholder: 'Title (max 15 chars)', maxLength: 15 });
-  const mtype = el('select'); [['text', 'Message (text only)'], ['image', 'Message + Image / Video'], ['audio', 'Message + Audio'], ['doc', 'Message + Document']].forEach(([v, n]) => mtype.append(el('option', { value: v }, n)));
-  const text = el('textarea', { placeholder: 'Reply text / caption (supports {a|b} spin)' });
+
+  const title = el('input', { placeholder: 'Product / offer name (max 40)', maxLength: 40 });
+  const category = el('input', { placeholder: 'Category (e.g. Ebooks, Courses)', maxLength: 30 });
+  const mtype = el('select'); [['text', 'Text only'], ['image', 'Image / Video'], ['audio', 'Audio'], ['doc', 'Document']].forEach(([v, n]) => mtype.append(el('option', { value: v }, n)));
+  const text = el('textarea', { placeholder: 'Caption / message (supports {a|b} spin)' });
   const att = attachControl('*'); att.node.style.display = 'none';
+  const chipChk = chk(false);
   mtype.onchange = () => { att.node.style.display = mtype.value === 'text' ? 'none' : 'flex'; };
-  b.append(el('div', { className: 'fp-note' }, 'Saved replies appear as clickable chips just above the message box in any open chat. Click a text chip to drop it into the box; a media chip (📎) sends its file + caption to the open chat.'),
-    lbl('Title', title), lbl('Message type', mtype), lbl('Reply / caption', text), att.node,
+
+  const list = el('div', { className: 'rules' });
+  const search = el('input', { placeholder: 'Search products…' });
+  const catF = el('select');
+  const drawFilters = () => {
+    const cur = catF.value;
+    const cats = [...new Set(store.get('ott_quick', []).map(q => (q.category || '').trim()).filter(Boolean))].sort();
+    catF.innerHTML = ''; catF.append(el('option', { value: 'all' }, 'All categories'));
+    cats.forEach(c => catF.append(el('option', { value: c }, c)));
+    if ([...catF.options].some(o => o.value === cur)) catF.value = cur;
+  };
+  const draw = () => {
+    list.innerHTML = '';
+    const qs = store.get('ott_quick', []);
+    const q = (search.value || '').toLowerCase(), cf = catF.value;
+    const items = qs.map((it, i) => ({ it, i })).filter(({ it }) =>
+      (cf === 'all' || (it.category || '') === cf) &&
+      (!q || (it.title || '').toLowerCase().includes(q) || (it.text || '').toLowerCase().includes(q) || (it.category || '').toLowerCase().includes(q)));
+    if (!items.length) { list.append(el('div', { className: 'muted' }, qs.length ? 'No products match your search.' : 'No products saved yet — add one above.')); return; }
+    list.append(el('div', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' } }, items.length + ' item(s)'));
+    items.forEach(({ it, i }) => list.append(catalogItem(it, i)));
+  };
+  function catalogItem(it, i) {
+    const isImg = it.data && /^data:image\//.test(it.data);
+    const thumb = isImg
+      ? el('img', { src: it.data, style: { width: '46px', height: '46px', objectFit: 'cover', borderRadius: '8px', flex: 'none' } })
+      : el('div', { style: { width: '46px', height: '46px', borderRadius: '8px', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(18,184,102,.12)', fontSize: '20px' } }, it.data ? '📎' : '💬');
+    return el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start' } },
+      thumb,
+      el('div', { style: { flex: '1', minWidth: '0' } },
+        el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
+          el('b', {}, it.title || '(untitled)'),
+          it.category ? el('span', { className: 'muted', style: { fontSize: '11px', border: '1px solid var(--line)', borderRadius: '10px', padding: '1px 8px' } }, it.category) : null,
+          it.pinned !== false ? el('span', { title: 'Shows as chip on chat bar', style: { fontSize: '11px' } }, '📌') : null),
+        el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (it.text || it.filename || '').slice(0, 90)),
+        el('div', { className: 'row', style: { marginTop: '8px' } },
+          el('button', { className: 'btn small', onclick: () => sendQuickToActiveChat(it) }, '➤ Send to chat'),
+          el('button', { className: 'btn small ghost', onclick: () => { const qs = store.get('ott_quick', []); qs[i].pinned = qs[i].pinned === false; store.set('ott_quick', qs); draw(); refreshChips(); } }, it.pinned !== false ? 'Unpin' : 'Pin chip'),
+          el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: () => { const qs = store.get('ott_quick', []); qs.splice(i, 1); store.set('ott_quick', qs); drawFilters(); draw(); refreshChips(); } }, 'Delete'))));
+  }
+  search.oninput = draw; catF.onchange = draw;
+
+  b.append(
+    el('div', { className: 'fp-note' }, 'Save your product offers (image + caption) once, then search and send them to the open chat in one click. Pin your most-used ones as chips above the message box.'),
+    lbl('Product / offer name', title),
+    el('div', { className: 'row' }, lbl('Category', category), lbl('Type', mtype)),
+    lbl('Caption / message', text), att.node,
+    chkRow(chipChk, 'Also show as a quick chip on the chat bar'),
     el('button', { className: 'btn primary', onclick: () => {
       const f = att.get();
-      if (!text.value.trim() && !f) return toast('Add reply text or a file', 'err');
+      if (!title.value.trim() && !text.value.trim() && !f) return toast('Add a name, caption, or file', 'err');
       const qs = store.get('ott_quick', []);
-      qs.push({ title: title.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined });
-      if (store.set('ott_quick', qs)) { title.value = text.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; draw(); refreshChips(); toast('Saved — chip added to WhatsApp'); }
-    } }, 'Add quick reply'),
-    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }), list);
-  draw();
+      qs.push({ title: title.value.trim(), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked });
+      if (store.set('ott_quick', qs)) { title.value = text.value = category.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
+    } }, '＋ Save product / offer'),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
+    el('div', { className: 'row' }, lbl('Search', search), lbl('Category', catF)),
+    list);
+  drawFilters(); draw();
 };
 
 RENDER.filter = (b) => {
@@ -703,7 +765,7 @@ function chatFilter(name) {
 // Inject clickable quick-reply chips just above the open chat's compose box (like WA CRM).
 function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
-  const replies = store.get('ott_quick', []);
+  const replies = store.get('ott_quick', []).filter(q => q.pinned !== false); // only pinned show as chips
   const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
     function insert(text){try{var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(box){box.focus();document.execCommand('insertText',false,text);}}catch(e){}}
     function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
@@ -903,7 +965,7 @@ function saveLead(it) {
   const num = digits(it.number || ''); if (!num) return;
   const leads = store.get('ott_leads', []);
   if (leads.some(L => L.number === num)) { toast((it.name || num) + ' is already a lead'); return; }
-  leads.unshift({ id: 'L' + Date.now() + Math.random().toString(36).slice(2, 6), number: num, name: it.name || num, status: 'new', notes: '', source: 'chat', createdTs: Date.now(), accId: activeId, seqId: null, seqStep: 0, seqActive: false, seqNextTs: 0, logs: [] });
+  leads.unshift({ id: 'L' + Date.now() + Math.random().toString(36).slice(2, 6), number: num, name: it.name || num, type: 'new', status: 'contacted', notes: '', source: 'chat', createdTs: Date.now(), accId: activeId, seqId: null, seqStep: 0, seqActive: false, seqNextTs: 0, logs: [] });
   store.set('ott_leads', leads); toast('Lead saved: ' + (it.name || num));
   if (openFeatureId === 'leads') refreshPanel('leads');
 }
@@ -945,43 +1007,113 @@ async function sendFollowup(L, step) {
   if (LL) { LL.logs = [{ ts: Date.now(), text: (step.text || step.filename || 'follow-up').slice(0, 40), ok: r.ok }, ...(LL.logs || [])].slice(0, 30); store.set('ott_leads', leads); }
 }
 
+const LEAD_TYPES = [['new', 'New'], ['hot', 'Hot'], ['warm', 'Warm'], ['cold', 'Cold']];
+const LEAD_STATUSES = [['contacted', 'Contacted'], ['followup', 'Follow-up'], ['proposal', 'Proposal sent'], ['won', 'Won'], ['lost', 'Lost']];
+const isoDay = (ts) => new Date(ts).toISOString().slice(0, 10);
+// One-time migration: give older leads a type, and move legacy 'new' status into the type field.
+function migrateLeads() {
+  const leads = store.get('ott_leads', []); let ch = false;
+  for (const L of leads) {
+    if (!L.type) { L.type = (L.status === 'new') ? 'new' : 'warm'; ch = true; }
+    if (L.status === 'new') { L.status = 'contacted'; ch = true; }
+  }
+  if (ch) store.set('ott_leads', leads);
+}
+function exportLeadsCsv(rows, from, to) {
+  const acctName = (id) => (accounts.find(a => a.id === id) || {}).name || '';
+  const out = rows.map(L => ({
+    name: L.name || '', number: L.number || '', type: L.type || 'new', status: L.status || '',
+    source: L.source || '', created: new Date(L.createdTs || Date.now()).toLocaleString(),
+    notes: (L.notes || '').replace(/[\r\n]+/g, ' '), followup: L.seqActive ? 'active' : '', account: acctName(L.accId),
+  }));
+  downloadCsv(`ott24x7-leads-${from || 'all'}_to_${to || 'all'}.csv`, out, ['name', 'number', 'type', 'status', 'source', 'created', 'notes', 'followup', 'account']);
+  toast(`Exported ${rows.length} lead(s)`);
+}
+
 RENDER.leads = (b) => {
-  const mode = el('select'); [['leads', 'Leads'], ['seqs', 'Follow-up Sequences']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  migrateLeads();
+  const mode = el('select'); [['leads', 'Leads'], ['report', 'Reports'], ['seqs', 'Follow-up Sequences']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
   const boxc = el('div', {});
   mode.onchange = render;
-  b.append(el('div', { className: 'fp-note' }, 'Save any chat as a lead with the “＋ Lead” button in its header, track status, and auto-send follow-ups.'), lbl('View', mode), boxc);
+  b.append(el('div', { className: 'fp-note' }, 'Save any chat as a lead with the “＋ Lead” button in its header. Set a type & status, track the pipeline, and export reports.'), lbl('View', mode), boxc);
   render();
-  function render() { boxc.innerHTML = ''; mode.value === 'leads' ? leadsView() : seqsView(); }
+  function render() { boxc.innerHTML = ''; mode.value === 'leads' ? leadsView() : mode.value === 'report' ? reportView() : seqsView(); }
 
   function leadsView() {
-    const filter = el('select'); [['all', 'All'], ['new', 'New'], ['contacted', 'Contacted'], ['followup', 'Follow-up'], ['won', 'Won'], ['lost', 'Lost']].forEach(([v, n]) => filter.append(el('option', { value: v }, n)));
+    const typeF = el('select'); [['all', 'All types'], ...LEAD_TYPES].forEach(([v, n]) => typeF.append(el('option', { value: v }, n)));
+    const filter = el('select'); [['all', 'All statuses'], ...LEAD_STATUSES].forEach(([v, n]) => filter.append(el('option', { value: v }, n)));
     const search = el('input', { placeholder: 'Search name / number' });
     const list = el('div', {});
     const draw = () => {
       list.innerHTML = '';
-      const q = (search.value || '').toLowerCase(), f = filter.value;
-      const leads = store.get('ott_leads', []).filter(L => (f === 'all' || L.status === f) && (!q || (L.name || '').toLowerCase().includes(q) || L.number.includes(q)));
-      if (!leads.length) { list.append(el('div', { className: 'muted' }, 'No leads yet. Open a chat and click “＋ Lead”.')); return; }
+      const q = (search.value || '').toLowerCase(), f = filter.value, tf = typeF.value;
+      const leads = store.get('ott_leads', []).filter(L =>
+        (f === 'all' || L.status === f) && (tf === 'all' || (L.type || 'new') === tf) &&
+        (!q || (L.name || '').toLowerCase().includes(q) || L.number.includes(q)));
+      if (!leads.length) { list.append(el('div', { className: 'muted' }, 'No leads match. Open a chat and click “＋ Lead”.')); return; }
+      list.append(el('div', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' } }, leads.length + ' lead(s)'));
       leads.forEach(L => list.append(leadCard(L, draw)));
     };
-    filter.onchange = draw; search.oninput = draw;
-    boxc.append(el('div', { className: 'row' }, lbl('Status', filter), lbl('Search', search)), list);
+    typeF.onchange = draw; filter.onchange = draw; search.oninput = draw;
+    boxc.append(el('div', { className: 'row' }, lbl('Type', typeF), lbl('Status', filter), lbl('Search', search)), list);
     draw();
   }
+
+  function reportView() {
+    const all = store.get('ott_leads', []);
+    const fromEl = el('input', { type: 'date', value: isoDay(Date.now() - 29 * 86400000) });
+    const toEl = el('input', { type: 'date', value: isoDay(Date.now()) });
+    const body = el('div', {});
+    const compute = () => {
+      const f = fromEl.value ? new Date(fromEl.value + 'T00:00:00').getTime() : 0;
+      const t = toEl.value ? new Date(toEl.value + 'T23:59:59').getTime() : Date.now();
+      return all.filter(L => (L.createdTs || 0) >= f && (L.createdTs || 0) <= t);
+    };
+    const chip = (label, val, color) => el('div', { className: 'card', style: { padding: '12px 14px', flex: '1', minWidth: '96px' } },
+      el('div', { className: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '.4px' } }, label),
+      el('div', { style: { fontSize: '24px', fontWeight: '800', color: color || 'var(--text)' } }, String(val)));
+    const draw = () => {
+      body.innerHTML = '';
+      const rows = compute();
+      const byStatus = {}, byType = {};
+      rows.forEach(L => { byStatus[L.status] = (byStatus[L.status] || 0) + 1; byType[L.type || 'new'] = (byType[L.type || 'new'] || 0) + 1; });
+      const won = byStatus.won || 0, lost = byStatus.lost || 0;
+      const rate = (won + lost) ? Math.round(won / (won + lost) * 100) : 0;
+      body.append(
+        el('div', { className: 'row', style: { flexWrap: 'wrap', gap: '10px' } },
+          chip('Total', rows.length), chip('Won', won, '#12b866'), chip('Lost', lost, '#e5484d'), chip('Win rate', rate + '%', '#3b82f6')),
+        el('div', { className: 'fp-note', style: { marginTop: '14px' } }, 'By status'),
+        el('div', { className: 'row', style: { flexWrap: 'wrap', gap: '8px' } }, ...LEAD_STATUSES.map(([v]) => el('div', { className: 'card', style: { padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px' } }, statusTag(v), el('b', {}, String(byStatus[v] || 0))))),
+        el('div', { className: 'fp-note', style: { marginTop: '14px' } }, 'By type'),
+        el('div', { className: 'row', style: { flexWrap: 'wrap', gap: '8px' } }, ...LEAD_TYPES.map(([v]) => el('div', { className: 'card', style: { padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px' } }, typeTag(v), el('b', {}, String(byType[v] || 0))))),
+        el('div', { className: 'row', style: { marginTop: '16px' } },
+          el('button', { className: 'btn primary', onclick: () => exportLeadsCsv(compute(), fromEl.value, toEl.value) }, '⬇ Export CSV (' + rows.length + ')')));
+    };
+    const quick = el('select'); [['0', 'Custom'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last year']].forEach(([v, n]) => quick.append(el('option', { value: v }, n))); quick.value = '30';
+    quick.onchange = () => { const d = +quick.value; if (d > 0) { fromEl.value = isoDay(Date.now() - (d - 1) * 86400000); toEl.value = isoDay(Date.now()); draw(); } };
+    fromEl.onchange = () => { quick.value = '0'; draw(); };
+    toEl.onchange = () => { quick.value = '0'; draw(); };
+    boxc.append(el('div', { className: 'row' }, lbl('Range', quick), lbl('From', fromEl), lbl('To', toEl)), body);
+    draw();
+  }
+
   function leadCard(L, refresh) {
     const seqs = store.get('ott_lead_seqs', []);
-    const statusSel = el('select'); ['new', 'contacted', 'followup', 'won', 'lost'].forEach(s => statusSel.append(el('option', { value: s }, s))); statusSel.value = L.status;
-    statusSel.onchange = () => updateLead(L.id, { status: statusSel.value });
+    const typeSel = el('select'); LEAD_TYPES.forEach(([v, n]) => typeSel.append(el('option', { value: v }, n))); typeSel.value = L.type || 'new';
+    typeSel.onchange = () => { updateLead(L.id, { type: typeSel.value }); refresh(); };
+    const statusSel = el('select'); LEAD_STATUSES.forEach(([v, n]) => statusSel.append(el('option', { value: v }, n))); statusSel.value = L.status;
+    statusSel.onchange = () => { updateLead(L.id, { status: statusSel.value }); refresh(); };
     const seqSel = el('select'); seqSel.append(el('option', { value: '' }, '— sequence —')); seqs.forEach(s => seqSel.append(el('option', { value: s.id }, s.name)));
     const next = L.seqActive && L.seqNextTs ? '  · next ' + new Date(L.seqNextTs).toLocaleString() : '';
     return el('div', { className: 'card', style: { padding: '12px 14px', marginBottom: '8px' } },
       el('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' } },
         el('div', {}, el('b', {}, L.name || L.number), el('div', { className: 'muted', style: { fontSize: '12px' } }, L.number + (L.seqActive ? '  · follow-up active' + next : ''))),
-        statusTag(L.status)),
+        el('div', { style: { display: 'flex', gap: '6px' } }, typeTag(L.type || 'new'), statusTag(L.status))),
       L.notes ? el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '6px' } }, '📝 ' + L.notes) : null,
-      el('div', { className: 'row', style: { marginTop: '8px' } }, statusSel,
-        el('button', { className: 'btn small', onclick: async () => { const m = await promptModal('Message ' + (L.name || L.number), 'Type a message'); if (m) { const r = await sendToJidOn(L.accId || activeId, digits(L.number) + '@c.us', m); toast(r.ok ? 'Sent' : 'Failed', r.ok ? 'ok' : 'err'); } } }, 'Message')),
-      el('div', { className: 'row', style: { marginTop: '6px' } }, seqSel,
+      el('div', { className: 'row', style: { marginTop: '8px' } }, lbl('Type', typeSel), lbl('Status', statusSel)),
+      el('div', { className: 'row', style: { marginTop: '6px' } },
+        el('button', { className: 'btn small', onclick: async () => { const m = await promptModal('Message ' + (L.name || L.number), 'Type a message'); if (m) { const r = await sendToJidOn(L.accId || activeId, digits(L.number) + '@c.us', m); toast(r.ok ? 'Sent' : 'Failed', r.ok ? 'ok' : 'err'); } } }, 'Message'),
+        seqSel,
         el('button', { className: 'btn small', onclick: () => { if (!seqSel.value) return toast('Pick a sequence', 'err'); startSequence(L.id, seqSel.value); refresh(); } }, 'Start follow-up'),
         L.seqActive ? el('button', { className: 'btn small ghost', onclick: () => { updateLead(L.id, { seqActive: false }); refresh(); } }, 'Stop') : null),
       el('div', { className: 'row', style: { marginTop: '6px' } },
@@ -1578,9 +1710,16 @@ const PH_RESOLVER = "async function _ph(id){try{if(!id)return '';if(id.server===
 // ================= tiny utils =================
 function chk(checked) { return el('input', { type: 'checkbox', checked, style: { width: 'auto' } }); }
 function statusTag(s) {
-  const colors = { new: '#3b82f6', contacted: '#f59e0b', followup: '#8b5cf6', won: '#12b866', lost: '#e5484d' };
+  const colors = { new: '#3b82f6', contacted: '#f59e0b', followup: '#8b5cf6', proposal: '#0ea5e9', won: '#12b866', lost: '#e5484d' };
+  const labels = { new: 'New', contacted: 'Contacted', followup: 'Follow-up', proposal: 'Proposal', won: 'Won', lost: 'Lost' };
   const c = colors[s] || '#64727b';
-  return el('span', { style: { background: c + '22', color: c, padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' } }, s || '');
+  return el('span', { style: { background: c + '22', color: c, padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' } }, labels[s] || s || '');
+}
+// Lead temperature (type) pill.
+function typeTag(t) {
+  const colors = { new: '#3b82f6', hot: '#e5484d', warm: '#f59e0b', cold: '#06b6d4' };
+  const c = colors[t] || '#64727b';
+  return el('span', { style: { background: c + '22', color: c, padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' } }, t || 'new');
 }
 function chkRow(input, label) { return el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, input, label); }
 function lbl(t, c) { return el('label', {}, t, c); }
