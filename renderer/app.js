@@ -32,9 +32,12 @@ const IC = {
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>',
   languages: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h9M9 4v4c0 4-2 7-5 8"/><path d="M9 12c1 3 3 5 6 6"/><path d="M13 20l4-9 4 9M14.5 17h5"/></svg>',
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>',
+  chats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M7 9h10M7 13h6"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
 };
 
 const FEATURES = [
+  { id: 'chatfilters', name: 'Chat Filters', icon: IC.chats, impl: true },
   { id: 'broadcast', name: 'Broadcast', icon: IC.broadcast, impl: true },
   { id: 'autoreply', name: 'Autoreply BOT', icon: IC.bot, impl: true },
   { id: 'guard', name: 'Group Guard', icon: IC.shield, impl: true },
@@ -44,6 +47,8 @@ const FEATURES = [
   { id: 'extractor', name: 'Data Extractor', icon: IC.users, impl: true },
   { id: 'filter', name: 'Number Filter', icon: IC.filter, impl: true },
   { id: 'grouputils', name: 'Group Utilities', icon: IC.group, impl: true },
+  { divider: 'Tools' },
+  { id: 'blur', name: 'Blur Settings', icon: IC.eye, impl: true },
   { id: 'link', name: 'Link Generator', icon: IC.link, impl: true },
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
   { id: 'translate', name: 'Message Translation', icon: IC.languages, impl: true },
@@ -124,7 +129,7 @@ function createWebview(acc) {
   wv.style.display = 'none';
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
@@ -165,7 +170,9 @@ async function pollStatus() {
 function renderRail() {
   const rail = $('#rail'); rail.innerHTML = '';
   FEATURES.forEach(f => {
+    if (f.divider) { rail.append(el('div', { className: 'rail-divider' }, f.divider)); return; }
     const item = el('div', { className: 'rail-item', onclick: () => openFeature(f) }, svg(f.icon), f.name);
+    item.dataset.fid = f.id;
     if (!f.impl) item.append(el('span', { className: 'soon' }, 'soon'));
     rail.append(item);
   });
@@ -174,7 +181,7 @@ let openFeatureId = null;
 function openFeature(f) {
   if (!activeWv()) return toast('Add a WhatsApp account first', 'err');
   openFeatureId = f.id;
-  document.querySelectorAll('.rail-item').forEach((x, i) => x.classList.toggle('active', FEATURES[i].id === f.id));
+  document.querySelectorAll('.rail-item').forEach(x => x.classList.toggle('active', x.dataset.fid === f.id));
   $('#fpTitle').textContent = f.name;
   const body = $('#fpBody'); body.innerHTML = '';
   (RENDER[f.id] || renderSoon)(body, f);
@@ -400,6 +407,59 @@ RENDER.autoreply = (b, f) => {
     el('button', { className: 'btn primary', onclick: () => { persist(); toast('Autoreply saved'); } }, 'Save & apply'));
   draw();
 };
+
+// ================= Chat Filters =================
+RENDER.chatfilters = (b) => {
+  const sel = el('select');
+  [['all', 'All chats'], ['unread', 'Unread'], ['groups', 'Groups only'], ['contacts', 'My contacts'], ['noncontacts', 'Non-contacts']].forEach(([v, n]) => sel.append(el('option', { value: v }, n)));
+  const out = el('div', { className: 'log' }); let rows = [];
+  b.append(el('div', { className: 'fp-note' }, 'Pull a filtered view of the chats on THIS account. Export the result to reuse in Broadcast.'),
+    lbl('Filter', sel),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn primary', onclick: run }, 'Apply filter'),
+      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv('ott24x7-chats.csv', rows, ['name', 'number', 'type']); } }, 'Export CSV')),
+    out);
+  async function run() {
+    if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+    const f = sel.value;
+    const opt = f === 'groups' ? '{onlyGroups:true}' : f === 'unread' ? '{onlyWithUnreadMessage:true}' : '{}';
+    const expr = `(async()=>{try{const l=await WPP.chat.list(${opt});return l.map(c=>({name:(c.name||c.formattedTitle||(c.contact&&c.contact.name)||'')+'',user:(c.id&&c.id.user)||'',isGroup:!!(c.isGroup||(c.id&&c.id.server==='g.us')),isMyContact:!!(c.contact&&c.contact.isMyContact)}))}catch(e){return[]}})()`;
+    let list = await waExec(expr).catch(() => []);
+    rows = list.map(c => ({ name: c.name, number: c.user, type: c.isGroup ? 'group' : (c.isMyContact ? 'contact' : 'chat') }));
+    if (f === 'contacts') rows = rows.filter(x => x.type === 'contact');
+    if (f === 'noncontacts') rows = rows.filter(x => x.type === 'chat');
+    out.innerHTML = '';
+    if (!rows.length) { line(out, 'No chats match this filter.', 'bad'); return; }
+    rows.slice(0, 250).forEach(c => line(out, `${c.name || c.number || '—'}  ·  ${c.type}`, 'ok'));
+    toast(`${rows.length} chats matched`);
+  }
+};
+
+// ================= Blur Settings =================
+RENDER.blur = (b) => {
+  const key = `ott_blur_${activeId}`; const c = store.get(key, { names: false, messages: false, photos: false, groupmembers: false });
+  const names = chk(c.names), messages = chk(c.messages), photos = chk(c.photos), members = chk(c.groupmembers);
+  const save = () => { store.set(key, { names: names.checked, messages: messages.checked, photos: photos.checked, groupmembers: members.checked }); applyBlur(activeId); };
+  [names, messages, photos, members].forEach(x => x.onchange = save);
+  b.append(el('div', { className: 'fp-note' }, 'Blurs sensitive info in the WhatsApp view on THIS account — ideal for screen-sharing or demos. Toggles apply live.'),
+    chkRow(names, 'Blur contact / chat names'),
+    chkRow(messages, 'Blur message text'),
+    chkRow(photos, 'Blur profile photos'),
+    chkRow(members, 'Blur group members'),
+    el('div', { className: 'fp-note', style: { marginTop: '4px' } }, 'Note: WhatsApp Web changes its layout occasionally — if a blur stops matching, tell me and I will refresh the selectors.'));
+};
+function applyBlur(accId) {
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const c = store.get(`ott_blur_${accId}`, {});
+  const r = [];
+  if (c.names) r.push('#pane-side span[title],#main header span[title]{filter:blur(5px)!important}');
+  if (c.messages) r.push('#main span.selectable-text,#main .copyable-text{filter:blur(5px)!important}');
+  if (c.photos) r.push('#pane-side img,#main header img,img[src^="blob:"]{filter:blur(9px)!important}');
+  if (c.groupmembers) r.push('#main span[aria-label]{filter:blur(5px)!important}');
+  const css = r.join('\n');
+  const js = `(()=>{let s=document.getElementById('ott-blur');if(!s){s=document.createElement('style');s.id='ott-blur';(document.head||document.documentElement).appendChild(s);}s.textContent=${JSON.stringify(css)};})()`;
+  wv.executeJavaScript(js).catch(() => {});
+}
 
 function renderSoon(b, f) {
   b.append(el('div', { className: 'fp-note' }, `“${f.name}” is planned for the next update. Multi-account, Broadcast, Autoreply, Quick Replies, Number Filter, Data Extractor, Link Generator, Direct Message, Translation and Signature are live now.`));
