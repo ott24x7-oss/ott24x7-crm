@@ -25,8 +25,7 @@
     "win": {
       "icon": "assets/ott24x7.ico",
       "target": [
-        "nsis",
-        "msi"
+        "nsis"
       ]
     },
     "publish": [
