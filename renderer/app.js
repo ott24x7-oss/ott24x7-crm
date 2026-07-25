@@ -174,7 +174,7 @@ function renderRail() {
     if (f.divider) { rail.append(el('div', { className: 'rail-divider' }, f.divider)); return; }
     if (f.sub) {
       const sub = el('div', { className: 'rail-sub hidden' });
-      f.sub.forEach(([v, n]) => sub.append(el('div', { className: 'rail-subitem', onclick: () => { pendingChatFilter = v; openFeature(f); } }, n)));
+      f.sub.forEach(([v, n]) => sub.append(el('div', { className: 'rail-subitem', onclick: () => { if (v === 'label') openFeature(f); else chatFilter(v); } }, n)));
       const item = el('div', { className: 'rail-item', onclick: () => sub.classList.toggle('hidden') }, svg(f.icon), f.name, el('span', { className: 'caret' }, '▾'));
       item.dataset.fid = f.id;
       rail.append(item, sub);
@@ -548,6 +548,21 @@ RENDER.autoreply = (b) => {
   drawRules();
 };
 
+// Filter the LIVE WhatsApp chat list by clicking its native filter chip (like WA CRM).
+function chatFilter(name) {
+  const wv = activeWv(); if (!wv) return toast('Add an account first', 'err');
+  const map = { all: 'All', unread: 'Unread', groups: 'Groups', chats: 'Chats', favourites: 'Favourites', business: 'Business', official: 'Official', awaiting: 'Awaiting Reply', needs: 'Needs Reply' };
+  const target = map[name] || name;
+  const js = `(function(){
+    function norm(s){return (s||'').replace(/[0-9]+/g,'').replace(/\\s+/g,' ').trim().toLowerCase();}
+    var t=${JSON.stringify(target.toLowerCase())};
+    var els=document.querySelectorAll('#pane-side button,#pane-side div[role="button"],[role="tablist"] button,button[aria-label]');
+    for(var i=0;i<els.length;i++){var a=norm(els[i].getAttribute('aria-label'));var x=norm(els[i].innerText||els[i].textContent);if(a===t||x===t){els[i].click();return 'ok';}}
+    return 'notfound';
+  })()`;
+  wv.executeJavaScript(js).then(r => toast(r === 'ok' ? 'Chat list filtered: ' + target : `“${target}” filter not available on this account`, r === 'ok' ? 'ok' : 'err')).catch(() => {});
+}
+
 // Inject clickable quick-reply chips onto the WhatsApp compose bar (like WA CRM).
 function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
@@ -561,32 +576,21 @@ function applyQuickReplies(accId) {
 }
 
 // ================= Chat Filters =================
+// Chat Filters → Label: list WhatsApp labels (Business) and filter the live list by one.
 RENDER.chatfilters = (b) => {
-  const sel = el('select');
-  [['all', 'All chats'], ['unread', 'Unread'], ['groups', 'Groups only'], ['chats', 'Individual chats'], ['contacts', 'My contacts'], ['noncontacts', 'Non-contacts']].forEach(([v, n]) => sel.append(el('option', { value: v }, n)));
-  const out = el('div', { className: 'log' }); let rows = [];
-  b.append(el('div', { className: 'fp-note' }, 'Pull a filtered view of the chats on THIS account. Export the result to reuse in Broadcast.'),
-    lbl('Filter', sel),
-    el('div', { className: 'row' },
-      el('button', { className: 'btn primary', onclick: run }, 'Apply filter'),
-      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv('ott24x7-chats.csv', rows, ['name', 'number', 'type']); } }, 'Export CSV')),
-    out);
-  async function run() {
+  const listBox = el('div', { className: 'rules' });
+  b.append(el('div', { className: 'fp-note' }, 'Filter the chat list by a WhatsApp label (Business accounts only). Load labels, then click one to apply it to the live chat list.'),
+    el('button', { className: 'btn small', onclick: load }, 'Load labels'), listBox);
+  async function load() {
     if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
-    const f = sel.value;
-    const opt = f === 'groups' ? '{onlyGroups:true}' : f === 'unread' ? '{onlyWithUnreadMessage:true}' : '{}';
-    const expr = `(async()=>{try{const l=await WPP.chat.list(${opt});return l.map(c=>({name:(c.name||c.formattedTitle||(c.contact&&c.contact.name)||'')+'',user:(c.id&&c.id.user)||'',isGroup:!!(c.isGroup||(c.id&&c.id.server==='g.us')),isMyContact:!!(c.contact&&c.contact.isMyContact)}))}catch(e){return[]}})()`;
-    let list = await waExec(expr).catch(() => []);
-    rows = list.map(c => ({ name: c.name, number: c.user, type: c.isGroup ? 'group' : (c.isMyContact ? 'contact' : 'chat') }));
-    if (f === 'chats') rows = rows.filter(x => x.type !== 'group');
-    if (f === 'contacts') rows = rows.filter(x => x.type === 'contact');
-    if (f === 'noncontacts') rows = rows.filter(x => x.type === 'chat');
-    out.innerHTML = '';
-    if (!rows.length) { line(out, 'No chats match this filter.', 'bad'); return; }
-    rows.slice(0, 250).forEach(c => line(out, `${c.name || c.number || '—'}  ·  ${c.type}`, 'ok'));
-    toast(`${rows.length} chats matched`);
+    const ls = await waExec("(async()=>{try{return (await WPP.labels.getAllLabels()).map(l=>({id:(l.id||'')+'',name:l.name||''}))}catch(e){return[]}})()").catch(() => []);
+    listBox.innerHTML = '';
+    if (!ls.length) { listBox.append(el('div', { className: 'muted' }, 'No labels found (Business accounts only).')); return toast('No labels', 'err'); }
+    ls.forEach(l => listBox.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, l.name),
+      el('button', { className: 'btn small', onclick: () => chatFilter(l.name) }, 'Filter'))));
+    toast(`${ls.length} labels`);
   }
-  if (pendingChatFilter) { const p = pendingChatFilter; pendingChatFilter = null; sel.value = p; setTimeout(run, 40); }
+  load();
 };
 
 // ================= Blur Settings =================
