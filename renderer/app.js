@@ -96,10 +96,10 @@ async function enterApp() {
   try { ott.onUpdateReady(() => toast('Update downloaded — restart the app to apply', 'ok')); } catch (_) {}
 }
 
-function addAccount() {
-  const name = (prompt('Account label (e.g. your number or a name):', `Account ${accounts.length + 1}`) || '').trim();
+async function addAccount() {
+  const name = await promptModal('New WhatsApp account', 'Label this account', `Account ${accounts.length + 1}`);
   if (!name) return;
-  const id = 'a' + Math.abs(hash(name + accounts.length + engineSrc.length)).toString(36).slice(0, 8);
+  const id = 'a' + Math.abs(hash(name + accounts.length + Date.now())).toString(36).slice(0, 8);
   accounts.push({ id, name }); store.set('ott_accounts', accounts);
   createWebview({ id, name }); renderTabs(); switchAccount(id);
   toast('Account added — scan the QR to link');
@@ -603,6 +603,26 @@ function attachControl() {
   const node = el('div', { className: 'row', style: { alignItems: 'center' } },
     el('button', { className: 'btn ghost small', onclick: () => inp.click() }, 'Attach media'), label, clear, inp);
   return { node, get: () => file };
+}
+
+// In-app text prompt (Electron does not support window.prompt).
+function promptModal(title, sub, def = '') {
+  return new Promise((resolve) => {
+    const inp = el('input', { value: def, placeholder: sub || '' });
+    let settled = false;
+    const done = (v) => { if (settled) return; settled = true; scrim.remove(); resolve(v); };
+    const box = el('div', { className: 'modal-box' },
+      el('h3', {}, title),
+      sub ? el('div', { className: 'muted', style: { fontSize: '12.5px', marginTop: '-6px' } }, sub) : null,
+      inp,
+      el('div', { className: 'row' },
+        el('button', { className: 'btn ghost', onclick: () => done(null) }, 'Cancel'),
+        el('button', { className: 'btn primary', onclick: () => done(inp.value.trim() || null) }, 'Add')));
+    const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) done(null); } }, box);
+    document.body.append(scrim);
+    inp.focus(); inp.select();
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value.trim() || null); if (e.key === 'Escape') done(null); });
+  });
 }
 
 // ================= tiny utils =================
