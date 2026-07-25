@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const config = require('../config.js');
@@ -49,6 +49,10 @@ ipcMain.handle('license:save', (_e, key) => { license.saveKey(app, key); return 
 ipcMain.handle('license:clear', () => { license.clearKey(app); return true; });
 ipcMain.handle('license:activate', (_e, key) => license.activate(key));
 ipcMain.handle('license:validate', (_e, key) => license.validate(key));
+ipcMain.handle('license:trial', () => license.trial());
+ipcMain.handle('app:openExternal', (_e, url) => {
+  if (/^https?:\/\//i.test(String(url))) shell.openExternal(url);
+});
 
 // ---- IPC: hand the wa-js bundle source to the renderer for injection ----
 ipcMain.handle('wa:getEngine', () => {

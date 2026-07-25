@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('ott', {
   licenseClear: () => ipcRenderer.invoke('license:clear'),
   licenseActivate: (key) => ipcRenderer.invoke('license:activate', key),
   licenseValidate: (key) => ipcRenderer.invoke('license:validate', key),
+  licenseTrial: () => ipcRenderer.invoke('license:trial'),
+  openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
   // whatsapp engine
   getEngine: () => ipcRenderer.invoke('wa:getEngine'),
   // app

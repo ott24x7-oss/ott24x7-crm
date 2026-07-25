@@ -46,6 +46,12 @@ async function validate(key) {
   return { ...resp, trusted: verifySignature(resp) };
 }
 
+// Start (or resume) a device-bound 7-day free trial.
+async function trial(deviceName = os.hostname()) {
+  const resp = await call('trial', { deviceId: deviceId(), deviceName });
+  return { ...resp, trusted: verifySignature(resp) };
+}
+
 // Persist the key in userData so the user only enters it once.
 function keyFile(app) { return path.join(app.getPath('userData'), 'license.json'); }
 function loadKey(app) {
@@ -58,4 +64,4 @@ function clearKey(app) {
   try { fs.unlinkSync(keyFile(app)); } catch {}
 }
 
-module.exports = { deviceId, activate, validate, loadKey, saveKey, clearKey };
+module.exports = { deviceId, activate, validate, trial, loadKey, saveKey, clearKey };

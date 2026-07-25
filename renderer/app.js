@@ -82,13 +82,45 @@ const FEATURES = [
 
 // ================= boot / license =================
 let engineSrc = '';
+let trialInfo = { isTrial: false, expiresAt: null };
+const BUY_URL = 'https://ott24x7.com/plans/dev-crm-pro-whatsapp-software-license';
 window.addEventListener('DOMContentLoaded', async () => {
   $('#deviceId').textContent = (await ott.deviceId()).slice(0, 12) + '…';
   const saved = await ott.licenseLoad();
-  if (saved) { $('#licenseKey').value = saved; const r = await safe(() => ott.licenseValidate(saved)); if (r && r.valid && r.trusted) return enterApp(); }
+  if (saved) {
+    $('#licenseKey').value = saved;
+    const r = await safe(() => ott.licenseValidate(saved));
+    if (r && r.valid && r.trusted) { trialInfo = { isTrial: saved.startsWith('TRIAL-'), expiresAt: r.expiresAt || null }; return enterApp(); }
+  }
   showGate();
 });
 function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList.add('hidden'); }
+
+// Start (or resume) a device-bound 7-day free trial.
+async function startTrial() {
+  const m = $('#gateMsg'); m.className = 'msg'; m.textContent = 'Starting free trial…';
+  const r = await safe(() => ott.licenseTrial());
+  if (!r) { m.className = 'msg err'; m.textContent = 'Cannot reach license server.'; return; }
+  if (r.valid && r.trusted) {
+    await ott.licenseSave(r.key);
+    trialInfo = { isTrial: true, expiresAt: r.expiresAt || null };
+    m.className = 'msg ok'; m.textContent = 'Free trial started!';
+    setTimeout(enterApp, 350);
+  } else if (r.reason === 'trial_expired') {
+    m.className = 'msg err'; m.textContent = 'Your free trial has already been used on this device. Please buy a license.';
+  } else {
+    m.className = 'msg err'; m.textContent = 'Could not start trial: ' + String(r.reason || 'error').replace(/_/g, ' ');
+  }
+}
+
+// Trial banner (bottom pill) — shows remaining days while on trial.
+function updateTrialBanner() {
+  const bar = $('#trialBanner'); if (!bar) return;
+  if (!trialInfo.isTrial || !trialInfo.expiresAt) { bar.classList.add('hidden'); return; }
+  const days = Math.max(0, Math.ceil((new Date(trialInfo.expiresAt) - Date.now()) / 86400000));
+  $('#trialDays').textContent = days === 1 ? '1 day' : days + ' days';
+  bar.classList.remove('hidden');
+}
 
 // Re-validate the license periodically; lock the app if it was suspended/revoked.
 async function recheckLicense() {
@@ -98,7 +130,13 @@ async function recheckLicense() {
 }
 function lockApp(reason) {
   $('#app').classList.add('hidden'); $('#gate').classList.remove('hidden');
-  const m = $('#gateMsg'); m.className = 'msg err'; m.textContent = 'License ' + String(reason || 'invalid').replace(/_/g, ' ') + ' — contact your provider.';
+  $('#trialBanner')?.classList.add('hidden');
+  const m = $('#gateMsg'); m.className = 'msg err';
+  if (trialInfo.isTrial && (reason === 'expired' || reason === 'trial_expired')) {
+    m.textContent = 'Your 7-day free trial has ended — buy a license to keep using ott24x7 CRM.';
+  } else {
+    m.textContent = 'License ' + String(reason || 'invalid').replace(/_/g, ' ') + ' — contact your provider.';
+  }
 }
 
 // ---- Auto-update popup ----
@@ -126,6 +164,8 @@ function setUpdateDownloaded() {
 }
 function closeUpd() { if (_upd) { _upd.scrim.remove(); _upd = null; } }
 $('#activateBtn').addEventListener('click', activate);
+$('#trialBtn').addEventListener('click', startTrial);
+$('#trialBuyBtn').addEventListener('click', () => ott.openExternal(BUY_URL));
 $('#licenseKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') activate(); });
 async function activate() {
   const key = $('#licenseKey').value.trim(); const m = $('#gateMsg');
@@ -144,6 +184,7 @@ const partOf = (id) => `persist:wa-${id}`;
 
 async function enterApp() {
   $('#gate').classList.add('hidden'); $('#app').classList.remove('hidden');
+  updateTrialBanner();
   await restorePersisted();
   engineSrc = await ott.getEngine();
   renderRail();

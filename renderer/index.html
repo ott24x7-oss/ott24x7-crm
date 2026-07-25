@@ -13,10 +13,18 @@
       <p class="muted">Enter your license key to activate this device</p>
       <input id="licenseKey" placeholder="OTT-XXXX-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off" />
       <button id="activateBtn" class="btn primary block">Activate</button>
+      <div class="gate-or"><span>or</span></div>
+      <button id="trialBtn" class="btn ghost block">Start 7-day Free Trial</button>
       <div id="gateMsg" class="msg" role="status" aria-live="polite"></div>
       <div class="gate-foot muted">Device: <span id="deviceId">…</span></div>
     </div>
   </section>
+
+  <!-- FREE-TRIAL BANNER (shown inside the app while on trial) -->
+  <div id="trialBanner" class="trial-banner hidden">
+    <span>🎁 Free trial — <b id="trialDays">7 days</b> left</span>
+    <button id="trialBuyBtn" class="tb-buy">Buy license</button>
+  </div>
 
   <!-- APP -->
   <section id="app" class="app hidden">
@@ -27,7 +35,7 @@
       </div>
       <div class="top-right">
         <span class="lic-pill">Licensed</span>
-        <span class="ver">v0.18.0</span>
+        <span class="ver">v0.19.0</span>
         <button id="deactivateBtn" class="icon-btn" title="Deactivate this device">⏻</button>
       </div>
     </header>

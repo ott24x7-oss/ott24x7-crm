@@ -52,6 +52,17 @@ textarea { resize: vertical; min-height: 96px; }
 .gate-logo { width: 232px; max-width: 88%; align-self: center; }
 .gate-card input { text-align: center; letter-spacing: 1px; font-family: 'JetBrains Mono', monospace; }
 .gate-foot { font-size: 11px; color: var(--muted-2); }
+.gate-or { display: flex; align-items: center; gap: 10px; color: var(--muted-2); font-size: 12px; margin: 2px 0; }
+.gate-or::before, .gate-or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.trial-banner { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 9000;
+  display: flex; align-items: center; gap: 12px; padding: 9px 10px 9px 18px; border-radius: 100px;
+  background: linear-gradient(135deg, #16c47f, #0e9d5a); color: #04140b; font-size: 13px; font-weight: 600;
+  box-shadow: 0 12px 34px rgba(0,0,0,.45); }
+.trial-banner.hidden { display: none; }
+.trial-banner b { font-weight: 800; }
+.tb-buy { border: none; background: #04140b; color: #fff; font-weight: 700; padding: 7px 15px;
+  border-radius: 100px; cursor: pointer; font-size: 12.5px; }
+.tb-buy:hover { background: #0a2417; }
 .msg { min-height: 18px; font-size: 13px; }
 .msg.err { color: var(--danger); } .msg.ok { color: var(--green); }
 
