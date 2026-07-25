@@ -89,7 +89,7 @@ async function enterApp() {
   $('#addFirst').onclick = addAccount;
   $('#deactivateBtn').onclick = async () => { if (confirm('Deactivate this device? You will need the key again.')) { await ott.licenseClear(); location.reload(); } };
   $('#fpClose').onclick = closeFeature;
-  $('#panelScrim').onclick = closeFeature;
+  makeDraggable($('#featurePanel'), $('#featurePanel .fp-head'));
 
   accounts = store.get('ott_accounts', []);
   accounts.forEach(createWebview);
@@ -180,17 +180,43 @@ function renderRail() {
 let openFeatureId = null;
 function openFeature(f) {
   if (!activeWv()) return toast('Add a WhatsApp account first', 'err');
+  const panel = $('#featurePanel');
+  const wasHidden = panel.classList.contains('hidden');
   openFeatureId = f.id;
   document.querySelectorAll('.rail-item').forEach(x => x.classList.toggle('active', x.dataset.fid === f.id));
-  $('#fpTitle').textContent = f.name;
+  const acc = accounts.find(a => a.id === activeId);
+  $('#fpTitle').textContent = f.name + (acc ? ' · ' + acc.name : '');
   const body = $('#fpBody'); body.innerHTML = '';
   (RENDER[f.id] || renderSoon)(body, f);
-  $('#featurePanel').classList.remove('hidden'); $('#panelScrim').classList.remove('hidden');
+  panel.classList.remove('hidden');
+  if (wasHidden) positionWindow(panel);   // keep position when switching features
 }
 function closeFeature() {
   openFeatureId = null;
-  $('#featurePanel').classList.add('hidden'); $('#panelScrim').classList.add('hidden');
+  $('#featurePanel').classList.add('hidden');
   document.querySelectorAll('.rail-item').forEach(x => x.classList.remove('active'));
+}
+function positionWindow(panel) {
+  const stage = $('#waStage').getBoundingClientRect();
+  const w = Math.min(500, window.innerWidth - 260);
+  panel.style.width = w + 'px';
+  panel.style.left = Math.max(12, stage.left + (stage.width - w) / 2) + 'px';
+  panel.style.top = Math.max(60, stage.top + 22) + 'px';
+}
+function makeDraggable(win, handle) {
+  let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  handle.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.icon-btn')) return;
+    dragging = true; sx = e.clientX; sy = e.clientY;
+    const r = win.getBoundingClientRect(); ox = r.left; oy = r.top;
+    document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    win.style.left = Math.max(0, Math.min(window.innerWidth - 90, ox + e.clientX - sx)) + 'px';
+    win.style.top = Math.max(0, Math.min(window.innerHeight - 44, oy + e.clientY - sy)) + 'px';
+  });
+  window.addEventListener('mouseup', () => { dragging = false; document.body.style.userSelect = ''; });
 }
 
 // ================= messaging core =================
