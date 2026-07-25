@@ -451,47 +451,58 @@ RENDER.extractor = (b) => {
     lsel.innerHTML = ''; if (!ls.length) { lsel.append(el('option', {}, 'No labels (Business only)')); return toast('No labels found', 'err'); }
     ls.forEach(l => lsel.append(el('option', { value: l.id }, l.name))); toast(`${ls.length} labels`);
   }
+  // Resolver: turn a WhatsApp WID into a real phone number, skipping privacy LIDs.
+  const RES = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
   const applyFilter = (list, f) => f === 'saved' ? list.filter(x => x.saved) : f === 'unsaved' ? list.filter(x => !x.saved) : list;
+  let skippedLid = 0;
   function finish(msg) {
     out.innerHTML = '';
     if (msg) { line(out, msg, 'bad'); toast(msg, 'err'); return; }
-    if (!rows.length) { line(out, 'Nothing extracted.', 'bad'); toast('Nothing found', 'err'); return; }
+    if (!rows.length) { line(out, 'No usable numbers (WhatsApp is hiding them as privacy LIDs).', 'bad'); toast('No numbers found', 'err'); return; }
     rows.slice(0, 300).forEach(r => line(out, `${r.number}${r.name ? ' · ' + r.name : ''}${r.saved != null ? (r.saved ? '  (saved)' : '  (unsaved)') : ''}`, 'ok'));
-    toast(`Extracted ${rows.length}`);
+    if (skippedLid) line(out, `(${skippedLid} skipped — number hidden by WhatsApp privacy/LID)`, 'bad');
+    toast(`Extracted ${rows.length}${skippedLid ? ' · ' + skippedLid + ' hidden' : ''}`);
   }
   async function run() {
     if (!(await ensureConn())) return;
-    rows = []; out.innerHTML = ''; line(out, 'Extracting…');
-    const s = source.value, f = filter.value;
+    rows = []; skippedLid = 0; out.innerHTML = ''; line(out, 'Extracting…');
+    const s = source.value, f = filter.value; let raw = [];
     if (s === 'contacts') {
-      rows = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>({number:(x.id&&x.id.user)||'',name:x.name||x.pushname||'',saved:true})).filter(x=>x.number)}catch(e){return[]}})()").catch(() => []);
+      raw = await waExec(`(async()=>{try{${RES};const c=await WPP.contact.list();var o=[];for(var i=0;i<c.length;i++){var x=c[i];if(!x.isMyContact)continue;var ph=await _ph(x.id);o.push({number:ph,name:x.name||x.pushname||'',saved:true});}return o;}catch(e){return[]}})()`).catch(() => []);
     } else if (s === 'chatlist') {
-      const cs = await waExec("(async()=>{try{const l=await WPP.chat.list();return l.filter(c=>!(c.isGroup||(c.id&&c.id.server==='g.us'))).map(c=>({number:(c.id&&c.id.user)||'',name:(c.contact&&c.contact.name)||'',saved:!!(c.contact&&c.contact.isMyContact)})).filter(c=>c.number)}catch(e){return[]}})()").catch(() => []);
-      rows = applyFilter(cs, f);
+      raw = await waExec(`(async()=>{try{${RES};const l=await WPP.chat.list();var o=[];for(var i=0;i<l.length;i++){var c=l[i];if(c.isGroup||(c.id&&c.id.server==='g.us'))continue;var ph=await _ph(c.id);o.push({number:ph,name:(c.contact&&c.contact.name)||'',saved:!!(c.contact&&c.contact.isMyContact)});}return o;}catch(e){return[]}})()`).catch(() => []);
     } else if (s === 'groups') {
-      const saved = await savedSet();
-      let gids = [];
+      const saved = await savedSet(); let gids = [];
       if (scope.value === 'specific') { if (!gsel.value) return finish('Load & pick a group'); gids = [gsel.value]; }
       else gids = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>x.id&&x.id._serialized).filter(Boolean)}catch(e){return[]}})()").catch(() => []);
       const seen = new Set();
       for (const gid of gids) {
-        const ms = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>m.id.user)}catch(e){return[]}})()`).catch(() => []);
-        for (const u of ms) { if (!u || seen.has(u)) continue; seen.add(u); rows.push({ number: u, name: '', saved: saved.has(u) }); }
+        const ms = await waExec(`(async()=>{try{${RES};const p=await WPP.group.getParticipants(${JSON.stringify(gid)});var o=[];for(var i=0;i<p.length;i++){var ph=await _ph(p[i].id);o.push({number:ph});}return o;}catch(e){return[]}})()`).catch(() => []);
+        for (const m of ms) { if (!m.number) { skippedLid++; continue; } if (seen.has(m.number)) continue; seen.add(m.number); raw.push({ number: m.number, name: '', saved: saved.has(m.number) }); }
       }
-      rows = applyFilter(rows, f);
+      rows = applyFilter(raw, f); return finish();
     } else if (s === 'label') {
       if (!lsel.value) return finish('Load & pick a label');
-      const cs = await waExec(`(async()=>{try{const l=await WPP.chat.list({withLabels:[${JSON.stringify(lsel.value)}]});return l.map(c=>({number:(c.id&&c.id.user)||'',name:(c.contact&&c.contact.name)||'',saved:!!(c.contact&&c.contact.isMyContact)})).filter(c=>c.number)}catch(e){return[]}})()`).catch(() => []);
-      rows = applyFilter(cs, f);
+      raw = await waExec(`(async()=>{try{${RES};const l=await WPP.chat.list({withLabels:[${JSON.stringify(lsel.value)}]});var o=[];for(var i=0;i<l.length;i++){var c=l[i];var ph=await _ph(c.id);o.push({number:ph,name:(c.contact&&c.contact.name)||'',saved:!!(c.contact&&c.contact.isMyContact)});}return o;}catch(e){return[]}})()`).catch(() => []);
     }
+    skippedLid += raw.filter(r => !r.number).length;
+    rows = applyFilter(raw.filter(r => r.number), f);
     finish();
   }
+  function exportGoogle() {
+    const withNums = (rows || []).filter(r => r.number);
+    if (!withNums.length) return toast('Extract numbers first', 'err');
+    const g = withNums.map(r => ({ Name: r.name || ('WhatsApp ' + r.number), 'Given Name': r.name || r.number, 'Phone 1 - Type': 'Mobile', 'Phone 1 - Value': '+' + String(r.number).replace(/\D/g, '') }));
+    downloadCsv('google-contacts.csv', g, ['Name', 'Given Name', 'Phone 1 - Type', 'Phone 1 - Value']);
+    toast(`Exported ${g.length} for Google Contacts`);
+  }
   b.append(
-    el('div', { className: 'fp-note' }, 'Extract numbers/contacts from THIS account. “Saved” = in your phone contacts, “Unsaved” = not.'),
+    el('div', { className: 'fp-note' }, 'Extract real WhatsApp numbers from THIS account. “Saved” = in your phone contacts. Numbers WhatsApp hides as privacy LIDs are skipped. Use “Google Contacts” for a CSV you can import at contacts.google.com.'),
     lbl('Source', source), opts,
     el('div', { className: 'row' },
       el('button', { className: 'btn primary', onclick: run }, 'Extract'),
-      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv('ott24x7-extract.csv', rows, ['number', 'name', 'saved']); else toast('Extract first', 'err'); } }, 'Export CSV')),
+      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv('ott24x7-numbers.csv', rows, ['number', 'name', 'saved']); else toast('Extract first', 'err'); } }, 'Export CSV'),
+      el('button', { className: 'btn ghost', onclick: exportGoogle }, 'Google Contacts')),
     out);
   renderOpts();
 };
