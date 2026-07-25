@@ -129,7 +129,7 @@ function createWebview(acc) {
   wv.style.display = 'none';
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
@@ -370,18 +370,19 @@ RENDER.signature = (b) => {
 };
 
 RENDER.quick = (b) => {
+  const refreshChips = () => { accounts.forEach(a => applyQuickReplies(a.id)); };
   const list = el('div', { className: 'rules' });
   const draw = () => {
     list.innerHTML = ''; const qs = store.get('ott_quick', []);
     if (!qs.length) list.append(el('div', { className: 'muted' }, 'No quick replies yet.'));
     qs.forEach((q, i) => list.append(el('div', { className: 'qr-item' },
       el('div', { className: 'txt' }, el('b', {}, q.title || '(untitled)'), el('div', { className: 'muted', style: { fontSize: '12px' } }, q.text.slice(0, 60))),
-      el('button', { className: 'btn small ghost', onclick: () => { const qs2 = store.get('ott_quick', []); qs2.splice(i, 1); store.set('ott_quick', qs2); draw(); } }, 'Delete'))));
+      el('button', { className: 'btn small ghost', onclick: () => { const qs2 = store.get('ott_quick', []); qs2.splice(i, 1); store.set('ott_quick', qs2); draw(); refreshChips(); } }, 'Delete'))));
   };
-  const title = el('input', { placeholder: 'Title' }); const text = el('textarea', { placeholder: 'Reply text (supports {a|b} spin)' });
-  b.append(el('div', { className: 'fp-note' }, 'Saved replies show an “Insert” menu inside Broadcast and Direct Message.'),
-    lbl('Title', title), lbl('Text', text),
-    el('button', { className: 'btn primary', onclick: () => { if (!text.value.trim()) return toast('Add text', 'err'); const qs = store.get('ott_quick', []); qs.push({ title: title.value.trim(), text: text.value.trim() }); store.set('ott_quick', qs); title.value = text.value = ''; draw(); toast('Saved'); } }, 'Add quick reply'),
+  const title = el('input', { placeholder: 'Title (max 15 chars)', maxLength: 15 }); const text = el('textarea', { placeholder: 'Reply text (supports {a|b} spin)' });
+  b.append(el('div', { className: 'fp-note' }, 'Saved replies appear as clickable chips on the WhatsApp compose bar — click one while in any chat to drop it into the message box. They also show an “Insert” menu in Broadcast & Direct Message.'),
+    lbl('Title', title), lbl('Reply', text),
+    el('button', { className: 'btn primary', onclick: () => { if (!text.value.trim()) return toast('Add reply text', 'err'); const qs = store.get('ott_quick', []); qs.push({ title: title.value.trim(), text: text.value.trim() }); store.set('ott_quick', qs); title.value = text.value = ''; draw(); refreshChips(); toast('Saved — chip added to WhatsApp'); } }, 'Add quick reply'),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }), list);
   draw();
 };
@@ -546,6 +547,18 @@ RENDER.autoreply = (b) => {
     el('button', { className: 'btn primary', onclick: () => { persist(); toast('Autoreply saved & applied'); } }, 'Save & apply'));
   drawRules();
 };
+
+// Inject clickable quick-reply chips onto the WhatsApp compose bar (like WA CRM).
+function applyQuickReplies(accId) {
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const replies = store.get('ott_quick', []);
+  const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
+    function insert(text){try{var box=document.querySelector('#main footer div[contenteditable="true"]')||document.querySelector('footer div[contenteditable="true"]');if(box){box.focus();document.execCommand('insertText',false,text);}else if(window.WPP){var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c)WPP.chat.sendTextMessage(c.id,text,{});}}catch(e){}}
+    function render(){var bar=document.getElementById('ott-qr-bar');if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';bar.style.cssText='position:fixed;left:10px;bottom:10px;z-index:99999;display:flex;flex-wrap:wrap;gap:6px;max-width:38%;';document.body.appendChild(bar);}bar.innerHTML='';(window.__ott_quick||[]).forEach(function(q){var b=document.createElement('button');b.textContent=q.title||q.text.slice(0,15);b.title=q.text;b.style.cssText='background:#e7f7ee;border:1px solid #12b866;color:#0b7a3e;border-radius:16px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;';b.onclick=function(e){e.preventDefault();e.stopPropagation();insert(q.text);};bar.appendChild(b);});bar.style.display=(window.__ott_quick&&window.__ott_quick.length)?'flex':'none';}
+    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,4000);}
+  })();`;
+  wv.executeJavaScript(js).catch(() => {});
+}
 
 // ================= Chat Filters =================
 RENDER.chatfilters = (b) => {
