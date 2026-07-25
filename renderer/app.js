@@ -953,7 +953,7 @@ function invoiceCompute(items, discount, cfg, customer) {
 }
 function invoiceHtml(v) {
   const c = v.cfg, cust = v.customer, gst = v.gstOn;
-  const accent = v.template === 'taxpro' ? '#059669' : v.template === 'minimal' ? '#334155' : '#2563eb';
+  const accent = { classic: '#2563eb', minimal: '#334155', taxpro: '#059669', corporate: '#475569', luxury: '#b45309', teal: '#0d9488', royal: '#7c3aed', crimson: '#be123c' }[v.template] || '#2563eb';
   const money = n => '₹' + (Math.round(n * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const br = s => escHtml(s).replace(/\n/g, '<br>');
   const head = `<tr><th>#</th><th>Item</th>${gst ? '<th>HSN</th>' : ''}<th class=r>Qty</th><th class=r>Rate</th>${gst ? '<th class=r>GST</th>' : ''}<th class=r>Amount</th></tr>`;
@@ -969,6 +969,27 @@ function invoiceHtml(v) {
   <div class="foot"><span>Thank you for your business.</span><span>${escHtml(c.name || '')}</span></div></body></html>`;
 }
 function logInvoice(r) { const inv = store.get('ott_invoices', []); inv.unshift({ number: r.number, name: r.customer.name, phone: r.customer.phone, total: r.inv.grandTotal, ts: Date.now() }); store.set('ott_invoices', inv.slice(0, 200)); }
+// Pick a customer from the WhatsApp chat list (single-select modal).
+async function pickCustomer(onPick) {
+  if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+  const chats = await waExec("(async()=>{try{const l=await WPP.chat.list();return l.filter(c=>!(c.isGroup||(c.id&&c.id.server==='g.us'))).map(c=>({number:(c.id&&c.id.user)||'',name:(c.contact&&c.contact.name)||c.name||''})).filter(c=>c.number)}catch(e){return[]}})()").catch(() => []);
+  if (!chats.length) return toast('No chats found', 'err');
+  const search = el('input', { placeholder: 'Search name / number' });
+  const list = el('div', { className: 'checklist-body', style: { maxHeight: '320px' } });
+  const close = () => scrim.remove();
+  const draw = () => { list.innerHTML = ''; const q = (search.value || '').toLowerCase(); chats.filter(c => !q || (c.name || '').toLowerCase().includes(q) || c.number.includes(q)).slice(0, 250).forEach(c => list.append(el('div', { className: 'checkrow', style: { cursor: 'pointer' }, onclick: () => { onPick(c); close(); } }, (c.name || c.number) + '  ', el('span', { className: 'muted', style: { fontSize: '11px' } }, c.number)))); };
+  search.oninput = draw; draw();
+  const box = el('div', { className: 'modal-box', style: { width: '420px' } }, el('h3', {}, 'Choose customer'), search, list, el('div', { className: 'row', style: { justifyContent: 'flex-end' } }, el('button', { className: 'btn ghost', onclick: close }, 'Cancel')));
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) close(); } }, box);
+  document.body.append(scrim);
+}
+// Live HTML preview of an invoice in a modal iframe.
+function previewInvoice(html) {
+  const iframe = el('iframe', { style: { width: '100%', height: '70vh', border: 'none', background: '#fff', borderRadius: '8px' } });
+  const box = el('div', { className: 'modal-box', style: { width: '720px', maxWidth: '94vw' } }, el('h3', {}, 'Invoice preview'), iframe, el('div', { className: 'row', style: { justifyContent: 'flex-end' } }, el('button', { className: 'btn ghost', onclick: () => scrim.remove() }, 'Close')));
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) scrim.remove(); } }, box);
+  document.body.append(scrim); iframe.srcdoc = html;
+}
 
 RENDER.invoice = (b) => {
   const cfg = store.get('ott_invoice_cfg', { name: '', address: '', gstin: '', state: '', gstEnabled: true, logo: '', phone: '', email: '', bank: '', prefix: 'INV-', counter: 1, template: 'classic' });
@@ -1006,8 +1027,8 @@ RENDER.invoice = (b) => {
       });
     };
     const discount = el('input', { type: 'number', value: '0' }); const notes = ta('', 'Notes (optional)');
-    const tmpl = el('select'); [['classic', 'Classic Blue'], ['minimal', 'Minimal'], ['taxpro', 'GST Tax Pro']].forEach(([v, n]) => tmpl.append(el('option', { value: v }, n))); tmpl.value = cfg.template || 'classic';
-    async function build() {
+    const tmpl = el('select'); [['classic', 'Classic Blue'], ['minimal', 'Minimal'], ['taxpro', 'GST Tax Pro'], ['corporate', 'Corporate Grey'], ['luxury', 'Luxury Gold'], ['teal', 'Teal Stripe'], ['royal', 'Royal Purple'], ['crimson', 'Crimson']].forEach(([v, n]) => tmpl.append(el('option', { value: v }, n))); tmpl.value = cfg.template || 'classic';
+    function computeInvoice() {
       if (!cfg.name) { toast('Set up Business first', 'err'); return null; }
       if (!cn.value.trim()) { toast('Customer name required', 'err'); return null; }
       const customer = { name: cn.value.trim(), phone: cp.value.trim(), email: ce.value.trim(), address: ca.value.trim(), gstin: cg.value.trim(), state: cs.value.trim() };
@@ -1015,20 +1036,23 @@ RENDER.invoice = (b) => {
       if (!v.rows.length) { toast('Add at least one item', 'err'); return null; }
       const number = (cfg.prefix || 'INV-') + String(cfg.counter || 1).padStart(4, '0');
       const inv = { ...v, number, date: new Date().toLocaleDateString('en-IN'), cfg, customer, template: tmpl.value, notes: notes.value.trim() };
-      const res = await ott.renderInvoicePdf(invoiceHtml(inv));
-      if (!res.ok) { toast('PDF failed: ' + (res.err || ''), 'err'); return null; }
       cfg.template = tmpl.value;
-      return { inv, pdf: res.data, number, customer };
+      return { inv, html: invoiceHtml(inv), number, customer };
     }
-    boxc.append(el('div', { className: 'fp-note' }, 'Customer'),
+    const afterIssue = (r) => { cfg.counter = (cfg.counter || 1) + 1; saveCfg(); logInvoice({ inv: r.inv, number: r.number, customer: r.customer }); };
+    boxc.append(el('div', {},
+      el('div', { className: 'fp-note' }, 'Customer'),
+      el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: () => pickCustomer(c => { cn.value = c.name || c.number; cp.value = c.number; }) }, 'Choose from chat list')),
       el('div', { className: 'row' }, lbl('Name', cn), lbl('Phone', cp)),
-      el('div', { className: 'row' }, lbl('Email', ce), lbl('State code', cs)), lbl('Address', ca), cfg.gstEnabled ? lbl('Customer GSTIN', cg) : null,
-      el('div', { className: 'fp-note' }, 'Items  ·  desc / qty / rate' + (cfg.gstEnabled ? ' / HSN / GST%' : '')), itemsBox,
+      el('div', { className: 'row' }, lbl('Email', ce), lbl('State code', cs)), lbl('Address', ca),
+      cfg.gstEnabled ? lbl('Customer GSTIN', cg) : null,
+      el('div', { className: 'fp-note' }, 'Items · desc / qty / rate' + (cfg.gstEnabled ? ' / HSN / GST%' : '')), itemsBox,
       el('button', { className: 'btn small', onclick: () => { items.push({ desc: '', qty: 1, price: 0, hsn: '', gst: 18 }); drawItems(); } }, '＋ Add item'),
       el('div', { className: 'row' }, lbl('Discount ₹', discount), lbl('Template', tmpl)), lbl('Notes', notes),
       el('div', { className: 'row' },
-        el('button', { className: 'btn', onclick: async () => { const r = await build(); if (r) { el('a', { href: r.pdf, download: r.number + '.pdf' }).click(); toast('PDF downloaded'); cfg.counter = (cfg.counter || 1) + 1; saveCfg(); logInvoice(r); } } }, 'Download PDF'),
-        el('button', { className: 'btn primary', onclick: async () => { const r = await build(); if (r) { if (!digits(r.customer.phone)) return toast('Customer phone needed to send', 'err'); const sr = await sendMediaToJidOn(activeId, digits(r.customer.phone) + '@c.us', r.pdf, 'Invoice ' + r.number, r.number + '.pdf'); toast(sr.ok ? 'Invoice sent to ' + r.customer.name : 'Send failed', sr.ok ? 'ok' : 'err'); cfg.counter = (cfg.counter || 1) + 1; saveCfg(); logInvoice(r); } } }, 'Generate & Send')));
+        el('button', { className: 'btn ghost', onclick: () => { const r = computeInvoice(); if (r) previewInvoice(r.html); } }, 'Preview'),
+        el('button', { className: 'btn', onclick: async () => { const r = computeInvoice(); if (!r) return; const pdf = await ott.renderInvoicePdf(r.html); if (!pdf.ok) return toast('PDF failed', 'err'); el('a', { href: pdf.data, download: r.number + '.pdf' }).click(); toast('PDF downloaded'); afterIssue(r); } }, 'Download PDF'),
+        el('button', { className: 'btn primary', onclick: async () => { const r = computeInvoice(); if (!r) return; if (!digits(r.customer.phone)) return toast('Customer phone needed to send', 'err'); const pdf = await ott.renderInvoicePdf(r.html); if (!pdf.ok) return toast('PDF failed', 'err'); const sr = await sendMediaToJidOn(activeId, digits(r.customer.phone) + '@c.us', pdf.data, 'Invoice ' + r.number, r.number + '.pdf'); toast(sr.ok ? 'Invoice sent to ' + r.customer.name : 'Send failed', sr.ok ? 'ok' : 'err'); afterIssue(r); } }, 'Generate & Send'))));
     drawItems();
   }
 };
@@ -1428,6 +1452,11 @@ async function savedSet() {
 
 // ================= tiny utils =================
 function chk(checked) { return el('input', { type: 'checkbox', checked, style: { width: 'auto' } }); }
+function statusTag(s) {
+  const colors = { new: '#3b82f6', contacted: '#f59e0b', followup: '#8b5cf6', won: '#12b866', lost: '#e5484d' };
+  const c = colors[s] || '#64727b';
+  return el('span', { style: { background: c + '22', color: c, padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' } }, s || '');
+}
 function chkRow(input, label) { return el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, input, label); }
 function lbl(t, c) { return el('label', {}, t, c); }
 function line(box, text, cls) { const s = el('span', cls ? { className: cls } : {}); s.textContent = text + '\n'; box.append(s); box.scrollTop = box.scrollHeight; }
