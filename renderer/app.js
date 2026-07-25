@@ -156,7 +156,7 @@ function createWebview(acc) {
   wv.style.display = 'none';
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc, true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);

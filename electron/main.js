@@ -134,6 +134,7 @@ function initAutoUpdate() {
 }
 
 app.whenReady().then(() => {
+  try { app.setAppUserModelId('com.ott24x7.crm'); } catch (_) {}
   // Smoke mode: boot the main process and quit (CI/verification, no GUI needed).
   if (process.env.OTT_SMOKE) {
     console.log('OTT_SMOKE ok: main process booted, IPC handlers registered');
