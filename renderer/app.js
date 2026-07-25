@@ -403,32 +403,77 @@ RENDER.filter = (b) => {
 };
 
 RENDER.extractor = (b) => {
-  const groupSel = el('select'); const out = el('div', { className: 'log' }); let rows = [];
-  b.append(el('div', { className: 'fp-note' }, 'Export your contacts, or the members of any group you are in.'),
-    el('button', { className: 'btn', onclick: async () => {
-      if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
-      const cs = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.map(x=>({number:(x.id&&x.id.user)||'',name:x.name||x.pushname||x.formattedName||''})).filter(x=>x.number)}catch(e){return[]}})()").catch(() => []);
-      if (!cs.length) return toast('No contacts found', 'err');
-      downloadCsv('ott24x7-contacts.csv', cs, ['number', 'name']); toast(`Exported ${cs.length} contacts`);
-    } }, 'Export all contacts'),
-    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }),
-    lbl('Group', groupSel),
+  const source = el('select');
+  [['contacts', 'From Contacts'], ['chatlist', 'From Chat List'], ['groups', 'From Groups'], ['label', 'From Label (Business)']].forEach(([v, n]) => source.append(el('option', { value: v }, n)));
+  const filter = el('select'); [['all', 'All numbers'], ['saved', 'Saved only'], ['unsaved', 'Unsaved only']].forEach(([v, n]) => filter.append(el('option', { value: v }, n)));
+  const scope = el('select'); [['all', 'All groups'], ['specific', 'Specific group']].forEach(([v, n]) => scope.append(el('option', { value: v }, n)));
+  const gsel = el('select'), lsel = el('select');
+  const opts = el('div', {}), out = el('div', { className: 'log' }); let rows = [];
+  const ensureConn = async () => { if (!(await isConnected())) { toast('WhatsApp not linked', 'err'); return false; } return true; };
+
+  function renderOpts() {
+    opts.innerHTML = '';
+    const s = source.value;
+    if (s === 'chatlist') opts.append(lbl('Filter', filter));
+    else if (s === 'groups') {
+      opts.append(lbl('Scope', scope));
+      if (scope.value === 'specific') opts.append(el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel);
+      opts.append(lbl('Filter', filter));
+    } else if (s === 'label') {
+      opts.append(el('div', { className: 'fp-note' }, 'Labels require a WhatsApp Business account.'),
+        el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: loadLabels }, 'Load labels')), lsel, lbl('Filter', filter));
+    }
+  }
+  source.onchange = renderOpts; scope.onchange = renderOpts;
+  async function loadLabels() {
+    if (!(await ensureConn())) return;
+    const ls = await waExec("(async()=>{try{return (await WPP.labels.getAllLabels()).map(l=>({id:(l.id||'')+'',name:l.name||''}))}catch(e){return[]}})()").catch(() => []);
+    lsel.innerHTML = ''; if (!ls.length) { lsel.append(el('option', {}, 'No labels (Business only)')); return toast('No labels found', 'err'); }
+    ls.forEach(l => lsel.append(el('option', { value: l.id }, l.name))); toast(`${ls.length} labels`);
+  }
+  const applyFilter = (list, f) => f === 'saved' ? list.filter(x => x.saved) : f === 'unsaved' ? list.filter(x => !x.saved) : list;
+  function finish(msg) {
+    out.innerHTML = '';
+    if (msg) { line(out, msg, 'bad'); toast(msg, 'err'); return; }
+    if (!rows.length) { line(out, 'Nothing extracted.', 'bad'); toast('Nothing found', 'err'); return; }
+    rows.slice(0, 300).forEach(r => line(out, `${r.number}${r.name ? ' · ' + r.name : ''}${r.saved != null ? (r.saved ? '  (saved)' : '  (unsaved)') : ''}`, 'ok'));
+    toast(`Extracted ${rows.length}`);
+  }
+  async function run() {
+    if (!(await ensureConn())) return;
+    rows = []; out.innerHTML = ''; line(out, 'Extracting…');
+    const s = source.value, f = filter.value;
+    if (s === 'contacts') {
+      rows = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>({number:(x.id&&x.id.user)||'',name:x.name||x.pushname||'',saved:true})).filter(x=>x.number)}catch(e){return[]}})()").catch(() => []);
+    } else if (s === 'chatlist') {
+      const cs = await waExec("(async()=>{try{const l=await WPP.chat.list();return l.filter(c=>!(c.isGroup||(c.id&&c.id.server==='g.us'))).map(c=>({number:(c.id&&c.id.user)||'',name:(c.contact&&c.contact.name)||'',saved:!!(c.contact&&c.contact.isMyContact)})).filter(c=>c.number)}catch(e){return[]}})()").catch(() => []);
+      rows = applyFilter(cs, f);
+    } else if (s === 'groups') {
+      const saved = await savedSet();
+      let gids = [];
+      if (scope.value === 'specific') { if (!gsel.value) return finish('Load & pick a group'); gids = [gsel.value]; }
+      else gids = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>x.id&&x.id._serialized).filter(Boolean)}catch(e){return[]}})()").catch(() => []);
+      const seen = new Set();
+      for (const gid of gids) {
+        const ms = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>m.id.user)}catch(e){return[]}})()`).catch(() => []);
+        for (const u of ms) { if (!u || seen.has(u)) continue; seen.add(u); rows.push({ number: u, name: '', saved: saved.has(u) }); }
+      }
+      rows = applyFilter(rows, f);
+    } else if (s === 'label') {
+      if (!lsel.value) return finish('Load & pick a label');
+      const cs = await waExec(`(async()=>{try{const l=await WPP.chat.list({withLabels:[${JSON.stringify(lsel.value)}]});return l.map(c=>({number:(c.id&&c.id.user)||'',name:(c.contact&&c.contact.name)||'',saved:!!(c.contact&&c.contact.isMyContact)})).filter(c=>c.number)}catch(e){return[]}})()`).catch(() => []);
+      rows = applyFilter(cs, f);
+    }
+    finish();
+  }
+  b.append(
+    el('div', { className: 'fp-note' }, 'Extract numbers/contacts from THIS account. “Saved” = in your phone contacts, “Unsaved” = not.'),
+    lbl('Source', source), opts,
     el('div', { className: 'row' },
-      el('button', { className: 'btn', onclick: loadGroups }, 'Load groups'),
-      el('button', { className: 'btn primary', onclick: exportMembers }, 'Export members')),
+      el('button', { className: 'btn primary', onclick: run }, 'Extract'),
+      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv('ott24x7-extract.csv', rows, ['number', 'name', 'saved']); else toast('Extract first', 'err'); } }, 'Export CSV')),
     out);
-  async function loadGroups() {
-    if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
-    const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({id:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||x.id._serialized}))}catch(e){return[]}})()").catch(() => []);
-    groupSel.innerHTML = ''; if (!gs.length) { groupSel.append(el('option', {}, 'No groups')); return toast('No groups found', 'err'); }
-    gs.forEach(g => groupSel.append(el('option', { value: g.id }, g.name))); toast(`${gs.length} groups loaded`);
-  }
-  async function exportMembers() {
-    const gid = groupSel.value; if (!gid) return toast('Load & pick a group', 'err');
-    const ps = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>({number:m.id.user}))}catch(e){return[]}})()`).catch(() => []);
-    if (!ps.length) return toast('No members / not allowed', 'err');
-    downloadCsv('ott24x7-group-members.csv', ps, ['number']); toast(`Exported ${ps.length} members`);
-  }
+  renderOpts();
 };
 
 RENDER.translate = (b) => {
@@ -797,6 +842,11 @@ function checkList(items) {
   const rows = items.map(it => { const c = chk(false); list.append(el('label', { className: 'checkrow' }, c, `${it.name || jidNumber(it.jid)} `, el('span', { className: 'muted', style: { fontSize: '11px' } }, jidNumber(it.jid)))); return { c, it }; });
   all.onchange = () => rows.forEach(x => x.c.checked = all.checked);
   return { node: el('div', {}, head, list), selected: () => rows.filter(x => x.c.checked).map(x => x.it) };
+}
+// Set of user-ids that are in the phone's contacts ("saved").
+async function savedSet() {
+  const arr = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>(x.id&&x.id.user)||'').filter(Boolean)}catch(e){return[]}})()").catch(() => []);
+  return new Set(arr);
 }
 
 // ================= tiny utils =================
