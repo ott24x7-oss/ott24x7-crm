@@ -47,8 +47,19 @@ ipcMain.handle('wa:getEngine', () => {
 ipcMain.handle('app:config', () => ({
   server: config.LICENSE_SERVER,
   product: config.PRODUCT_SLUG,
-  waPartition: config.WA_PARTITION,
 }));
+
+// Translate via Google's public endpoint from the main process (no CORS).
+ipcMain.handle('app:translate', async (_e, { text, tl }) => {
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(text)}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    return { ok: true, text: (j[0] || []).map((x) => x[0]).join('') };
+  } catch (e) {
+    return { ok: false, err: String(e) };
+  }
+});
 
 app.whenReady().then(() => {
   // Smoke mode: boot the main process and quit (CI/verification, no GUI needed).

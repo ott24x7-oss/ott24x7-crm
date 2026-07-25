@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('ott', {
   getEngine: () => ipcRenderer.invoke('wa:getEngine'),
   // app
   config: () => ipcRenderer.invoke('app:config'),
+  translate: (text, tl) => ipcRenderer.invoke('app:translate', { text, tl }),
 });
