@@ -242,44 +242,83 @@ async function sendMedia(number, dataUrl, caption, filename) {
 const RENDER = {};
 
 RENDER.broadcast = (b) => {
-  const numbers = el('textarea', { placeholder: '919876543210\n14155552671', style: { minHeight: '140px', fontFamily: 'JetBrains Mono, monospace' } });
-  const msg = el('textarea', { placeholder: 'Hi! {Hello|Hey} — from ott24x7 CRM' });
-  const dMin = el('input', { type: 'number', value: '4', min: '1' });
-  const dMax = el('input', { type: 'number', value: '9', min: '1' });
-  const bar = el('div', { className: 'bar' }); const log = el('div', { className: 'log' });
+  let curList = null; // checkList for contacts/groups/members
+  const mode = el('select');
+  [['numbers', 'Numbers (paste / import)'], ['contacts', 'My contacts'], ['groupmembers', 'Group members'], ['groups', 'Send to groups']]
+    .forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  const numbers = el('textarea', { placeholder: '919876543210\n14155552671', style: { minHeight: '120px', fontFamily: 'JetBrains Mono, monospace' } });
+  const gsel = el('select');
+  const targetBox = el('div', {});
+  const listHolder = () => targetBox.querySelector('#tgtlist');
+  const setList = (items, label) => { curList = checkList(items); const h = listHolder(); if (h) { h.innerHTML = ''; h.append(curList.node); } toast(label); };
+  async function ensureConn() { if (!(await isConnected())) { toast('WhatsApp not linked', 'err'); return false; } return true; }
+
+  function renderTarget() {
+    targetBox.innerHTML = ''; curList = null;
+    if (mode.value === 'numbers') { targetBox.append(numbers, el('div', { className: 'row' }, importBtn(numbers))); }
+    else if (mode.value === 'contacts') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const cs = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>({jid:((x.id&&x.id.user)||'')+'@c.us',name:x.name||x.pushname||x.formattedName||''})).filter(x=>x.jid!=='@c.us')}catch(e){return[]}})()").catch(() => []); setList(cs, `${cs.length} contacts loaded`); } }, 'Load my contacts'), el('div', { id: 'tgtlist' })); }
+    else if (mode.value === 'groups') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []); setList(gs, `${gs.length} groups loaded`); } }, 'Load groups'), el('div', { id: 'tgtlist' })); }
+    else if (mode.value === 'groupmembers') { targetBox.append(el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel, el('div', { className: 'row', style: { marginTop: '8px' } }, el('button', { className: 'btn small', onclick: async () => { const gid = gsel.value; if (!gid) return toast('Pick a group', 'err'); const ps = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>({jid:m.id.user+'@c.us',name:''}))}catch(e){return[]}})()`).catch(() => []); setList(ps, `${ps.length} members`); } }, 'Load members')), el('div', { id: 'tgtlist' })); }
+  }
+  mode.onchange = renderTarget;
+
+  // message + formatting toolbar
+  const msg = el('textarea', { placeholder: 'Type your message… [NAME] personalizes, {a|b} spins, signature auto-appends' });
+  const bar = el('div', { className: 'fmt-bar' });
+  [['B', '*', '*'], ['I', '_', '_'], ['S', '~', '~'], ['</>', '```', '```']].forEach(([t, bef, aft]) => bar.append(el('button', { className: 'btn small ghost', onclick: () => wrapSel(msg, bef, aft) }, t)));
+  bar.append(el('button', { className: 'btn small ghost', onclick: () => wrapSel(msg, '[NAME]', '') }, '[NAME]'));
+
   const att = attachControl();
+  const dMin = el('input', { type: 'number', value: '4', min: '1' }), dMax = el('input', { type: 'number', value: '9', min: '1' });
+  const when = el('input', { type: 'datetime-local' });
+  const barI = el('div', { className: 'bar' }); const log = el('div', { className: 'log' });
   let running = false;
-  const start = el('button', { className: 'btn primary', onclick: run }, 'Start sending');
-  const stop = el('button', { className: 'btn ghost', disabled: true, onclick: () => { running = false; } }, 'Stop');
+  const startBtn = el('button', { className: 'btn primary', onclick: () => run(false) }, 'Send now');
+  const schedBtn = el('button', { className: 'btn', onclick: () => run(true) }, 'Schedule');
+  const stopBtn = el('button', { className: 'btn ghost', disabled: true, onclick: () => { running = false; } }, 'Stop');
+
   b.append(
-    lbl('Numbers (one per line, with country code)', numbers),
-    el('div', { className: 'row' }, importBtn(numbers)),
-    lbl('Message / caption  ·  {a|b} = spin, signature auto-appended', msg),
-    att.node,
+    lbl('Target', mode), targetBox,
+    lbl('Message', el('div', {}, bar, msg)), quickInsert(msg), att.node,
     el('div', { className: 'row' }, lbl('Delay min (s)', dMin), lbl('Delay max (s)', dMax)),
-    quickInsert(msg),
-    el('div', { className: 'row' }, start, stop),
-    el('div', { className: 'progress' }, bar), log,
+    lbl('Schedule for (optional)', when),
+    el('div', { className: 'row' }, startBtn, schedBtn, stopBtn),
+    el('div', { className: 'progress' }, barI), log,
   );
-  async function run() {
+  renderTarget();
+
+  function recipients() {
+    if (mode.value === 'numbers') return numbers.value.split(/\r?\n/).map(s => digits(s)).filter(Boolean).map(n => ({ jid: n + '@c.us', name: '' }));
+    return curList ? curList.selected() : [];
+  }
+  async function run(schedule) {
     if (running) return;
-    const nums = numbers.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (!nums.length) return toast('Add numbers', 'err');
+    const recips = recipients();
+    if (!recips.length) return toast('Add or select recipients', 'err');
     if (!msg.value.trim() && !att.get()) return toast('Write a message or attach a file', 'err');
-    if (!(await isConnected())) return toast('WhatsApp not linked on this account', 'err');
-    running = true; start.disabled = true; stop.disabled = false; log.innerHTML = ''; bar.style.width = '0%';
-    const dmin = Math.max(1, +dMin.value || 4), dmax = Math.max(dmin, +dMax.value || 9);
-    const file = att.get(); let ok = 0, fail = 0, done = 0;
-    for (const n of nums) {
-      if (!running) { line(log, 'Stopped.', 'bad'); break; }
-      const r = file ? await sendMedia(n, file.data, msg.value.trim(), file.name) : await sendText(n, msg.value.trim());
-      done++;
-      if (r.ok) { ok++; line(log, `✓ ${n}`, 'ok'); } else { fail++; line(log, `✗ ${n} — ${r.err || 'failed'}`, 'bad'); }
-      bar.style.width = Math.round(done / nums.length * 100) + '%';
-      if (running && done < nums.length) await sleep((dmin + Math.random() * (dmax - dmin)) * 1000);
+    if (schedule || when.value) {
+      if (mode.value === 'groups' || mode.value === 'groupmembers') return toast('Scheduling supports Numbers/Contacts only', 'err');
+      if (!when.value) return toast('Pick a schedule time', 'err');
+      const t = new Date(when.value).getTime(); if (isNaN(t) || t <= Date.now()) return toast('Pick a future time', 'err');
+      const jobs = store.get('ott_schedule', []); const acc = accounts.find(a => a.id === activeId);
+      jobs.push({ id: 's' + Date.now(), accId: activeId, accName: acc ? acc.name : '', numbers: recips.map(r => jidNumber(r.jid)), message: msg.value.trim(), when: new Date(t).toISOString(), delayMin: +dMin.value || 4, delayMax: +dMax.value || 9, status: 'pending', ok: null });
+      store.set('ott_schedule', jobs); return toast('Broadcast scheduled');
     }
-    running = false; start.disabled = false; stop.disabled = true;
-    line(log, `Done — ${ok} sent, ${fail} failed of ${nums.length}.`, ok ? 'ok' : 'bad'); toast(`Sent ${ok}/${nums.length}`);
+    if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+    running = true; startBtn.disabled = true; stopBtn.disabled = false; log.innerHTML = ''; barI.style.width = '0%';
+    const dmin = Math.max(1, +dMin.value || 4), dmax = Math.max(dmin, +dMax.value || 9); const file = att.get();
+    let ok = 0, fail = 0, done = 0;
+    for (const r of recips) {
+      if (!running) { line(log, 'Stopped.', 'bad'); break; }
+      const text = personalize(msg.value.trim(), r);
+      const res = file ? await sendMediaToJid(r.jid, file.data, text, file.name) : await sendToJid(r.jid, text);
+      done++; res.ok ? ok++ : fail++;
+      line(log, `${res.ok ? '✓' : '✗'} ${r.name || jidNumber(r.jid)}${res.ok ? '' : ' — ' + (res.err || '')}`, res.ok ? 'ok' : 'bad');
+      barI.style.width = Math.round(done / recips.length * 100) + '%';
+      if (running && done < recips.length) await sleep((dmin + Math.random() * (dmax - dmin)) * 1000);
+    }
+    running = false; startBtn.disabled = false; stopBtn.disabled = true;
+    line(log, `Done — ${ok} sent, ${fail} failed of ${recips.length}.`, ok ? 'ok' : 'bad'); toast(`Sent ${ok}/${recips.length}`);
   }
 };
 
@@ -709,6 +748,31 @@ function promptModal(title, sub, def = '') {
     inp.focus(); inp.select();
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value.trim() || null); if (e.key === 'Escape') done(null); });
   });
+}
+
+// ================= broadcast helpers =================
+const jidNumber = (jid) => String(jid || '').split('@')[0];
+function personalize(text, rec) { return text.replace(/\[NAME\]/gi, (rec && rec.name) ? rec.name : jidNumber(rec && rec.jid || '')); }
+function wrapSel(ta, before, after) {
+  const s = ta.selectionStart, e = ta.selectionEnd, v = ta.value; const sel = v.slice(s, e) || 'text';
+  ta.value = v.slice(0, s) + before + sel + after + v.slice(e);
+  ta.focus(); ta.selectionStart = s + before.length; ta.selectionEnd = s + before.length + sel.length;
+}
+async function sendToJid(jid, text) {
+  const body = JSON.stringify(spin(withSignature(text)));
+  return waExec(`(async()=>{try{await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+}
+async function sendMediaToJid(jid, dataUrl, caption, filename) {
+  const c = JSON.stringify(dataUrl), cap = JSON.stringify(spin(withSignature(caption || ''))), fn = JSON.stringify(filename || 'file');
+  return waExec(`(async()=>{try{await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+}
+function checkList(items) {
+  const all = el('input', { type: 'checkbox', style: { width: 'auto' } });
+  const head = el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '8px', fontWeight: '600' } }, all, `Select all (${items.length})`);
+  const list = el('div', { className: 'checklist-body' });
+  const rows = items.map(it => { const c = chk(false); list.append(el('label', { className: 'checkrow' }, c, `${it.name || jidNumber(it.jid)} `, el('span', { className: 'muted', style: { fontSize: '11px' } }, jidNumber(it.jid)))); return { c, it }; });
+  all.onchange = () => rows.forEach(x => x.c.checked = all.checked);
+  return { node: el('div', {}, head, list), selected: () => rows.filter(x => x.c.checked).map(x => x.it) };
 }
 
 // ================= tiny utils =================
