@@ -445,32 +445,52 @@ RENDER.translate = (b) => {
     el('button', { className: 'btn ghost', onclick: () => { if (out.value) { navigator.clipboard.writeText(out.value); toast('Copied'); } } }, 'Copy result'));
 };
 
-RENDER.autoreply = (b, f) => {
+const COND = { contains: 'Contains', exact: 'Exact', startsWith: 'Starts with', endsWith: 'Ends with' };
+RENDER.autoreply = (b) => {
   const key = `ott_ar_${activeId}`;
-  const cfg = store.get(key, { on: false, rules: [] });
-  const chip = el('span', { className: 'chip ' + (cfg.on ? 'on' : 'off') }, cfg.on ? 'Running' : 'Off');
-  const list = el('div', { className: 'rules' });
-  const draw = () => {
-    list.innerHTML = '';
-    cfg.rules.forEach((r, i) => {
-      const kw = el('input', { value: r.keyword, placeholder: 'keyword' });
-      const rp = el('input', { value: r.reply, placeholder: 'auto-reply' });
-      kw.oninput = () => { r.keyword = kw.value; }; rp.oninput = () => { r.reply = rp.value; };
-      list.append(el('div', { className: 'rule' }, kw, rp, el('button', { className: 'btn small ghost', onclick: () => { cfg.rules.splice(i, 1); persist(); draw(); } }, '✕')));
-    });
-    if (!cfg.rules.length) list.append(el('div', { className: 'muted' }, 'No rules yet.'));
-  };
+  const cfg = store.get(key, { on: false, rules: [], fallback: '' });
+  cfg.rules = (cfg.rules || []).map(r => ({ type: r.type || 'contains', keyword: r.keyword || '', reply: r.reply || '' }));
+  cfg.fallback = cfg.fallback || '';
   const persist = () => { store.set(key, cfg); applyAutoreply(activeId); };
+
+  const chip = el('span', { className: 'chip ' + (cfg.on ? 'on' : 'off') }, cfg.on ? 'Running' : 'Stopped');
+  const toggle = chk(cfg.on);
+  toggle.onchange = () => { cfg.on = toggle.checked; chip.className = 'chip ' + (cfg.on ? 'on' : 'off'); chip.textContent = cfg.on ? 'Running' : 'Stopped'; persist(); };
+
+  // Add-rule builder
+  const kw = el('input', { placeholder: 'User sends… (keyword / phrase)' });
+  const cond = el('select'); Object.entries(COND).forEach(([v, n]) => cond.append(el('option', { value: v }, n)));
+  const rep = el('textarea', { placeholder: 'Then reply with…' });
+  const addBtn = el('button', { className: 'btn', onclick: () => {
+    if (!kw.value.trim() || !rep.value.trim()) return toast('Fill keyword and reply', 'err');
+    cfg.rules.push({ type: cond.value, keyword: kw.value.trim(), reply: rep.value.trim() });
+    kw.value = rep.value = ''; drawRules(); persist(); toast('Rule added');
+  } }, '＋ Add rule');
+
+  const rulesBox = el('div', { className: 'rules' });
+  const drawRules = () => {
+    rulesBox.innerHTML = '';
+    if (!cfg.rules.length) { rulesBox.append(el('div', { className: 'muted' }, 'No rules yet.')); return; }
+    cfg.rules.forEach((r, i) => rulesBox.append(el('div', { className: 'qr-item' },
+      el('div', { className: 'txt' }, el('b', {}, `${COND[r.type] || r.type}: “${r.keyword}”`),
+        el('div', { className: 'muted', style: { fontSize: '12px' } }, '→ ' + r.reply.slice(0, 54))),
+      el('button', { className: 'btn small ghost', onclick: () => { cfg.rules.splice(i, 1); drawRules(); persist(); } }, '✕'))));
+  };
+
+  const fallback = el('textarea', { value: cfg.fallback, placeholder: 'Fallback reply when nothing matches (optional)' });
+  fallback.oninput = () => { cfg.fallback = fallback.value; };
+
   b.append(
-    el('div', { className: 'fp-note' }, 'Replies to incoming messages on THIS account when a keyword is found. Runs while the app is open and the account is linked.'),
-    el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } },
-      el('input', { type: 'checkbox', checked: cfg.on, style: { width: 'auto' }, onchange: (e) => { cfg.on = e.target.checked; chip.className = 'chip ' + (cfg.on ? 'on' : 'off'); chip.textContent = cfg.on ? 'Running' : 'Off'; persist(); } }),
-      'Enable autoreply', chip),
-    el('div', { style: { fontSize: '12px', color: 'var(--muted)' } }, 'Keyword contains → reply:'),
-    list,
-    el('button', { className: 'btn', onclick: () => { cfg.rules.push({ keyword: '', reply: '' }); persist(); draw(); } }, '＋ Add rule'),
-    el('button', { className: 'btn primary', onclick: () => { persist(); toast('Autoreply saved'); } }, 'Save & apply'));
-  draw();
+    el('div', { className: 'fp-note' }, 'Auto-replies to incoming messages on THIS account. Runs while the app is open and the account is linked.'),
+    el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, toggle, 'Enable / Start bot', chip),
+    el('div', { className: 'fp-note' }, 'Add a rule — if the incoming message matches, the bot replies:'),
+    el('div', { className: 'row' }, lbl('User sends', kw), lbl('Condition', cond)),
+    lbl('Reply with', rep), addBtn,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }),
+    lbl('Rules', rulesBox),
+    lbl('Fallback reply (optional)', fallback),
+    el('button', { className: 'btn primary', onclick: () => { persist(); toast('Autoreply saved & applied'); } }, 'Save & apply'));
+  drawRules();
 };
 
 // ================= Chat Filters =================
@@ -533,12 +553,16 @@ function renderSoon(b, f) {
 // autoreply injection into a webview
 function applyAutoreply(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
-  const cfg = store.get(`ott_ar_${accId}`, { on: false, rules: [] });
-  const rules = cfg.on ? cfg.rules.filter(r => r.keyword && r.reply) : [];
-  const js = `window.__ott_rules=${JSON.stringify(rules)};
+  const cfg = store.get(`ott_ar_${accId}`, { on: false, rules: [], fallback: '' });
+  const rules = cfg.on ? cfg.rules.filter(r => r.keyword && r.reply).map(r => ({ type: r.type || 'contains', keyword: r.keyword, reply: r.reply })) : [];
+  const fallback = cfg.on ? (cfg.fallback || '') : '';
+  const js = `window.__ott_rules=${JSON.stringify(rules)};window.__ott_fallback=${JSON.stringify(fallback)};
     if(!window.__ott_ar){window.__ott_ar=true;try{WPP.on('chat.new_message',async(m)=>{try{
-      if(!m||m.fromMe)return;const body=((m.body)||'').toLowerCase();
-      for(const r of (window.__ott_rules||[])){if(r.keyword&&body.includes(r.keyword.toLowerCase())){await WPP.chat.sendTextMessage(m.from,r.reply,{});break;}}
+      if(!m||m.fromMe)return;const body=((m.body)||'').toLowerCase().trim();let matched=false;
+      for(const r of (window.__ott_rules||[])){const k=(r.keyword||'').toLowerCase().trim();if(!k)continue;let hit=false;
+        if(r.type==='exact')hit=body===k;else if(r.type==='startsWith')hit=body.startsWith(k);else if(r.type==='endsWith')hit=body.endsWith(k);else hit=body.includes(k);
+        if(hit){await WPP.chat.sendTextMessage(m.from,r.reply,{});matched=true;break;}}
+      if(!matched&&window.__ott_fallback){await WPP.chat.sendTextMessage(m.from,window.__ott_fallback,{});}
     }catch(e){}});}catch(e){}}`;
   wv.executeJavaScript(js).catch(() => {});
 }
