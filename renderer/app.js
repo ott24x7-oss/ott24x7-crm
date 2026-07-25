@@ -37,7 +37,7 @@ const IC = {
 };
 
 const FEATURES = [
-  { id: 'chatfilters', name: 'Chat Filters', icon: IC.chats, impl: true },
+  { id: 'chatfilters', name: 'Chat Filters', icon: IC.chats, impl: true, sub: [['all', 'All'], ['unread', 'Unread'], ['groups', 'Groups'], ['chats', 'Chats'], ['contacts', 'Contacts'], ['noncontacts', 'Non-contacts']] },
   { id: 'broadcast', name: 'Broadcast', icon: IC.broadcast, impl: true },
   { id: 'autoreply', name: 'Autoreply BOT', icon: IC.bot, impl: true },
   { id: 'guard', name: 'Group Guard', icon: IC.shield, impl: true },
@@ -167,10 +167,19 @@ async function pollStatus() {
 }
 
 // ================= feature rail + panel =================
+let pendingChatFilter = null;
 function renderRail() {
   const rail = $('#rail'); rail.innerHTML = '';
   FEATURES.forEach(f => {
     if (f.divider) { rail.append(el('div', { className: 'rail-divider' }, f.divider)); return; }
+    if (f.sub) {
+      const sub = el('div', { className: 'rail-sub hidden' });
+      f.sub.forEach(([v, n]) => sub.append(el('div', { className: 'rail-subitem', onclick: () => { pendingChatFilter = v; openFeature(f); } }, n)));
+      const item = el('div', { className: 'rail-item', onclick: () => sub.classList.toggle('hidden') }, svg(f.icon), f.name, el('span', { className: 'caret' }, '▾'));
+      item.dataset.fid = f.id;
+      rail.append(item, sub);
+      return;
+    }
     const item = el('div', { className: 'rail-item', onclick: () => openFeature(f) }, svg(f.icon), f.name);
     item.dataset.fid = f.id;
     if (!f.impl) item.append(el('span', { className: 'soon' }, 'soon'));
@@ -541,7 +550,7 @@ RENDER.autoreply = (b) => {
 // ================= Chat Filters =================
 RENDER.chatfilters = (b) => {
   const sel = el('select');
-  [['all', 'All chats'], ['unread', 'Unread'], ['groups', 'Groups only'], ['contacts', 'My contacts'], ['noncontacts', 'Non-contacts']].forEach(([v, n]) => sel.append(el('option', { value: v }, n)));
+  [['all', 'All chats'], ['unread', 'Unread'], ['groups', 'Groups only'], ['chats', 'Individual chats'], ['contacts', 'My contacts'], ['noncontacts', 'Non-contacts']].forEach(([v, n]) => sel.append(el('option', { value: v }, n)));
   const out = el('div', { className: 'log' }); let rows = [];
   b.append(el('div', { className: 'fp-note' }, 'Pull a filtered view of the chats on THIS account. Export the result to reuse in Broadcast.'),
     lbl('Filter', sel),
@@ -556,6 +565,7 @@ RENDER.chatfilters = (b) => {
     const expr = `(async()=>{try{const l=await WPP.chat.list(${opt});return l.map(c=>({name:(c.name||c.formattedTitle||(c.contact&&c.contact.name)||'')+'',user:(c.id&&c.id.user)||'',isGroup:!!(c.isGroup||(c.id&&c.id.server==='g.us')),isMyContact:!!(c.contact&&c.contact.isMyContact)}))}catch(e){return[]}})()`;
     let list = await waExec(expr).catch(() => []);
     rows = list.map(c => ({ name: c.name, number: c.user, type: c.isGroup ? 'group' : (c.isMyContact ? 'contact' : 'chat') }));
+    if (f === 'chats') rows = rows.filter(x => x.type !== 'group');
     if (f === 'contacts') rows = rows.filter(x => x.type === 'contact');
     if (f === 'noncontacts') rows = rows.filter(x => x.type === 'chat');
     out.innerHTML = '';
@@ -563,6 +573,7 @@ RENDER.chatfilters = (b) => {
     rows.slice(0, 250).forEach(c => line(out, `${c.name || c.number || '—'}  ·  ${c.type}`, 'ok'));
     toast(`${rows.length} chats matched`);
   }
+  if (pendingChatFilter) { const p = pendingChatFilter; pendingChatFilter = null; sel.value = p; setTimeout(run, 40); }
 };
 
 // ================= Blur Settings =================
@@ -648,18 +659,19 @@ function refreshPanel(id) { if (openFeatureId === id) { const f = FEATURES.find(
 // ================= Group Guard injection =================
 function applyGuard(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
-  const cfg = store.get(`ott_guard_${accId}`, { on: false, deleteLinks: true, removeUser: false, banned: [] });
-  const conf = cfg.on ? cfg : { on: false };
+  const cfg = store.get(`ott_guard_${accId}`, { on: false, groups: {} });
+  const conf = cfg.on ? { on: true, groups: cfg.groups || {} } : { on: false, groups: {} };
   const js = `window.__ott_guard=${JSON.stringify(conf)};
-    if(!window.__ott_guard_init){window.__ott_guard_init=true;try{WPP.on('chat.new_message',async(m)=>{try{
+    if(!window.__ott_guard_init){window.__ott_guard_init=true;window.__ott_gw={};try{WPP.on('chat.new_message',async(m)=>{try{
       const g=window.__ott_guard; if(!g||!g.on||!m||m.fromMe)return;
       const chatId=m.from&&(m.from._serialized||m.from); if(!chatId||!String(chatId).endsWith('@g.us'))return;
+      const cfg=(g.groups||{})[chatId]; if(!cfg)return;
       const body=(m.body||''); const low=body.toLowerCase();
       const hasLink=/(https?:\\/\\/|www\\.|wa\\.me|t\\.me|chat\\.whatsapp\\.com|bit\\.ly)/i.test(body);
-      const hasBanned=(g.banned||[]).some(w=>w&&low.includes(String(w).toLowerCase()));
-      if((g.deleteLinks&&hasLink)||hasBanned){
+      const hasBanned=(cfg.banned||[]).some(w=>w&&low.includes(String(w).toLowerCase()));
+      if((cfg.deleteLinks&&hasLink)||hasBanned){
         try{await WPP.chat.deleteMessage(chatId,[m.id&&(m.id._serialized||m.id)],true,true)}catch(e){}
-        if(g.removeUser){try{const s=m.author&&(m.author._serialized||m.author); if(s)await WPP.group.removeParticipants(chatId,[s])}catch(e){}}
+        if(cfg.warn){const s=m.author&&(m.author._serialized||m.author); if(s){window.__ott_gw[chatId]=window.__ott_gw[chatId]||{};const c=(window.__ott_gw[chatId][s]||0)+1;window.__ott_gw[chatId][s]=c; if(c>=(cfg.max||3)){try{await WPP.group.removeParticipants(chatId,[s])}catch(e){}}}}
       }
     }catch(e){}});}catch(e){}}`;
   wv.executeJavaScript(js).catch(() => {});
@@ -731,43 +743,130 @@ async function loadGroupsInto(sel) {
   gs.forEach(g => sel.append(el('option', { value: g.id }, g.name))); return gs.length;
 }
 RENDER.grouputils = (b) => {
-  const sel = el('select'); const msg = el('textarea', { placeholder: 'Message to send to the selected group' }); const out = el('div', { className: 'log' });
-  b.append(el('div', { className: 'fp-note' }, 'Manage groups on THIS account. Invite link, leave, and admin actions require the right group permissions.'),
-    lbl('Group', sel),
-    el('div', { className: 'row' }, el('button', { className: 'btn', onclick: async () => { const n = await loadGroupsInto(sel); if (n) toast(`${n} groups loaded`); } }, 'Load groups'),
-      el('button', { className: 'btn', onclick: async () => {
-        const gid = sel.value; if (!gid) return toast('Load & pick a group', 'err');
-        const code = await waExec(`(async()=>{try{return await WPP.group.getInviteCode(${JSON.stringify(gid)})}catch(e){return ''}})()`).catch(() => '');
-        if (code) { const link = 'https://chat.whatsapp.com/' + code; navigator.clipboard.writeText(link); line(out, 'Invite: ' + link, 'ok'); toast('Invite link copied'); }
-        else toast('Need admin or failed', 'err');
-      } }, 'Get invite link')),
-    lbl('Message to group', msg), quickInsert(msg),
-    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: async () => {
-        const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!msg.value.trim()) return toast('Write a message', 'err');
-        const body = JSON.stringify(spin(withSignature(msg.value.trim())));
-        const r = await waExec(`(async()=>{try{await WPP.chat.sendTextMessage(${JSON.stringify(gid)},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
-        line(out, r.ok ? '✓ Sent to group' : '✗ ' + (r.err || 'failed'), r.ok ? 'ok' : 'bad'); toast(r.ok ? 'Sent to group' : 'Failed', r.ok ? 'ok' : 'err');
-      } }, 'Send to group'),
-      el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: async () => {
-        const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!confirm('Leave this group?')) return;
-        const r = await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(gid)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
-        toast(r.ok ? 'Left group' : 'Failed', r.ok ? 'ok' : 'err'); if (r.ok) loadGroupsInto(sel);
-      } }, 'Leave group')),
-    out);
+  const mode = el('select');
+  [['manage', 'Manage / Message'], ['joiner', 'Group Joiner'], ['destroyer', 'Group Destroyer']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  const box = el('div', {});
+  mode.onchange = () => render();
+  b.append(el('div', { className: 'fp-note' }, 'Group tools for THIS account. Admin actions require the right permissions.'), lbl('Tool', mode), box);
+  render();
+
+  function render() {
+    box.innerHTML = '';
+    if (mode.value === 'manage') manage();
+    else if (mode.value === 'joiner') joiner();
+    else destroyer();
+  }
+
+  function manage() {
+    const sel = el('select'); const msg = el('textarea', { placeholder: 'Message to send to the selected group' }); const out = el('div', { className: 'log' });
+    box.append(lbl('Group', sel),
+      el('div', { className: 'row' }, el('button', { className: 'btn', onclick: async () => { const n = await loadGroupsInto(sel); if (n) toast(`${n} groups`); } }, 'Load groups'),
+        el('button', { className: 'btn', onclick: async () => {
+          const gid = sel.value; if (!gid) return toast('Pick a group', 'err');
+          const code = await waExec(`(async()=>{try{return await WPP.group.getInviteCode(${JSON.stringify(gid)})}catch(e){return ''}})()`).catch(() => '');
+          if (code) { const link = 'https://chat.whatsapp.com/' + code; navigator.clipboard.writeText(link); line(out, 'Invite: ' + link, 'ok'); toast('Invite link copied'); } else toast('Need admin or failed', 'err');
+        } }, 'Get invite link')),
+      lbl('Message to group', msg), quickInsert(msg),
+      el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: async () => {
+          const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!msg.value.trim()) return toast('Write a message', 'err');
+          const r = await sendToJid(gid, msg.value.trim());
+          line(out, r.ok ? '✓ Sent to group' : '✗ ' + (r.err || 'failed'), r.ok ? 'ok' : 'bad'); toast(r.ok ? 'Sent' : 'Failed', r.ok ? 'ok' : 'err');
+        } }, 'Send to group'),
+        el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: async () => {
+          const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!confirm('Leave this group?')) return;
+          const r = await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(gid)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+          toast(r.ok ? 'Left group' : 'Failed', r.ok ? 'ok' : 'err'); if (r.ok) loadGroupsInto(sel);
+        } }, 'Leave group')),
+      out);
+  }
+
+  function joiner() {
+    const links = el('textarea', { placeholder: 'One WhatsApp group invite link per line\nhttps://chat.whatsapp.com/XXXX', style: { minHeight: '130px' } });
+    const delay = el('input', { type: 'number', value: '8', min: '3', style: { maxWidth: '90px' } });
+    const out = el('div', { className: 'log' }); let running = false;
+    box.append(el('div', { className: 'fp-note' }, 'Joins each group invite link with a delay. Keep the delay high to stay safe.'),
+      lbl('Invite links', links), el('div', { className: 'row' }, importBtn(links), lbl('Delay (s)', delay)),
+      el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: run }, 'Join groups'), el('button', { className: 'btn ghost', onclick: () => running = false }, 'Stop')), out);
+    async function run() {
+      if (running) return; const list = links.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (!list.length) return toast('Paste invite links', 'err');
+      if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+      running = true; out.innerHTML = ''; const d = Math.max(3, +delay.value || 8); let ok = 0;
+      for (const lk of list) { if (!running) { line(out, 'Stopped.', 'bad'); break; }
+        const r = await waExec(`(async()=>{try{await WPP.group.join(${JSON.stringify(lk)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+        if (r.ok) ok++; line(out, `${r.ok ? '✓ joined' : '✗ ' + (r.err || 'failed')}  ${lk.slice(0, 42)}`, r.ok ? 'ok' : 'bad'); await sleep(d * 1000); }
+      running = false; toast(`Joined ${ok}/${list.length}`);
+    }
+  }
+
+  function destroyer() {
+    const sel = el('select'); const out = el('div', { className: 'log' });
+    box.append(el('div', { className: 'fp-note' }, 'Removes ALL members from a group you admin, then leaves it. This cannot be undone.'),
+      lbl('Group', sel), el('div', { className: 'row' }, el('button', { className: 'btn', onclick: async () => { const n = await loadGroupsInto(sel); if (n) toast(`${n} groups`); } }, 'Load groups'),
+        el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: destroy }, 'Destroy group')), out);
+    async function destroy() {
+      const gid = sel.value; if (!gid) return toast('Load & pick a group', 'err');
+      if (!confirm('Remove ALL members and leave this group? This cannot be undone.')) return;
+      const me = await waExec("(async()=>{try{return WPP.conn.getMyUserId().user}catch(e){return ''}})()").catch(() => '');
+      const ids = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>(m.id&&(m.id._serialized||(m.id.user+'@c.us')))||'')}catch(e){return[]}})()`).catch(() => []);
+      const targets = ids.filter(x => x && (!me || x.indexOf(me) === -1));
+      out.innerHTML = ''; line(out, `Removing ${targets.length} members…`);
+      for (let i = 0; i < targets.length; i += 5) {
+        const batch = targets.slice(i, i + 5);
+        await waExec(`(async()=>{try{await WPP.group.removeParticipants(${JSON.stringify(gid)},${JSON.stringify(batch)})}catch(e){}})()`).catch(() => {});
+        line(out, `removed ${Math.min(i + 5, targets.length)}/${targets.length}`); await sleep(900);
+      }
+      await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(gid)})}catch(e){}})()`).catch(() => {});
+      line(out, 'Group destroyed — members removed, you left.', 'ok'); toast('Group destroyed'); loadGroupsInto(sel);
+    }
+  }
 };
 
-// ================= Group Guard =================
+// ================= Group Guard (per-group rules) =================
 RENDER.guard = (b) => {
-  const key = `ott_guard_${activeId}`; const cfg = store.get(key, { on: false, deleteLinks: true, removeUser: false, banned: [] });
-  const on = chk(cfg.on), dl = chk(cfg.deleteLinks), rm = chk(cfg.removeUser);
-  const banned = el('textarea', { value: (cfg.banned || []).join('\n'), placeholder: 'One banned word/phrase per line' });
-  b.append(el('div', { className: 'fp-note' }, 'Protects groups where THIS account is admin. On a matching message it deletes it (and can remove the sender). Requires admin rights in the group.'),
-    chkRow(on, 'Enable Group Guard'), chkRow(dl, 'Delete messages containing links'), chkRow(rm, 'Remove the sender too'),
+  const key = `ott_guard_${activeId}`;
+  const cfg = store.get(key, { on: false, groups: {} });
+  cfg.groups = cfg.groups || {};
+  const persist = () => { store.set(key, cfg); applyGuard(activeId); };
+
+  const chip = el('span', { className: 'chip ' + (cfg.on ? 'on' : 'off') }, cfg.on ? 'Guarding' : 'Off');
+  const on = chk(cfg.on);
+  on.onchange = () => { cfg.on = on.checked; chip.className = 'chip ' + (cfg.on ? 'on' : 'off'); chip.textContent = cfg.on ? 'Guarding' : 'Off'; persist(); };
+
+  const gsel = el('select');
+  const dl = chk(true), warn = chk(false);
+  const maxW = el('input', { type: 'number', value: '3', min: '1', style: { maxWidth: '90px' } });
+  const banned = el('textarea', { placeholder: 'Banned words / phrases (one per line)' });
+
+  const listBox = el('div', { className: 'rules' });
+  const drawList = () => {
+    listBox.innerHTML = '';
+    const entries = Object.entries(cfg.groups);
+    if (!entries.length) { listBox.append(el('div', { className: 'muted' }, 'No groups guarded yet.')); return; }
+    entries.forEach(([gid, g]) => listBox.append(el('div', { className: 'qr-item' },
+      el('div', { className: 'txt' }, el('b', {}, g.name || gid),
+        el('div', { className: 'muted', style: { fontSize: '12px' } }, `${g.deleteLinks ? 'del links' : ''}${g.banned && g.banned.length ? ' · ' + g.banned.length + ' words' : ''}${g.warn ? ' · remove after ' + (g.max || 3) : ''}`)),
+      el('button', { className: 'btn small ghost', onclick: () => { delete cfg.groups[gid]; drawList(); persist(); } }, '✕'))));
+  };
+
+  b.append(
+    el('div', { className: 'fp-note' }, 'Protects groups where THIS account is admin. On a matching message it deletes it and (optionally) warns/removes the sender after N strikes. Requires admin rights.'),
+    el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, on, 'Enable Group Guard', chip),
+    el('div', { className: 'fp-note' }, 'Configure a group:'),
+    el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel,
+    chkRow(dl, 'Delete messages containing links'),
     lbl('Banned words / phrases', banned),
-    el('button', { className: 'btn primary', onclick: () => {
-      store.set(key, { on: on.checked, deleteLinks: dl.checked, removeUser: rm.checked, banned: banned.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean) });
-      applyGuard(activeId); toast('Group Guard saved');
-    } }, 'Save & apply'));
+    chkRow(warn, 'Remove the sender after repeated strikes'),
+    el('div', { className: 'row' }, lbl('Strikes before removal', maxW)),
+    el('button', { className: 'btn', onclick: () => {
+      const gid = gsel.value; if (!gid) return toast('Load & pick a group', 'err');
+      const name = gsel.options[gsel.selectedIndex]?.text || gid;
+      cfg.groups[gid] = { name, deleteLinks: dl.checked, banned: banned.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean), warn: warn.checked, max: +maxW.value || 3 };
+      banned.value = ''; drawList(); persist(); toast('Group rule saved');
+    } }, 'Save rule for this group'),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }),
+    lbl('Guarded groups', listBox));
+  drawList();
 };
 
 // ================= import & attach builders =================
