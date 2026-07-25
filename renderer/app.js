@@ -8,7 +8,7 @@ const el = (t, p = {}, ...kids) => {
 };
 const svg = (d) => { const s = document.createElement('span'); s.style.display = 'inline-flex'; s.innerHTML = d; return s.firstChild; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => localStorage.setItem(k, JSON.stringify(v)) };
+const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { try { toast('Storage full — attachment too large for a saved item', 'err'); } catch (_) {} return false; } } };
 let toastTimer;
 function toast(msg, kind = 'ok') { const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + kind; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = 'toast hidden'), 2600); }
 function downloadCsv(name, rows, cols) {
@@ -376,13 +376,23 @@ RENDER.quick = (b) => {
     list.innerHTML = ''; const qs = store.get('ott_quick', []);
     if (!qs.length) list.append(el('div', { className: 'muted' }, 'No quick replies yet.'));
     qs.forEach((q, i) => list.append(el('div', { className: 'qr-item' },
-      el('div', { className: 'txt' }, el('b', {}, q.title || '(untitled)'), el('div', { className: 'muted', style: { fontSize: '12px' } }, q.text.slice(0, 60))),
+      el('div', { className: 'txt' }, el('b', {}, (q.data ? '📎 ' : '') + (q.title || '(untitled)')), el('div', { className: 'muted', style: { fontSize: '12px' } }, (q.text || (q.filename || '')).slice(0, 60))),
       el('button', { className: 'btn small ghost', onclick: () => { const qs2 = store.get('ott_quick', []); qs2.splice(i, 1); store.set('ott_quick', qs2); draw(); refreshChips(); } }, 'Delete'))));
   };
-  const title = el('input', { placeholder: 'Title (max 15 chars)', maxLength: 15 }); const text = el('textarea', { placeholder: 'Reply text (supports {a|b} spin)' });
-  b.append(el('div', { className: 'fp-note' }, 'Saved replies appear as clickable chips on the WhatsApp compose bar — click one while in any chat to drop it into the message box. They also show an “Insert” menu in Broadcast & Direct Message.'),
-    lbl('Title', title), lbl('Reply', text),
-    el('button', { className: 'btn primary', onclick: () => { if (!text.value.trim()) return toast('Add reply text', 'err'); const qs = store.get('ott_quick', []); qs.push({ title: title.value.trim(), text: text.value.trim() }); store.set('ott_quick', qs); title.value = text.value = ''; draw(); refreshChips(); toast('Saved — chip added to WhatsApp'); } }, 'Add quick reply'),
+  const title = el('input', { placeholder: 'Title (max 15 chars)', maxLength: 15 });
+  const mtype = el('select'); [['text', 'Message (text only)'], ['image', 'Message + Image / Video'], ['audio', 'Message + Audio'], ['doc', 'Message + Document']].forEach(([v, n]) => mtype.append(el('option', { value: v }, n)));
+  const text = el('textarea', { placeholder: 'Reply text / caption (supports {a|b} spin)' });
+  const att = attachControl('*'); att.node.style.display = 'none';
+  mtype.onchange = () => { att.node.style.display = mtype.value === 'text' ? 'none' : 'flex'; };
+  b.append(el('div', { className: 'fp-note' }, 'Saved replies appear as clickable chips just above the message box in any open chat. Click a text chip to drop it into the box; a media chip (📎) sends its file + caption to the open chat.'),
+    lbl('Title', title), lbl('Message type', mtype), lbl('Reply / caption', text), att.node,
+    el('button', { className: 'btn primary', onclick: () => {
+      const f = att.get();
+      if (!text.value.trim() && !f) return toast('Add reply text or a file', 'err');
+      const qs = store.get('ott_quick', []);
+      qs.push({ title: title.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined });
+      if (store.set('ott_quick', qs)) { title.value = text.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; draw(); refreshChips(); toast('Saved — chip added to WhatsApp'); }
+    } }, 'Add quick reply'),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }), list);
   draw();
 };
@@ -563,14 +573,24 @@ function chatFilter(name) {
   wv.executeJavaScript(js).then(r => toast(r === 'ok' ? 'Chat list filtered: ' + target : `“${target}” filter not available on this account`, r === 'ok' ? 'ok' : 'err')).catch(() => {});
 }
 
-// Inject clickable quick-reply chips onto the WhatsApp compose bar (like WA CRM).
+// Inject clickable quick-reply chips just above the open chat's compose box (like WA CRM).
 function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const replies = store.get('ott_quick', []);
   const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
-    function insert(text){try{var box=document.querySelector('#main footer div[contenteditable="true"]')||document.querySelector('footer div[contenteditable="true"]');if(box){box.focus();document.execCommand('insertText',false,text);}else if(window.WPP){var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c)WPP.chat.sendTextMessage(c.id,text,{});}}catch(e){}}
-    function render(){var bar=document.getElementById('ott-qr-bar');if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';bar.style.cssText='position:fixed;left:10px;bottom:10px;z-index:99999;display:flex;flex-wrap:wrap;gap:6px;max-width:38%;';document.body.appendChild(bar);}bar.innerHTML='';(window.__ott_quick||[]).forEach(function(q){var b=document.createElement('button');b.textContent=q.title||q.text.slice(0,15);b.title=q.text;b.style.cssText='background:#e7f7ee;border:1px solid #12b866;color:#0b7a3e;border-radius:16px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;';b.onclick=function(e){e.preventDefault();e.stopPropagation();insert(q.text);};bar.appendChild(b);});bar.style.display=(window.__ott_quick&&window.__ott_quick.length)?'flex':'none';}
-    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,4000);}
+    function insert(text){try{var box=document.querySelector('#main footer div[contenteditable="true"]')||document.querySelector('#main div[contenteditable="true"]');if(box){box.focus();document.execCommand('insertText',false,text);}}catch(e){}}
+    function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
+    function render(){
+      var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar');
+      if(!footer){if(bar)bar.style.display='none';return;}
+      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';}
+      if(bar.parentNode!==footer.parentNode||bar.nextSibling!==footer){footer.parentNode.insertBefore(bar,footer);}
+      var qs=window.__ott_quick||[];
+      bar.style.cssText='display:'+(qs.length?'flex':'none')+';flex-wrap:wrap;gap:6px;padding:6px 16px;background:#f4f8f5;border-top:1px solid #e6ebe8;';
+      bar.innerHTML='';
+      qs.forEach(function(q){var b=document.createElement('button');b.textContent=(q.data?'📎 ':'')+(q.title||(q.text||'').slice(0,15));b.title=q.text||'';b.style.cssText='background:#e7f7ee;border:1px solid #12b866;color:#0b7a3e;border-radius:16px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;';b.onmousedown=function(e){e.preventDefault();};b.onclick=function(e){e.preventDefault();e.stopPropagation();act(q);};bar.appendChild(b);});
+    }
+    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,2500);}
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
@@ -899,11 +919,11 @@ function importBtn(target) {
   return wrap;
 }
 // Attach an image/video/document; returns {node, get()}.
-function attachControl() {
+function attachControl(accept) {
   let file = null;
   const label = el('span', { className: 'muted', style: { fontSize: '12.5px' } }, 'No file attached');
   const clear = el('button', { className: 'btn ghost small', style: { display: 'none' }, onclick: () => { file = null; label.textContent = 'No file attached'; clear.style.display = 'none'; } }, 'Remove');
-  const inp = el('input', { type: 'file', accept: 'image/*,video/*,.pdf', style: { display: 'none' }, onchange: (e) => {
+  const inp = el('input', { type: 'file', accept: accept || 'image/*,video/*,.pdf', style: { display: 'none' }, onchange: (e) => {
     const f = e.target.files[0]; if (!f) return;
     if (f.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
     const reader = new FileReader();
