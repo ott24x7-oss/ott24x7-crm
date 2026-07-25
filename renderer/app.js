@@ -478,8 +478,7 @@ RENDER.extractor = (b) => {
     lsel.innerHTML = ''; if (!ls.length) { lsel.append(el('option', {}, 'No labels (Business only)')); return toast('No labels found', 'err'); }
     ls.forEach(l => lsel.append(el('option', { value: l.id }, l.name))); toast(`${ls.length} labels`);
   }
-  // Resolver: turn a WhatsApp WID into a real phone number, skipping privacy LIDs.
-  const RES = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
+  const RES = PH_RESOLVER;
   const applyFilter = (list, f) => f === 'saved' ? list.filter(x => x.saved) : f === 'unsaved' ? list.filter(x => !x.saved) : list;
   let skippedLid = 0;
   function finish(msg) {
@@ -972,8 +971,8 @@ function logInvoice(r) { const inv = store.get('ott_invoices', []); inv.unshift(
 // Pick a customer from the WhatsApp chat list (single-select modal).
 async function pickCustomer(onPick) {
   if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
-  const chats = await waExec("(async()=>{try{const l=await WPP.chat.list();return l.filter(c=>!(c.isGroup||(c.id&&c.id.server==='g.us'))).map(c=>({number:(c.id&&c.id.user)||'',name:(c.contact&&c.contact.name)||c.name||''})).filter(c=>c.number)}catch(e){return[]}})()").catch(() => []);
-  if (!chats.length) return toast('No chats found', 'err');
+  const chats = await waExec(`(async()=>{try{${PH_RESOLVER};const l=await WPP.chat.list();var o=[];for(var i=0;i<l.length;i++){var c=l[i];if(c.isGroup||(c.id&&c.id.server==='g.us'))continue;var ph=await _ph(c.id);if(!ph)continue;o.push({number:ph,name:(c.contact&&c.contact.name)||c.name||''});}return o;}catch(e){return[]}})()`).catch(() => []);
+  if (!chats.length) return toast('No customers with a real number found (WhatsApp hides some as privacy LIDs)', 'err');
   const search = el('input', { placeholder: 'Search name / number' });
   const list = el('div', { className: 'checklist-body', style: { maxHeight: '320px' } });
   const close = () => scrim.remove();
@@ -1449,6 +1448,8 @@ async function savedSet() {
   const arr = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>(x.id&&x.id.user)||'').filter(Boolean)}catch(e){return[]}})()").catch(() => []);
   return new Set(arr);
 }
+// Injected resolver: WID -> real phone number, '' for privacy LIDs that can't be resolved.
+const PH_RESOLVER = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
 
 // ================= tiny utils =================
 function chk(checked) { return el('input', { type: 'checkbox', checked, style: { width: 'auto' } }); }
