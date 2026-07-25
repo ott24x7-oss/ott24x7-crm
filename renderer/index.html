@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ott24x7 CRM</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- LICENSE GATE -->
+  <section id="gate" class="gate">
+    <div class="gate-card">
+      <img class="gate-logo" src="../assets/logo-lockup.png" alt="ott24x7 CRM" />
+      <p class="muted">Enter your license key to activate this device</p>
+      <input id="licenseKey" placeholder="OTT-XXXX-XXXX-XXXX-XXXX" spellcheck="false" />
+      <button id="activateBtn" class="btn primary">Activate</button>
+      <div id="gateMsg" class="msg"></div>
+      <div class="gate-foot muted">Device: <span id="deviceId">…</span></div>
+    </div>
+  </section>
+
+  <!-- MAIN APP -->
+  <section id="app" class="app hidden">
+    <aside class="side">
+      <div class="side-brand"><img src="../assets/logo-mark.png" /><span>ott24x7 <b>CRM</b></span></div>
+      <nav>
+        <a class="nav active" data-view="connect">WhatsApp</a>
+        <a class="nav" data-view="sender">Bulk Sender</a>
+      </nav>
+      <div class="side-foot">
+        <div id="waStatus" class="status"><span class="dot"></span><span class="txt">Starting…</span></div>
+        <button id="logoutBtn" class="btn ghost small">Deactivate</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- Connect view -->
+      <div id="view-connect" class="view">
+        <div class="view-head"><h2>WhatsApp connection</h2>
+          <span class="muted">Scan the QR with your phone the first time. The session is remembered after that.</span></div>
+        <div class="wa-frame">
+          <webview id="wa" src="https://web.whatsapp.com" partition="persist:whatsapp"
+                   allowpopups useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"></webview>
+        </div>
+      </div>
+
+      <!-- Sender view -->
+      <div id="view-sender" class="view hidden">
+        <div class="view-head"><h2>Bulk sender</h2>
+          <span class="muted">Sends via your linked WhatsApp. Use responsibly and within WhatsApp's rules.</span></div>
+        <div class="sender-grid">
+          <div class="card">
+            <label>Numbers (one per line, with country code)
+              <textarea id="numbers" placeholder="919876543210&#10;14155552671"></textarea></label>
+          </div>
+          <div class="card">
+            <label>Message  <span class="muted">— use {a|b|c} for spin variations</span>
+              <textarea id="message" placeholder="Hi! {Hello|Hey} — this is a test from ott24x7 CRM."></textarea></label>
+            <div class="row">
+              <label class="inline">Delay min (s)<input id="delayMin" type="number" value="4" min="1" /></label>
+              <label class="inline">Delay max (s)<input id="delayMax" type="number" value="9" min="1" /></label>
+            </div>
+            <div class="row">
+              <button id="startBtn" class="btn primary">Start sending</button>
+              <button id="stopBtn" class="btn ghost" disabled>Stop</button>
+            </div>
+            <div class="progress"><div id="bar" class="bar"></div></div>
+            <div id="log" class="log"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
