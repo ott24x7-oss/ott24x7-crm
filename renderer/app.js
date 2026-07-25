@@ -9,7 +9,7 @@ const el = (t, p = {}, ...kids) => {
 const svg = (d) => { const s = document.createElement('span'); s.style.display = 'inline-flex'; s.innerHTML = d; return s.firstChild; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Keys mirrored to a durable file in userData so they survive every app update.
-const PERSIST_KEYS = ['ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs', 'ott_invoice_cfg', 'ott_invoices'];
+const PERSIST_KEYS = ['ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs', 'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -1003,12 +1003,41 @@ RENDER.invoice = (b) => {
   const saveCfg = () => store.set('ott_invoice_cfg', cfg);
   const inp = (v, ph) => el('input', { value: v || '', placeholder: ph || '' });
   const ta = (v, ph) => { const t = el('textarea', { placeholder: ph || '' }); t.value = v || ''; return t; };
-  const mode = el('select'); [['create', 'Create Invoice'], ['business', 'Business Settings']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  const mode = el('select'); [['create', 'Create Invoice'], ['items', 'Saved Items'], ['templates', 'Templates'], ['business', 'Business Settings']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
   const boxc = el('div', {}); mode.onchange = render;
   b.append(el('div', { className: 'fp-note' }, 'Generate GST invoices and send them as a PDF on WhatsApp. Set up your business first.'), lbl('View', mode), boxc);
   if (!cfg.name) mode.value = 'business';
   render();
-  function render() { boxc.innerHTML = ''; mode.value === 'create' ? createView() : businessView(); }
+  function render() { boxc.innerHTML = ''; const v = mode.value; if (v === 'create') createView(); else if (v === 'items') itemsView(); else if (v === 'templates') templatesView(); else businessView(); }
+  const TEMPLATE_NAMES = { classic: 'Classic Blue', minimal: 'Minimal', taxpro: 'GST Tax Pro', corporate: 'Corporate Grey', luxury: 'Luxury Gold', teal: 'Teal Stripe', royal: 'Royal Purple', crimson: 'Crimson' };
+
+  function itemsView() {
+    const name = inp('', 'Item / service name'), price = el('input', { type: 'number', value: '0' });
+    const hsn = cfg.gstEnabled ? inp('', 'HSN') : null, gst = cfg.gstEnabled ? el('input', { type: 'number', value: '18' }) : null;
+    const list = el('div', { className: 'rules' });
+    const draw = () => {
+      list.innerHTML = ''; const its = store.get('ott_invoice_items', []);
+      if (!its.length) { list.append(el('div', { className: 'muted' }, 'No saved items yet.')); return; }
+      its.forEach((it, i) => list.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, it.name), el('div', { className: 'muted', style: { fontSize: '12px' } }, '₹' + it.price + (cfg.gstEnabled && it.gst ? ' · GST ' + it.gst + '%' : '') + (it.hsn ? ' · HSN ' + it.hsn : ''))), el('button', { className: 'btn small ghost', onclick: () => { const a = store.get('ott_invoice_items', []); a.splice(i, 1); store.set('ott_invoice_items', a); draw(); } }, '✕'))));
+    };
+    boxc.append(el('div', { className: 'fp-note' }, 'Save your products/services once — then add them to any invoice in one click.'),
+      lbl('Item name', name), el('div', { className: 'row' }, lbl('Price ₹', price), ...(cfg.gstEnabled ? [lbl('HSN', hsn), lbl('GST%', gst)] : [])),
+      el('button', { className: 'btn primary', onclick: () => { if (!name.value.trim()) return toast('Item name required', 'err'); const a = store.get('ott_invoice_items', []); a.push({ name: name.value.trim(), price: +price.value || 0, hsn: hsn ? hsn.value.trim() : '', gst: gst ? +gst.value || 0 : 0 }); if (store.set('ott_invoice_items', a)) { name.value = ''; price.value = '0'; draw(); toast('Item saved'); } } }, 'Save item'),
+      el('div', { style: { borderTop: '1px solid var(--line)', margin: '6px 0' } }), lbl('Saved items', list));
+    draw();
+  }
+  function templatesView() {
+    boxc.innerHTML = '';
+    const sampleCust = { name: 'Sample Customer', phone: '', address: '123 Business Road, City', gstin: '29ABCDE1234F1Z5', state: cfg.state || '29' };
+    const data = invoiceCompute([{ desc: 'Sample Product', qty: 2, price: 499, hsn: '998361', gst: 18 }, { desc: 'Service Fee', qty: 1, price: 1000, hsn: '998361', gst: 18 }], 100, cfg, sampleCust);
+    boxc.append(el('div', { className: 'fp-note' }, 'Preview any template and set it as your default. You can still switch template per-invoice in Create Invoice.'),
+      el('div', { className: 'muted', style: { fontSize: '12px', marginBottom: '6px' } }, 'Current default: ' + (TEMPLATE_NAMES[cfg.template] || 'Classic Blue')));
+    Object.entries(TEMPLATE_NAMES).forEach(([id, nm]) => boxc.append(el('div', { className: 'qr-item' },
+      el('div', { className: 'txt' }, el('b', {}, nm), cfg.template === id ? el('span', { className: 'muted', style: { fontSize: '11px' } }, 'default') : null),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn small', onclick: () => previewInvoice(invoiceHtml({ ...data, cfg, customer: sampleCust, template: id, number: (cfg.prefix || 'INV-') + '0001', date: new Date().toLocaleDateString('en-IN'), notes: 'This is a sample preview.' })) }, 'Preview'),
+        el('button', { className: 'btn small primary', onclick: () => { cfg.template = id; saveCfg(); toast(nm + ' set as default'); templatesView(); } }, 'Set default'))))); }
+
 
   function businessView() {
     const name = inp(cfg.name, 'Business name'), addr = ta(cfg.address, 'Address'), gstin = inp(cfg.gstin, 'GSTIN'), state = inp(cfg.state, 'State code e.g. 29'), phone = inp(cfg.phone, 'Phone'), email = inp(cfg.email, 'Email'), bank = ta(cfg.bank, 'Bank / UPI details'), prefix = inp(cfg.prefix, 'INV-'), counter = el('input', { type: 'number', value: String(cfg.counter || 1) });
@@ -1023,6 +1052,11 @@ RENDER.invoice = (b) => {
     const cn = inp('', 'Customer name'), cp = inp('', 'Customer phone (country code)'), ce = inp('', 'Email (optional)'), ca = ta('', 'Address'), cg = inp('', 'GSTIN (optional)'), cs = inp('', 'State code');
     let items = [{ desc: '', qty: 1, price: 0, hsn: '', gst: 18 }];
     const itemsBox = el('div', {});
+    const catalog = store.get('ott_invoice_items', []);
+    const quickAdd = el('select');
+    quickAdd.append(el('option', { value: '' }, catalog.length ? '＋ Quick add a saved item…' : 'No saved items (add them in “Saved Items”)'));
+    catalog.forEach((it, i) => quickAdd.append(el('option', { value: String(i) }, it.name + ' — ₹' + it.price)));
+    quickAdd.onchange = () => { if (quickAdd.value !== '') { const it = catalog[+quickAdd.value]; items.push({ desc: it.name, qty: 1, price: it.price, hsn: it.hsn || '', gst: it.gst || 18 }); drawItems(); quickAdd.value = ''; } };
     const drawItems = () => {
       itemsBox.innerHTML = '';
       items.forEach((it, i) => {
@@ -1053,7 +1087,8 @@ RENDER.invoice = (b) => {
       el('div', { className: 'row' }, lbl('Name', cn), lbl('Phone', cp)),
       el('div', { className: 'row' }, lbl('Email', ce), lbl('State code', cs)), lbl('Address', ca),
       cfg.gstEnabled ? lbl('Customer GSTIN', cg) : null,
-      el('div', { className: 'fp-note' }, 'Items · desc / qty / rate' + (cfg.gstEnabled ? ' / HSN / GST%' : '')), itemsBox,
+      el('div', { className: 'fp-note' }, 'Items · desc / qty / rate' + (cfg.gstEnabled ? ' / HSN / GST%' : '')),
+      catalog.length ? el('div', { className: 'row' }, lbl('Quick add saved item', quickAdd)) : null, itemsBox,
       el('button', { className: 'btn small', onclick: () => { items.push({ desc: '', qty: 1, price: 0, hsn: '', gst: 18 }); drawItems(); } }, '＋ Add item'),
       el('div', { className: 'row' }, lbl('Discount ₹', discount), lbl('Template', tmpl)), lbl('Notes', notes),
       el('div', { className: 'row' },
