@@ -481,8 +481,21 @@ RENDER.signature = (b) => {
 // Backfill a category field on older quick replies.
 function migrateQuick() {
   const qs = store.get('ott_quick', []); let ch = false;
-  for (const q of qs) if (q.category === undefined) { q.category = ''; ch = true; }
+  for (const q of qs) {
+    if (q.category === undefined) { q.category = ''; ch = true; }
+    if (!q.title && q.text) { q.title = deriveTitle(q.text); ch = true; } // name older untitled offers
+  }
   if (ch) store.set('ott_quick', qs);
+}
+// Derive a short product name from the first meaningful line of a caption (strips WhatsApp markdown).
+function deriveTitle(t) {
+  if (!t) return '';
+  const first = String(t).split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
+  return first.replace(/[*_~`>#]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+// Flatten a caption for the catalog preview: drop markdown, turn line breaks into separators.
+function cleanPreview(t) {
+  return String(t || '').replace(/[*_~`]+/g, '').replace(/\s*\r?\n\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim();
 }
 // Send a saved product/offer straight to the currently open WhatsApp chat.
 async function sendQuickToActiveChat(it) {
@@ -538,10 +551,10 @@ RENDER.quick = (b) => {
       thumb,
       el('div', { style: { flex: '1', minWidth: '0' } },
         el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
-          el('b', {}, it.title || '(untitled)'),
+          el('b', {}, it.title || deriveTitle(it.text) || '(untitled)'),
           it.category ? el('span', { className: 'muted', style: { fontSize: '11px', border: '1px solid var(--line)', borderRadius: '10px', padding: '1px 8px' } }, it.category) : null,
           it.pinned !== false ? el('span', { title: 'Shows as chip on chat bar', style: { fontSize: '11px' } }, '📌') : null),
-        el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (it.text || it.filename || '').slice(0, 90)),
+        el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px', lineHeight: '1.45', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' } }, cleanPreview(it.text) || it.filename || ''),
         el('div', { className: 'row', style: { marginTop: '8px' } },
           el('button', { className: 'btn small', onclick: () => sendQuickToActiveChat(it) }, '➤ Send to chat'),
           el('button', { className: 'btn small ghost', onclick: () => { const qs = store.get('ott_quick', []); qs[i].pinned = qs[i].pinned === false; store.set('ott_quick', qs); draw(); refreshChips(); } }, it.pinned !== false ? 'Unpin' : 'Pin chip'),
@@ -559,7 +572,7 @@ RENDER.quick = (b) => {
       const f = att.get();
       if (!title.value.trim() && !text.value.trim() && !f) return toast('Add a name, caption, or file', 'err');
       const qs = store.get('ott_quick', []);
-      qs.push({ title: title.value.trim(), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked });
+      qs.push({ title: title.value.trim() || deriveTitle(text.value), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked });
       if (store.set('ott_quick', qs)) { title.value = text.value = category.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
     } }, '＋ Save product / offer'),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
