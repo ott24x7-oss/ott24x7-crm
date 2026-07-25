@@ -89,6 +89,42 @@ window.addEventListener('DOMContentLoaded', async () => {
   showGate();
 });
 function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList.add('hidden'); }
+
+// Re-validate the license periodically; lock the app if it was suspended/revoked.
+async function recheckLicense() {
+  const key = await ott.licenseLoad(); if (!key) return;
+  const r = await safe(() => ott.licenseValidate(key));
+  if (r && (r.valid === false || r.trusted === false)) lockApp(r.reason);
+}
+function lockApp(reason) {
+  $('#app').classList.add('hidden'); $('#gate').classList.remove('hidden');
+  const m = $('#gateMsg'); m.className = 'msg err'; m.textContent = 'License ' + String(reason || 'invalid').replace(/_/g, ' ') + ' — contact your provider.';
+}
+
+// ---- Auto-update popup ----
+let _upd = null;
+function showUpdatePopup(version) {
+  if (_upd) return;
+  const bar = el('div', { className: 'progress', style: { display: 'none', width: '100%' } }); const barI = el('div', { className: 'bar' }); bar.append(barI);
+  const pct = el('div', { className: 'muted', style: { fontSize: '12px', display: 'none' } }, '0%');
+  const updBtn = el('button', { className: 'btn primary', onclick: () => { updBtn.disabled = true; updBtn.textContent = 'Downloading…'; bar.style.display = 'block'; pct.style.display = 'block'; ott.downloadUpdate(); } }, 'Update now');
+  const box = el('div', { className: 'modal-box', style: { width: '380px', textAlign: 'center' } },
+    el('h3', {}, 'Update available'),
+    el('div', { className: 'muted', style: { margin: '4px 0 8px' } }, 'Version ' + (version || '') + ' is ready — get the latest features and fixes.'),
+    bar, pct,
+    el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '8px' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), updBtn));
+  const scrim = el('div', { className: 'modal-scrim' }, box);
+  document.body.append(scrim);
+  _upd = { scrim, box, barI, pct };
+}
+function setUpdateProgress(p) { if (_upd) { _upd.barI.style.width = p + '%'; _upd.pct.textContent = p + '%'; } }
+function setUpdateDownloaded() {
+  if (!_upd) showUpdatePopup('');
+  _upd.box.innerHTML = '';
+  _upd.box.append(el('h3', {}, 'Update ready'), el('div', { className: 'muted', style: { margin: '4px 0 10px' } }, 'Restart to apply the update.'),
+    el('div', { className: 'row', style: { justifyContent: 'center' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), el('button', { className: 'btn primary', onclick: () => ott.installUpdate() }, 'Restart & update')));
+}
+function closeUpd() { if (_upd) { _upd.scrim.remove(); _upd = null; } }
 $('#activateBtn').addEventListener('click', activate);
 $('#licenseKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') activate(); });
 async function activate() {
@@ -124,8 +160,13 @@ async function enterApp() {
   else $('#waEmpty').style.display = 'flex';
   setInterval(pollStatus, 2500);
   setInterval(drainLeadQueues, 2500);
+  setInterval(recheckLicense, 300000); // re-validate license every 5 min (suspend takes effect live)
   startScheduler();
-  try { ott.onUpdateReady(() => toast('Update downloaded — restart the app to apply', 'ok')); } catch (_) {}
+  try {
+    ott.onUpdateAvailable(d => showUpdatePopup(d.version));
+    ott.onUpdateProgress(d => setUpdateProgress(d.percent));
+    ott.onUpdateDownloaded(() => setUpdateDownloaded());
+  } catch (_) {}
 }
 
 async function addAccount() {

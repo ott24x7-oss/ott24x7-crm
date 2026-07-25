@@ -18,5 +18,9 @@ contextBridge.exposeInMainWorld('ott', {
   persistLoad: (key) => ipcRenderer.invoke('persist:load', key),
   persistSave: (key, value) => ipcRenderer.invoke('persist:save', key, value),
   renderInvoicePdf: (html) => ipcRenderer.invoke('invoice:pdf', html),
-  onUpdateReady: (cb) => ipcRenderer.on('app:update-ready', cb),
+  onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (e, d) => cb(d)),
+  onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (e, d) => cb(d)),
+  onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', () => cb()),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
 });

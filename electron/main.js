@@ -127,9 +127,16 @@ function initAutoUpdate() {
   if (!app.isPackaged) return;
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = true;
-    autoUpdater.on('update-downloaded', () => { win?.webContents.send('app:update-ready'); });
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+    autoUpdater.autoDownload = false;              // ask the user first (popup)
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('update-available', (info) => win?.webContents.send('update:available', { version: info.version }));
+    autoUpdater.on('download-progress', (p) => win?.webContents.send('update:progress', { percent: Math.round(p.percent || 0) }));
+    autoUpdater.on('update-downloaded', () => win?.webContents.send('update:downloaded'));
+    autoUpdater.on('error', () => {});
+    ipcMain.handle('update:download', () => { try { autoUpdater.downloadUpdate(); } catch (e) {} });
+    ipcMain.handle('update:install', () => { try { autoUpdater.quitAndInstall(); } catch (e) {} });
+    autoUpdater.checkForUpdates().catch(() => {});
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 30 * 60000);
   } catch (e) { /* updater unavailable — ignore */ }
 }
 
