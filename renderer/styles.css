@@ -9,10 +9,10 @@
      · the light WhatsApp webview is framed as an inset document pane */
 :root {
   /* Brand accent */
-  --green:   var(--green);
+  --green:   oklch(72% .18 152);
   --green-2: oklch(58% .15 155);
   --green-soft: oklch(86% .13 152);
-  --wa:      var(--wa);
+  --wa:      oklch(82% .22 152);
 
   /* Dark teal-tinted ground */
   --bg:      oklch(15% .015 200);

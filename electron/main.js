@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { Worker } = require('node:worker_threads');
 const config = require('../config.js');
 const license = require('./license.js');
 
@@ -15,6 +16,43 @@ function extractNumbers(text) {
     if (d.length >= 7 && d.length <= 15 && !seen.has(d)) { seen.add(d); out.push(d); }
   }
   return out;
+}
+
+// Remote content (WhatsApp Web) must not be able to silently take the camera, microphone
+// or location. WhatsApp only needs notifications and clipboard to work normally; anything
+// more sensitive is denied rather than auto-granted.
+const ALLOWED_PERMISSIONS = new Set(['notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen', 'background-sync']);
+function hardenSession(sess) {
+  try {
+    sess.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(ALLOWED_PERMISSIONS.has(permission));
+    });
+    sess.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
+  } catch (e) { /* older Electron */ }
+}
+
+// Every account gets its own partition, so harden each one as it appears, and stop any
+// embedded page from opening arbitrary windows or navigating the app away from WhatsApp.
+function guardWebContents() {
+  app.on('web-contents-created', (_e, contents) => {
+    if (contents.getType() === 'webview') {
+      try { hardenSession(contents.session); } catch (_) {}
+      // <webview> has allowpopups; without a handler any link could spawn an unrestricted
+      // Electron window. Send external links to the real browser instead.
+      contents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+        return { action: 'deny' };
+      });
+      contents.on('will-navigate', (ev, url) => {
+        // Keep the guest on WhatsApp; anything else opens externally.
+        if (!/^https:\/\/([a-z0-9-]+\.)*whatsapp\.(com|net)\//i.test(url)) {
+          ev.preventDefault();
+          if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+        }
+      });
+      contents.on('will-attach-webview', (ev) => ev.preventDefault()); // no nested webviews
+    }
+  });
 }
 
 function createWindow() {
@@ -37,6 +75,7 @@ function createWindow() {
   // A recent Chrome UA for the WhatsApp partition so WA Web loads normally.
   const waSession = session.fromPartition(config.WA_PARTITION);
   waSession.setUserAgent(config.USER_AGENT);
+  hardenSession(waSession);
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.removeMenu();
@@ -68,20 +107,42 @@ ipcMain.handle('app:config', () => ({
 ipcMain.handle('app:importNumbers', async (_e, filePath) => {
   try {
     const ext = path.extname(filePath || '').toLowerCase();
-    let text = '';
-    if (ext === '.xlsx' || ext === '.xls') {
-      const XLSX = require('xlsx');
-      const wb = XLSX.readFile(filePath);
-      for (const sheet of wb.SheetNames) {
-        text += XLSX.utils.sheet_to_csv(wb.Sheets[sheet]) + '\n';
-      }
-    } else {
-      text = fs.readFileSync(filePath, 'utf8');
+
+    // Plain text formats are safe to read directly.
+    if (ext !== '.xlsx' && ext !== '.xls') {
+      const text = fs.readFileSync(filePath, 'utf8');
+      return { ok: true, numbers: extractNumbers(text) };
     }
-    const numbers = extractNumbers(text);
-    return { ok: true, numbers };
+
+    // Spreadsheets are untrusted input handed to a parser with known issues. Refuse
+    // absurd files outright, then parse in a worker with a hard timeout so neither
+    // prototype pollution nor a ReDoS payload can reach or stall the main process.
+    const MAX = 25 * 1024 * 1024;
+    const size = fs.statSync(filePath).size;
+    if (size > MAX) return { ok: false, err: 'File is too large (max 25 MB).' };
+
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      let worker;
+      try {
+        worker = new Worker(path.join(__dirname, 'xlsx-worker.js'), {
+          workerData: { filePath },
+          resourceLimits: { maxOldGenerationSizeMb: 512 },
+        });
+      } catch (e) {
+        return finish({ ok: false, err: String((e && e.message) || e) });
+      }
+      const timer = setTimeout(() => {
+        try { worker.terminate(); } catch (_) {}
+        finish({ ok: false, err: 'That file took too long to read and was stopped.' });
+      }, 20000);
+      worker.on('message', (msg) => { clearTimeout(timer); try { worker.terminate(); } catch (_) {} finish(msg); });
+      worker.on('error', (err) => { clearTimeout(timer); finish({ ok: false, err: String((err && err.message) || err) }); });
+      worker.on('exit', () => { clearTimeout(timer); finish({ ok: false, err: 'Could not read that file.' }); });
+    });
   } catch (e) {
-    return { ok: false, err: String(e && e.message || e) };
+    return { ok: false, err: String((e && e.message) || e) };
   }
 });
 
@@ -155,6 +216,7 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), 300);
     return;
   }
+  guardWebContents();
   createWindow();
   initAutoUpdate();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
