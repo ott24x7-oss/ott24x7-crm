@@ -1468,9 +1468,82 @@ async function runSchedule(job) {
   setJobStatus('ott_schedule', job.id, 'sent', { ok, fail }); toast(`Scheduled broadcast sent: ${ok}/${job.numbers.length}`); refreshPanel('schedule');
 }
 async function fireReminder(r) {
+  // Optional WhatsApp send is still supported, but a reminder is now primarily an alarm.
   if (r.number && await isConnectedOn(r.accId)) await sendTextOn(r.accId, r.number, r.text);
-  try { new Notification('ott24x7 CRM · Reminder', { body: r.text }); } catch (_) {}
-  toast('Reminder: ' + r.text.slice(0, 40)); setJobStatus('ott_reminders', r.id, 'done'); refreshPanel('reminder');
+  try { new Notification('WA-CRM . Reminder', { body: r.title || r.text }); } catch (_) {}
+  showAlarm(r);
+  if (r.repeat === 'daily') {
+    // Roll forward to the same clock time tomorrow rather than marking it done.
+    const next = new Date(r.when); next.setDate(next.getDate() + 1);
+    const rs = store.get('ott_reminders', []); const it = rs.find((x) => x.id === r.id);
+    if (it) { it.when = next.toISOString(); it.status = 'pending'; store.set('ott_reminders', rs); }
+  } else {
+    setJobStatus('ott_reminders', r.id, 'done');
+  }
+  refreshPanel('reminder');
+}
+
+// ---- Alarm: looping chime + a modal the user must acknowledge ----
+let _alarmAudio = null;
+function startChime() {
+  stopChime();
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    // Two-tone bell, synthesised so there is no audio asset to ship.
+    const beat = (t0, f) => {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.45, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.45);
+      o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + 0.5);
+    };
+    const loop = () => { const n = ctx.currentTime; beat(n, 880); beat(n + 0.28, 1174.7); };
+    loop();
+    _alarmAudio = { ctx, iv: setInterval(loop, 1600) };
+  } catch (_) { _alarmAudio = null; }
+}
+function stopChime() {
+  if (!_alarmAudio) return;
+  try { clearInterval(_alarmAudio.iv); _alarmAudio.ctx.close(); } catch (_) {}
+  _alarmAudio = null;
+}
+
+function showAlarm(r) {
+  const when = new Date(r.when);
+  const hhmm = when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (r.sound !== false) startChime();
+
+  const close = () => { stopChime(); scrim.remove(); };
+  const snooze = (mins) => {
+    const rs = store.get('ott_reminders', []);
+    const it = rs.find((x) => x.id === r.id);
+    const next = new Date(Date.now() + mins * 60000).toISOString();
+    if (it) { it.when = next; it.status = 'pending'; }
+    else rs.push(Object.assign({}, r, { when: next, status: 'pending' }));
+    store.set('ott_reminders', rs);
+    close(); refreshPanel('reminder'); toast('Snoozed ' + mins + ' min');
+  };
+
+  const card = el('div', { className: 'alarm-card' },
+    el('div', { className: 'alarm-ring' }, el('span', {}, '\u23F0')),
+    el('div', { className: 'alarm-time' }, hhmm),
+    el('div', { className: 'alarm-date' }, when.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' })),
+    r.title ? el('h2', { className: 'alarm-title' }, r.title) : null,
+    r.text ? el('div', { className: 'alarm-note' }, r.text) : null,
+    r.number ? el('div', { className: 'alarm-sent' }, 'Also sent on WhatsApp to ' + r.number) : null,
+    el('div', { className: 'alarm-snooze' },
+      el('span', { className: 'muted', style: { fontSize: '12px', alignSelf: 'center' } }, 'Snooze'),
+      el('button', { className: 'btn small', onclick: () => snooze(5) }, '5 min'),
+      el('button', { className: 'btn small', onclick: () => snooze(10) }, '10 min'),
+      el('button', { className: 'btn small', onclick: () => snooze(30) }, '30 min')),
+    el('button', { className: 'btn primary block', onclick: close }, 'Dismiss'));
+
+  const scrim = el('div', { className: 'alarm-scrim' }, card);
+  document.body.append(scrim);
+  // Never let a ringing alarm run forever if nobody is at the machine.
+  setTimeout(stopChime, 120000);
 }
 function refreshPanel(id) { if (openFeatureId === id) { const f = FEATURES.find(x => x.id === id); if (f) openFeature(f); } }
 
@@ -1529,27 +1602,58 @@ RENDER.schedule = (b) => {
 
 // ================= Reminder feature =================
 RENDER.reminder = (b) => {
-  const number = el('input', { placeholder: 'Number to message (with country code)' });
-  const text = el('textarea', { placeholder: 'Reminder message' });
+  const title = el('input', { placeholder: 'e.g. Call Ravi about the renewal', maxLength: 60 });
+  const text = el('textarea', { placeholder: 'Notes shown on the alarm popup' });
   const when = el('input', { type: 'datetime-local' });
+  const repeat = el('select');
+  [['once', 'Once'], ['daily', 'Every day at this time']].forEach(([v, n]) => repeat.append(el('option', { value: v }, n)));
+  const number = el('input', { placeholder: 'Optional - also WhatsApp this number' });
+  const sound = chk(true);
   const list = el('div', { className: 'rules' });
+
   const draw = () => {
-    list.innerHTML = ''; const rs = store.get('ott_reminders', []).filter(r => r.accId === activeId).reverse();
-    if (!rs.length) list.append(el('div', { className: 'muted' }, 'No reminders.'));
-    rs.forEach(r => list.append(el('div', { className: 'qr-item' },
-      el('div', { className: 'txt' }, el('b', {}, new Date(r.when).toLocaleString()), el('div', { className: 'muted', style: { fontSize: '12px' } }, `${r.number || 'alert only'} · ${r.status}`)),
-      el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_reminders', store.get('ott_reminders', []).filter(x => x.id !== r.id)); draw(); } }, r.status === 'pending' ? 'Cancel' : 'Remove'))));
+    list.innerHTML = '';
+    const rs = store.get('ott_reminders', []).filter((r) => r.accId === activeId)
+      .sort((a, c) => new Date(a.when) - new Date(c.when));
+    if (!rs.length) { list.append(el('div', { className: 'muted' }, 'No reminders yet.')); return; }
+    rs.forEach((r) => {
+      const due = new Date(r.when);
+      const late = r.status === 'pending' && due < new Date();
+      list.append(el('div', { className: 'qr-item' },
+        el('div', { className: 'txt' },
+          el('b', {}, r.title || (r.text || '').slice(0, 40) || 'Reminder'),
+          el('div', { className: 'muted', style: { fontSize: '12px' } },
+            due.toLocaleString()
+            + (r.repeat === 'daily' ? '  . daily' : '')
+            + (r.number ? '  . WhatsApp ' + r.number : '')
+            + '  . ' + (late ? 'overdue' : r.status))),
+        el('button', { className: 'btn small', onclick: () => showAlarm(r) }, 'Preview'),
+        el('button', { className: 'btn small ghost', onclick: () => {
+          store.set('ott_reminders', store.get('ott_reminders', []).filter((x) => x.id !== r.id)); draw();
+        } }, r.status === 'pending' ? 'Cancel' : 'Remove')));
+    });
   };
-  b.append(el('div', { className: 'fp-note' }, 'At the set time this sends a WhatsApp message (if a number is given) and shows a desktop alert. Fires only while the app stays open.'),
-    lbl('Number (optional — leave blank for alert only)', number), lbl('Message', text), lbl('Remind at', when),
+
+  b.append(
+    el('div', { className: 'fp-note' }, 'A task reminder rings inside WA-CRM at the set time and shows your note, like an alarm. It can optionally WhatsApp someone too. Reminders fire while the app is open.'),
+    lbl('Task', title), lbl('Note', text),
+    el('div', { className: 'row' }, lbl('Remind at', when), lbl('Repeat', repeat)),
+    lbl('WhatsApp number (optional)', number),
+    chkRow(sound, 'Play alarm sound'),
     el('button', { className: 'btn primary', onclick: () => {
-      if (!text.value.trim()) return toast('Write a message', 'err'); if (!when.value) return toast('Pick a time', 'err');
-      const t = new Date(when.value).getTime(); if (isNaN(t) || t <= Date.now()) return toast('Pick a future time', 'err');
-      const rs = store.get('ott_reminders', []); rs.push({ id: 'r' + Date.now(), accId: activeId, number: digits(number.value), text: text.value.trim(), when: new Date(t).toISOString(), status: 'pending' });
-      store.set('ott_reminders', rs); number.value = text.value = ''; draw(); toast('Reminder set');
+      if (!title.value.trim() && !text.value.trim()) return toast('Add a task or note', 'err');
+      if (!when.value) return toast('Pick a time', 'err');
+      const ts = new Date(when.value).getTime();
+      if (isNaN(ts) || ts <= Date.now()) return toast('Pick a future time', 'err');
+      const rs = store.get('ott_reminders', []);
+      rs.push({ id: 'r' + Date.now(), accId: activeId, title: title.value.trim(), text: text.value.trim(),
+        number: digits(number.value), when: new Date(ts).toISOString(), repeat: repeat.value,
+        sound: sound.checked, status: 'pending' });
+      store.set('ott_reminders', rs);
+      title.value = text.value = number.value = ''; draw(); toast('Reminder set');
       try { if (Notification.permission === 'default') Notification.requestPermission(); } catch (_) {}
     } }, 'Set reminder'),
-    el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }), list);
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '6px 0' } }), list);
   draw();
 };
 
@@ -1576,27 +1680,74 @@ RENDER.grouputils = (b) => {
   }
 
   function manage() {
-    const sel = el('select'); const msg = el('textarea', { placeholder: 'Message to send to the selected group' }); const out = el('div', { className: 'log' });
-    box.append(lbl('Group', sel),
-      el('div', { className: 'row' }, el('button', { className: 'btn', onclick: async () => { const n = await loadGroupsInto(sel); if (n) toast(`${n} groups`); } }, 'Load groups'),
+    let picker = null, groups = [];
+    const msg = el('textarea', { placeholder: 'Message to send to every selected group' });
+    const att = attachControl('*'); att.node.style.display = 'flex';
+    const gap = el('input', { type: 'number', value: '6', min: '1', style: { maxWidth: '90px' } });
+    const holder = el('div', {});
+    const out = el('div', { className: 'log' });
+    const bar = el('div', { className: 'progress', style: { display: 'none' } });
+    const barI = el('div', { className: 'bar' }); bar.append(barI);
+
+    const load = async () => {
+      if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+      holder.innerHTML = '<div class="muted">Loading groups…</div>';
+      groups = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
+      holder.innerHTML = '';
+      if (!groups.length) { holder.append(el('div', { className: 'muted' }, 'No groups found.')); return; }
+      picker = checkList(groups);
+      holder.append(picker.node);
+      toast(groups.length + ' groups loaded');
+    };
+
+    box.append(
+      el('div', { className: 'row' },
+        el('button', { className: 'btn', onclick: load }, 'Load groups'),
         el('button', { className: 'btn', onclick: async () => {
-          const gid = sel.value; if (!gid) return toast('Pick a group', 'err');
-          const code = await waExec(`(async()=>{try{return await WPP.group.getInviteCode(${JSON.stringify(gid)})}catch(e){return ''}})()`).catch(() => '');
-          if (code) { const link = 'https://chat.whatsapp.com/' + code; navigator.clipboard.writeText(link); line(out, 'Invite: ' + link, 'ok'); toast('Invite link copied'); } else toast('Need admin or failed', 'err');
+          const sel = picker ? picker.selected() : [];
+          if (sel.length !== 1) return toast('Select exactly one group for an invite link', 'err');
+          const code = await waExec(`(async()=>{try{return await WPP.group.getInviteCode(${JSON.stringify(sel[0].jid)})}catch(e){return ''}})()`).catch(() => '');
+          if (code) { const link = 'https://chat.whatsapp.com/' + code; navigator.clipboard.writeText(link); line(out, 'Invite: ' + link, 'ok'); toast('Invite link copied'); }
+          else toast('Need admin, or failed', 'err');
         } }, 'Get invite link')),
-      lbl('Message to group', msg), quickInsert(msg),
-      el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: async () => {
-          const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!msg.value.trim()) return toast('Write a message', 'err');
-          const r = await sendToJid(gid, msg.value.trim());
-          line(out, r.ok ? '✓ Sent to group' : '✗ ' + (r.err || 'failed'), r.ok ? 'ok' : 'bad'); toast(r.ok ? 'Sent' : 'Failed', r.ok ? 'ok' : 'err');
-        } }, 'Send to group'),
+      lbl('Groups', holder),
+      lbl('Message', msg), quickInsert(msg), att.node,
+      el('div', { className: 'row' }, lbl('Delay between groups (seconds)', gap)),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn primary', onclick: async () => {
+          const sel = picker ? picker.selected() : [];
+          const file = att.get();
+          if (!sel.length) return toast('Select at least one group', 'err');
+          if (!msg.value.trim() && !file) return toast('Write a message or attach a file', 'err');
+          if (!confirm(`Send this post to ${sel.length} group(s)?`)) return;
+          const wait = Math.max(1, +gap.value || 6) * 1000;
+          bar.style.display = 'block'; barI.style.width = '0%';
+          let done = 0, ok = 0;
+          for (const g of sel) {
+            const r = file
+              ? await sendMediaToJid(g.jid, file.data, msg.value.trim(), file.name)
+              : await sendToJid(g.jid, msg.value.trim());
+            done++; if (r.ok) ok++;
+            line(out, (r.ok ? '✓ ' : '✗ ') + (g.name || g.jid) + (r.ok ? '' : ' — ' + (r.err || 'failed')), r.ok ? 'ok' : 'bad');
+            barI.style.width = Math.round((done / sel.length) * 100) + '%';
+            if (done < sel.length) await sleep(wait);
+          }
+          toast(`Posted to ${ok}/${sel.length} group(s)`, ok ? 'ok' : 'err');
+        } }, 'Post to selected groups'),
         el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: async () => {
-          const gid = sel.value; if (!gid) return toast('Pick a group', 'err'); if (!confirm('Leave this group?')) return;
-          const r = await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(gid)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
-          toast(r.ok ? 'Left group' : 'Failed', r.ok ? 'ok' : 'err'); if (r.ok) loadGroupsInto(sel);
-        } }, 'Leave group')),
-      out);
+          const sel = picker ? picker.selected() : [];
+          if (!sel.length) return toast('Select at least one group', 'err');
+          if (!confirm(`Leave ${sel.length} group(s)?`)) return;
+          for (const g of sel) {
+            const r = await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(g.jid)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+            line(out, (r.ok ? '✓ left ' : '✗ ') + (g.name || g.jid), r.ok ? 'ok' : 'bad');
+            await sleep(700);
+          }
+          load();
+        } }, 'Leave selected')),
+      bar, out);
   }
+
 
   function joiner() {
     const links = el('textarea', { placeholder: 'One WhatsApp group invite link per line\nhttps://chat.whatsapp.com/XXXX', style: { minHeight: '130px' } });
@@ -1753,7 +1904,7 @@ async function sendMediaToJid(jid, dataUrl, caption, filename) {
   return waExec(`(async()=>{try{await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
 function checkList(items, preselect) {
-  const all = el('input', { type: 'checkbox', style: { width: 'auto' } });
+  const all = chk(false);
   const head = el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '8px', fontWeight: '600' } }, all, `Select all (${items.length})`);
   const list = el('div', { className: 'checklist-body' });
   const rows = items.map(it => { const c = chk(!!(preselect && preselect.has(it.jid))); list.append(el('label', { className: 'checkrow' }, c, `${it.name || jidNumber(it.jid)} `, el('span', { className: 'muted', style: { fontSize: '11px' } }, jidNumber(it.jid)))); return { c, it }; });

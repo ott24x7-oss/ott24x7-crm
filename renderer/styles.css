@@ -423,3 +423,53 @@ input[type="range"]:active::-webkit-slider-thumb { filter: brightness(1.1); }
   .btn, .acct-btn, .btn:active, .acct-btn:active,
   input[type="checkbox"], input[type="checkbox"]::after { transition: none; transform: none; }
 }
+
+/* ---------- Alarm popup (task reminder) ----------
+   Glass overlay (it floats above everything) holding a neumorphic card with a
+   skeuomorphic bell. Deliberately hard to ignore but easy to dismiss. */
+.alarm-scrim {
+  position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 24px;
+  background: color-mix(in oklab, var(--bg) 70%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%);
+  animation: alarmIn 220ms var(--ease);
+}
+@keyframes alarmIn { from { opacity: 0; } to { opacity: 1; } }
+.alarm-card {
+  width: 380px; max-width: 94vw; text-align: center; padding: 30px 28px 24px;
+  border-radius: 22px; border: 1px solid var(--glass-brd); background: var(--panel);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--neu-hi),
+              0 0 60px -18px color-mix(in oklab, var(--green) 60%, transparent);
+  animation: alarmPop 260ms var(--ease);
+}
+@keyframes alarmPop { from { transform: scale(.94) translateY(8px); } to { transform: none; } }
+.alarm-ring {
+  width: 76px; height: 76px; margin: 0 auto 16px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 34px;
+  background: linear-gradient(180deg,
+    color-mix(in oklab, var(--green) 82%, white 18%), var(--green-2));
+  border: 1px solid color-mix(in oklab, var(--green-2) 70%, black);
+  box-shadow: inset 0 2px 0 color-mix(in oklab, white 45%, transparent),
+              inset 0 -2px 4px color-mix(in oklab, black 28%, transparent),
+              0 8px 20px -6px color-mix(in oklab, var(--green) 65%, transparent);
+  animation: alarmShake 1.6s ease-in-out infinite;
+}
+@keyframes alarmShake {
+  0%, 62%, 100% { transform: rotate(0); }
+  66% { transform: rotate(13deg); } 72% { transform: rotate(-11deg); }
+  78% { transform: rotate(8deg); }  84% { transform: rotate(-6deg); }
+  90% { transform: rotate(3deg); }
+}
+.alarm-time { font-size: 42px; font-weight: 800; letter-spacing: -1.6px; line-height: 1; font-variant-numeric: tabular-nums; }
+.alarm-date { color: var(--muted); font-size: 13px; margin-top: 5px; }
+.alarm-title { font-size: 19px; font-weight: 700; margin: 18px 0 0; letter-spacing: -.3px; }
+.alarm-note {
+  margin-top: 10px; color: var(--muted); font-size: 14.5px; line-height: 1.55;
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+  box-shadow: inset 2px 2px 6px var(--neu-lo), inset -1px -1px 4px var(--neu-hi);
+  white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
+}
+.alarm-sent { margin-top: 10px; font-size: 12.5px; color: var(--green-soft); }
+.alarm-snooze { display: flex; gap: 8px; justify-content: center; margin: 20px 0 14px; flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) {
+  .alarm-scrim, .alarm-card, .alarm-ring { animation: none; }
+}
