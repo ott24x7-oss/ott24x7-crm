@@ -99,7 +99,7 @@ function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList
 // ---- Auto-update wiring (registered at load so the popup event is never missed) ----
 let _updChecking = false;
 try {
-  ott.onUpdateAvailable(d => showUpdatePopup(d.version));
+  ott.onUpdateAvailable(d => { _updChecking = false; showUpdatePopup(d.version, d.manual); });
   ott.onUpdateProgress(d => setUpdateProgress(d.percent));
   ott.onUpdateDownloaded(() => setUpdateDownloaded());
   ott.onUpdateNone(() => { if (_updChecking) { toast('You’re on the latest version ✓'); _updChecking = false; } });
@@ -156,14 +156,21 @@ function lockApp(reason) {
 
 // ---- Auto-update popup ----
 let _upd = null;
-function showUpdatePopup(version) {
+function showUpdatePopup(version, manual) {
   if (_upd) return;
   const bar = el('div', { className: 'progress', style: { display: 'none', width: '100%' } }); const barI = el('div', { className: 'bar' }); bar.append(barI);
   const pct = el('div', { className: 'muted', style: { fontSize: '12px', display: 'none' } }, '0%');
-  const updBtn = el('button', { className: 'btn primary', onclick: () => { updBtn.disabled = true; updBtn.textContent = 'Downloading…'; bar.style.display = 'block'; pct.style.display = 'block'; ott.downloadUpdate(); } }, 'Update now');
+  // On macOS the app is not code-signed, so it cannot replace itself — open the download
+  // page instead of pretending an in-app update is running.
+  const updBtn = manual
+    ? el('button', { className: 'btn primary', onclick: () => { ott.downloadUpdate(); closeUpd(); } }, 'Download')
+    : el('button', { className: 'btn primary', onclick: () => { updBtn.disabled = true; updBtn.textContent = 'Downloading…'; bar.style.display = 'block'; pct.style.display = 'block'; ott.downloadUpdate(); } }, 'Update now');
   const box = el('div', { className: 'modal-box', style: { width: '380px', textAlign: 'center' } },
     el('h3', {}, 'Update available'),
-    el('div', { className: 'muted', style: { margin: '4px 0 8px' } }, 'Version ' + (version || '') + ' is ready — get the latest features and fixes.'),
+    el('div', { className: 'muted', style: { margin: '4px 0 8px' } },
+      'Version ' + (version || '') + (manual
+        ? ' is out. Download it and drag WA-CRM into Applications to replace this copy.'
+        : ' is ready — get the latest features and fixes.')),
     bar, pct,
     el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '8px' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), updBtn));
   const scrim = el('div', { className: 'modal-scrim' }, box);

@@ -187,9 +187,44 @@ ipcMain.handle('app:translate', async (_e, { text, tl }) => {
   }
 });
 
+// macOS refuses to auto-update an app that is not code-signed, so on darwin we check the
+// releases feed ourselves and send the user to the download page instead of failing.
+const RELEASES_API = 'https://api.github.com/repos/ott24x7-oss/ott24x7-crm-releases/releases/latest';
+const RELEASES_PAGE = 'https://github.com/ott24x7-oss/ott24x7-crm-releases/releases/latest';
+
+function newer(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map(Number);
+  const pb = String(b).replace(/^v/, '').split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0); }
+  return false;
+}
+
+async function checkManualUpdate() {
+  const r = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+  if (!r.ok) throw new Error('releases feed ' + r.status);
+  const latest = String((await r.json()).tag_name || '').replace(/^v/, '');
+  if (latest && newer(latest, app.getVersion())) {
+    win?.webContents.send('update:available', { version: latest, manual: true, url: RELEASES_PAGE });
+  } else {
+    win?.webContents.send('update:none');
+  }
+}
+
+function initManualUpdate() {
+  ipcMain.handle('update:check', () => checkManualUpdate().catch((e) => {
+    win?.webContents.send('update:error', { message: String((e && e.message) || e) });
+  }));
+  // The download and install handlers must still exist so the preload bridge is complete.
+  ipcMain.handle('update:download', () => shell.openExternal(RELEASES_PAGE));
+  ipcMain.handle('update:install', () => shell.openExternal(RELEASES_PAGE));
+  setTimeout(() => checkManualUpdate().catch(() => {}), 6000);
+  setInterval(() => checkManualUpdate().catch(() => {}), 6 * 3600 * 1000);
+}
+
 function initAutoUpdate() {
   // Only in a packaged build; checks the public releases repo for a newer version.
   if (!app.isPackaged) return;
+  if (process.platform === 'darwin') return initManualUpdate();
   try {
     const { autoUpdater } = require('electron-updater');
     autoUpdater.autoDownload = false;              // ask the user first (popup)

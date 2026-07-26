@@ -1,7 +1,7 @@
 {
   "name": "ott24x7-crm",
-  "version": "0.26.0",
-  "description": "WA-CRM \u2014 WhatsApp CRM/sender on the open-source WPPConnect engine",
+  "version": "0.27.0",
+  "description": "WA-CRM — WhatsApp CRM/sender on the open-source WPPConnect engine",
   "author": "WA-CRM",
   "main": "electron/main.js",
   "scripts": {
@@ -12,7 +12,7 @@
   "build": {
     "appId": "com.ott24x7.crm",
     "productName": "WA-CRM",
-    "artifactName": "WA-CRM-Setup-${version}.exe",
+    "artifactName": "WA-CRM-${version}-${os}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -26,7 +26,8 @@
       "icon": "assets/wa-crm.ico",
       "target": [
         "nsis"
-      ]
+      ],
+      "artifactName": "WA-CRM-Setup-${version}.exe"
     },
     "publish": [
       {
@@ -34,7 +35,33 @@
         "owner": "ott24x7-oss",
         "repo": "ott24x7-crm-releases"
       }
-    ]
+    ],
+    "mac": {
+      "icon": "assets/icon.png",
+      "category": "public.app-category.business",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "WA-CRM-${version}-${arch}.dmg"
+    }
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
