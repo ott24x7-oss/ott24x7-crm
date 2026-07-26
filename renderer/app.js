@@ -792,7 +792,7 @@ function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const replies = store.get('ott_quick', []).filter(q => q.pinned !== false); // only pinned show as chips
   const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
-    function insert(text){try{var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(box){box.focus();document.execCommand('insertText',false,text);}}catch(e){}}
+    function insert(text){var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(!box)return;box.focus();try{var dt=new DataTransfer();dt.setData('text/plain',String(text));box.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));return;}catch(e){}try{var lines=String(text).replace(/\\r\\n?/g,'\\n').split('\\n');for(var i=0;i<lines.length;i++){if(i>0)document.execCommand('insertLineBreak');if(lines[i])document.execCommand('insertText',false,lines[i]);}}catch(e){}}
     function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
     function render(){
       var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
