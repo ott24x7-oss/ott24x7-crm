@@ -264,3 +264,162 @@ label { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   *, .feature-panel, .toast, .modal-scrim { animation: none !important; transition: none !important; }
 }
+
+/* ============================================================================
+   MATERIAL LAYER
+   A deliberate three-material system, assigned by FUNCTION rather than by taste:
+     · Skeuomorphism  -> things you operate:  buttons, toggles, sliders
+     · Neumorphism    -> things that hold content: cards, containers, inputs
+     · Glassmorphism  -> things that float above: headers, toolbars, side panels,
+                         modals, overlays
+   Every value is derived from theme tokens (--neu-hi/--neu-lo/--glass/--btn-*),
+   so all 12 themes get the same treatment without any per-theme CSS.
+   ========================================================================== */
+
+/* ---------- GLASS: floating layers ---------- */
+.topbar,
+.tabs,
+.rail,
+.feature-panel,
+.fp-head,
+.modal-box,
+.toast,
+.trial-banner {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  backdrop-filter: blur(22px) saturate(170%);
+  border-color: var(--glass-brd);
+}
+.topbar {
+  border-bottom: 1px solid var(--glass-brd);
+  box-shadow: 0 1px 0 var(--neu-hi) inset, 0 6px 18px -12px var(--neu-lo);
+}
+.tabs { border-bottom: 1px solid var(--glass-brd); }
+.rail {
+  border-left: 1px solid var(--glass-brd);
+  box-shadow: inset 1px 0 0 var(--neu-hi);
+}
+.feature-panel,
+.modal-box {
+  border: 1px solid var(--glass-brd);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--neu-hi);
+}
+.fp-head { border-bottom: 1px solid var(--glass-brd); }
+.fp-body { background: transparent; }
+.toast,
+.trial-banner { box-shadow: var(--shadow-lg), inset 0 1px 0 var(--neu-hi); }
+.modal-scrim,
+.panel-scrim {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+/* ---------- NEUMORPHISM: content surfaces ---------- */
+.card,
+.fp-note,
+.qr-item,
+.rule {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 5px 5px 12px var(--neu-lo), -4px -4px 10px var(--neu-hi);
+}
+/* Sunken wells — things content sits *inside* */
+.log,
+.checklist-body,
+input, textarea, select {
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  box-shadow: inset 3px 3px 7px var(--neu-lo), inset -2px -2px 6px var(--neu-hi);
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--green);
+  box-shadow: inset 3px 3px 7px var(--neu-lo),
+              inset -2px -2px 6px var(--neu-hi),
+              0 0 0 3px color-mix(in oklab, var(--green) 22%, transparent);
+}
+
+/* ---------- SKEUOMORPHISM: operable controls ---------- */
+.btn, .acct-btn {
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--line-2);
+  box-shadow: inset 0 1px 0 var(--neu-hi),
+              inset 0 -1px 0 color-mix(in oklab, var(--neu-lo) 40%, transparent),
+              0 2px 4px -1px var(--neu-lo);
+  transition: filter var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
+              transform var(--fast) var(--ease);
+}
+.btn:hover, .acct-btn:hover { filter: brightness(1.09); }
+/* A real press: the control physically depresses. transform never reflows siblings. */
+.btn:active, .acct-btn:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 5px var(--neu-lo), inset 0 -1px 0 var(--neu-hi);
+  filter: brightness(.97);
+}
+.btn.primary, .tb-buy {
+  background: linear-gradient(180deg,
+    color-mix(in oklab, var(--green) 88%, white 12%),
+    var(--green-2));
+  border: 1px solid color-mix(in oklab, var(--green-2) 70%, black);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, white 45%, transparent),
+              inset 0 -1px 0 color-mix(in oklab, black 25%, transparent),
+              0 3px 8px -2px color-mix(in oklab, var(--green) 55%, transparent);
+}
+.btn.primary:active, .tb-buy:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 6px color-mix(in oklab, black 35%, transparent);
+}
+.btn.ghost {
+  background: transparent; box-shadow: none; border-color: var(--line-2);
+}
+.btn.ghost:hover { background: color-mix(in oklab, var(--text) 7%, transparent); filter: none; }
+.btn:disabled { box-shadow: none; filter: saturate(.4); transform: none; }
+
+/* Toggles — checkboxes become physical switches */
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 40px; height: 23px; border-radius: 999px; flex: none; cursor: pointer;
+  background: var(--sunken); border: 1px solid var(--line-2); padding: 0;
+  box-shadow: inset 2px 2px 5px var(--neu-lo), inset -1px -1px 3px var(--neu-hi);
+  position: relative; transition: background var(--fast) var(--ease);
+}
+input[type="checkbox"]::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--line-2);
+  box-shadow: 0 2px 4px var(--neu-lo), inset 0 1px 0 var(--neu-hi);
+  transition: transform var(--fast) var(--ease);
+}
+input[type="checkbox"]:checked {
+  background: linear-gradient(180deg, var(--green-2), var(--green));
+  border-color: color-mix(in oklab, var(--green-2) 70%, black);
+}
+input[type="checkbox"]:checked::after { transform: translateX(17px); }
+
+/* Sliders — a physical track and knob */
+input[type="range"] {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; height: 22px; background: transparent; border: none;
+  box-shadow: none; padding: 0; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 7px; border-radius: 999px; background: var(--sunken);
+  border: 1px solid var(--line); box-shadow: inset 2px 2px 5px var(--neu-lo);
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 19px; height: 19px; margin-top: -7px; border-radius: 50%;
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--line-2);
+  box-shadow: 0 2px 5px var(--neu-lo), inset 0 1px 0 var(--neu-hi);
+}
+input[type="range"]:active::-webkit-slider-thumb { filter: brightness(1.1); }
+
+/* The webview is a document surface — inset it so it reads as content, not chrome */
+.wa-stage { box-shadow: inset 0 2px 10px -4px var(--neu-lo); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .acct-btn, .btn:active, .acct-btn:active,
+  input[type="checkbox"], input[type="checkbox"]::after { transition: none; transform: none; }
+}

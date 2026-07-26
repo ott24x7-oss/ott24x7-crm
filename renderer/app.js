@@ -1769,7 +1769,7 @@ async function savedSet() {
 const PH_RESOLVER = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
 
 // ================= tiny utils =================
-function chk(checked) { return el('input', { type: 'checkbox', checked, style: { width: 'auto' } }); }
+function chk(checked) { return el('input', { type: 'checkbox', checked }); }
 function statusTag(s) {
   const colors = { new: '#3b82f6', contacted: '#f59e0b', followup: '#8b5cf6', proposal: '#0ea5e9', won: '#12b866', lost: '#e5484d' };
   const labels = { new: 'New', contacted: 'Contacted', followup: 'Follow-up', proposal: 'Proposal', won: 'Won', lost: 'Lost' };

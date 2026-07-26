@@ -19,50 +19,65 @@ const THEMES = [
 
 function themeTokens(t) {
   const g = t.g, a = t.a;
-  const gc = t.mono ? 0.004 : 0.016;   // ground chroma (graphite is near-neutral)
-  const ac = t.mono ? 0.03 : 0.18;     // accent chroma
+  // Ground chroma has to be high enough to actually SEE the hue at low lightness —
+  // 0.016 rendered every dark theme as the same near-black.
+  const gc = t.mono ? 0.006 : 0.038;
+  const ac = t.mono ? 0.03 : 0.18;
+  const r3 = function (n) { return Math.round(n * 1000) / 1000; };
 
   if (t.light) {
     return {
-      '--bg': 'oklch(97% .008 ' + g + ')',
-      '--stage': 'oklch(93% .01 ' + g + ')',
-      '--sunken': 'oklch(95% .008 ' + g + ')',
-      '--panel': 'oklch(100% 0 0)',
-      '--panel-2': 'oklch(96.5% .008 ' + g + ')',
-      '--rail': 'oklch(98.5% .006 ' + g + ')',
+      '--bg': 'oklch(96.5% ' + r3(gc * 0.28) + ' ' + g + ')',
+      '--stage': 'oklch(92% ' + r3(gc * 0.3) + ' ' + g + ')',
+      '--sunken': 'oklch(94% ' + r3(gc * 0.26) + ' ' + g + ')',
+      '--panel': 'oklch(99% ' + r3(gc * 0.14) + ' ' + g + ')',
+      '--panel-2': 'oklch(96% ' + r3(gc * 0.24) + ' ' + g + ')',
+      '--rail': 'oklch(97.5% ' + r3(gc * 0.2) + ' ' + g + ')',
       '--elev': 'oklch(100% 0 0)',
-      '--text': 'oklch(24% .02 ' + g + ')',
-      '--muted': 'oklch(48% .02 ' + g + ')',
-      '--muted-2': 'oklch(60% .015 ' + g + ')',
-      '--line': 'oklch(0% 0 0/.10)',
-      '--line-2': 'oklch(0% 0 0/.17)',
+      '--text': 'oklch(22% .03 ' + g + ')',
+      '--muted': 'oklch(46% .03 ' + g + ')',
+      '--muted-2': 'oklch(60% .02 ' + g + ')',
+      '--line': 'oklch(0% 0 0/.10)', '--line-2': 'oklch(0% 0 0/.16)',
       '--green': 'oklch(58% ' + ac + ' ' + a + ')',
       '--green-2': 'oklch(48% ' + ac + ' ' + (a + 3) + ')',
-      '--green-soft': 'oklch(42% ' + ac + ' ' + a + ')',
+      '--green-soft': 'oklch(40% ' + ac + ' ' + a + ')',
       '--wa': 'oklch(58% ' + ac + ' ' + a + ')',
+      // neumorphism: light source top-left
+      '--neu-hi': 'rgba(255,255,255,.95)',
+      '--neu-lo': 'rgba(0,0,0,.13)',
+      // glassmorphism
+      '--glass': 'oklch(100% 0 0/.62)',
+      '--glass-brd': 'oklch(0% 0 0/.09)',
+      '--btn-top': 'oklch(100% 0 0)',
+      '--btn-bot': 'oklch(94% ' + r3(gc * 0.3) + ' ' + g + ')',
       '--shadow': '0 1px 2px rgba(0,0,0,.10)',
-      '--shadow-lg': '0 20px 50px rgba(0,0,0,.16), 0 2px 8px rgba(0,0,0,.10)',
+      '--shadow-lg': '0 24px 60px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.10)',
     };
   }
   return {
-    '--bg': 'oklch(15% ' + gc + ' ' + g + ')',
-    '--stage': 'oklch(12% ' + gc + ' ' + g + ')',
-    '--sunken': 'oklch(12% ' + gc + ' ' + g + ')',
-    '--panel': 'oklch(20% ' + (gc + 0.002) + ' ' + g + ')',
-    '--panel-2': 'oklch(23% ' + (gc + 0.004) + ' ' + g + ')',
-    '--rail': 'oklch(17.5% ' + gc + ' ' + g + ')',
-    '--elev': 'oklch(22% ' + (gc + 0.003) + ' ' + g + ')',
-    '--text': 'oklch(97% .005 ' + a + ')',
-    '--muted': 'oklch(72% .02 ' + (g - 20) + ')',
-    '--muted-2': 'oklch(56% .02 ' + (g - 20) + ')',
-    '--line': 'oklch(100% 0 0/.08)',
-    '--line-2': 'oklch(100% 0 0/.14)',
+    '--bg': 'oklch(16% ' + gc + ' ' + g + ')',
+    '--stage': 'oklch(12.5% ' + r3(gc * 0.9) + ' ' + g + ')',
+    '--sunken': 'oklch(13% ' + r3(gc * 0.95) + ' ' + g + ')',
+    '--panel': 'oklch(21% ' + r3(gc * 1.05) + ' ' + g + ')',
+    '--panel-2': 'oklch(25% ' + r3(gc * 1.1) + ' ' + g + ')',
+    '--rail': 'oklch(18.5% ' + gc + ' ' + g + ')',
+    '--elev': 'oklch(24% ' + r3(gc * 1.08) + ' ' + g + ')',
+    '--text': 'oklch(96% .02 ' + a + ')',
+    '--muted': 'oklch(74% .035 ' + g + ')',
+    '--muted-2': 'oklch(58% .03 ' + g + ')',
+    '--line': 'oklch(100% 0 0/.09)', '--line-2': 'oklch(100% 0 0/.16)',
     '--green': 'oklch(72% ' + ac + ' ' + a + ')',
-    '--green-2': 'oklch(58% ' + (ac * 0.83).toFixed(3) + ' ' + (a + 3) + ')',
-    '--green-soft': 'oklch(86% ' + (ac * 0.72).toFixed(3) + ' ' + a + ')',
-    '--wa': 'oklch(82% ' + (ac * 1.2).toFixed(3) + ' ' + a + ')',
+    '--green-2': 'oklch(58% ' + r3(ac * 0.83) + ' ' + (a + 3) + ')',
+    '--green-soft': 'oklch(86% ' + r3(ac * 0.72) + ' ' + a + ')',
+    '--wa': 'oklch(82% ' + r3(ac * 1.2) + ' ' + a + ')',
+    '--neu-hi': 'oklch(100% 0 0/.055)',
+    '--neu-lo': 'oklch(0% 0 0/.55)',
+    '--glass': 'oklch(22% ' + r3(gc * 1.05) + ' ' + g + '/.62)',
+    '--glass-brd': 'oklch(100% 0 0/.10)',
+    '--btn-top': 'oklch(28% ' + r3(gc * 1.15) + ' ' + g + ')',
+    '--btn-bot': 'oklch(21% ' + r3(gc * 1.05) + ' ' + g + ')',
     '--shadow': '0 1px 2px rgba(0,0,0,.4)',
-    '--shadow-lg': '0 24px 60px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4)',
+    '--shadow-lg': '0 24px 60px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.45)',
   };
 }
 
