@@ -1,8 +1,8 @@
-// Central config for the ott24x7 CRM desktop app.
+// Central config for the WA-CRM desktop app.
 // Override any of these with environment variables at launch.
 module.exports = {
   // Your deployed license server (Railway). No trailing slash.
-  LICENSE_SERVER: process.env.LICENSE_SERVER || 'https://crm.ott24x7.com',
+  LICENSE_SERVER: process.env.LICENSE_SERVER || 'https://wa-crm.in',
 
   // Must match a product slug in the license server.
   PRODUCT_SLUG: process.env.PRODUCT_SLUG || 'ott24x7-crm',

@@ -24,8 +24,8 @@ function createWindow() {
     minWidth: 940,
     minHeight: 640,
     backgroundColor: '#0a0f14',
-    icon: path.join(__dirname, '..', 'assets', 'ott24x7.ico'),
-    title: 'ott24x7 CRM',
+    icon: path.join(__dirname, '..', 'assets', 'wa-crm.ico'),
+    title: 'WA-CRM',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
