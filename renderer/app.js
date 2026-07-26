@@ -214,8 +214,7 @@ async function enterApp() {
   renderTabs();
   if (accounts.length) switchAccount(accounts[0].id);
   else $('#waEmpty').style.display = 'flex';
-  setInterval(pollStatus, 2500);
-  setInterval(drainLeadQueues, 2500);
+  setInterval(pollTick, 3000); // status + lead/reply/command queues in one IPC round-trip
   setInterval(recheckLicense, 300000); // re-validate license every 5 min (suspend takes effect live)
   startScheduler();
   // Trigger an update check now that the app is loaded (listeners are attached at script load).
@@ -247,19 +246,25 @@ function createWebview(acc) {
   wv.setAttribute('partition', partOf(acc.id));
   wv.setAttribute('allowpopups', '');
   wv.setAttribute('useragent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
-  wv.style.display = 'none';
+  // Keep background accounts fully alive so switching to them is instant.
+  wv.setAttribute('webpreferences', 'backgroundThrottling=false');
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyWaTheme(acc.id); applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
 }
 
 function switchAccount(id) {
+  if (activeId === id) return;            // already active — do nothing
   activeId = id;
   $('#waEmpty').style.display = 'none';
-  document.querySelectorAll('#waStage webview').forEach(w => { w.style.display = w.dataset.acc === id ? 'flex' : 'none'; });
+  // Toggle a class only. Never touch display: hiding a <webview> destroys its GPU
+  // surface, so showing it again forces a full WhatsApp repaint (the switching lag).
+  document.querySelectorAll('#waStage webview').forEach(w => {
+    w.classList.toggle('is-active', w.dataset.acc === id);
+  });
   renderTabs();
 }
 function activeWv() { return activeId ? document.querySelector(`webview[data-acc="${activeId}"]`) : null; }
@@ -278,13 +283,36 @@ function renderTabs() {
 
 // per-account status
 const statusMap = {};
-async function pollStatus() {
-  const w = activeWv(); if (!w) return;
-  const expr = `(async()=>{ if(typeof WPP==='undefined')return{s:'load'}; try{ const a=await WPP.conn.isAuthenticated(); if(!a)return{s:'qr'}; let me=null; try{me=WPP.conn.getMyUserId()?.user}catch(_){} const r=(typeof WPP.conn.isMainReady==='function')?await WPP.conn.isMainReady():!!WPP.isReady; return{s:r?'connected':'sync',me}; }catch(e){return{s:'load'}} })()`;
-  let info; try { info = await w.executeJavaScript(expr); } catch { info = { s: 'load' }; }
+// ONE round-trip per tick: connection status + all three in-page queues.
+// (Was two separate executeJavaScript IPC calls every 2.5s.)
+const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[]};
+try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[];
+window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];o.leads=a;o.incoming=b;o.cmds=c;}catch(e){}
+try{if(typeof WPP==='undefined')return o;
+var au=await WPP.conn.isAuthenticated();if(!au){o.s='qr';return o;}
+try{o.me=WPP.conn.getMyUserId()&&WPP.conn.getMyUserId().user}catch(_){}
+var r=(typeof WPP.conn.isMainReady==='function')?await WPP.conn.isMainReady():!!WPP.isReady;
+o.s=r?'connected':'sync';}catch(e){}
+return o;})()`;
+
+let _pollBusy = false;
+async function pollTick() {
+  if (_pollBusy) return;                              // never stack round-trips
+  if (document.hidden) return;                        // window minimised/hidden — skip
+  const w = activeWv(); if (!w || !w.dataset.injected) return;
+  _pollBusy = true;
+  let info;
+  try { info = await w.executeJavaScript(POLL_EXPR); } catch { info = null; }
+  _pollBusy = false;
+  if (!info) return;
+
   const prev = statusMap[activeId];
   statusMap[activeId] = info.s;
-  if (prev !== info.s) renderTabs();
+  if (prev !== info.s) renderTabs();                  // only redraw tabs on real change
+
+  if (info.leads && info.leads.length) info.leads.forEach(saveLead);
+  if (info.incoming && info.incoming.length) markRepliedLeads(info.incoming);
+  if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
 }
 
 // ================= feature rail + panel =================
@@ -788,22 +816,35 @@ function chatFilter(name) {
 }
 
 // Inject clickable quick-reply chips just above the open chat's compose box (like WA CRM).
+// Match WhatsApp's own dark theme to the app's dark chrome — but ONLY if the user
+// has never set a theme preference themselves. Never overrides an explicit choice.
+function applyWaTheme(accId) {
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  wv.executeJavaScript(`(function(){try{if(localStorage.getItem('theme')==null){localStorage.setItem('theme','"dark"');}}catch(e){}})();void 0;`).catch(() => {});
+}
+
 function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const replies = store.get('ott_quick', []).filter(q => q.pinned !== false); // only pinned show as chips
   const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
     function insert(text){var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(!box)return;box.focus();try{var dt=new DataTransfer();dt.setData('text/plain',String(text));box.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));return;}catch(e){}try{var lines=String(text).replace(/\\r\\n?/g,'\\n').split('\\n');for(var i=0;i<lines.length;i++){if(i>0)document.execCommand('insertLineBreak');if(lines[i])document.execCommand('insertText',false,lines[i]);}}catch(e){}}
     function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
+    function sig(qs,r){var t='';for(var i=0;i<qs.length;i++){t+=(qs[i].data?'1':'0')+(qs[i].title||'')+'\\u0001';}
+      return t+'@'+Math.round(r.left)+','+Math.round(r.top)+','+Math.round(r.width);}
     function render(){
       var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
       if(!footer||!qs.length){if(bar)bar.style.display='none';return;}
-      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';document.body.appendChild(bar);}
       var r=footer.getBoundingClientRect();
+      var s=sig(qs,r);
+      /* Nothing moved and no chip changed -> zero DOM writes this tick. */
+      if(bar&&bar.getAttribute('data-sig')===s){if(bar.style.display==='none')bar.style.display='flex';return;}
+      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';document.body.appendChild(bar);}
+      bar.setAttribute('data-sig',s);
       bar.style.cssText='position:fixed;z-index:99999;display:flex;flex-wrap:wrap;gap:6px;left:'+(r.left+14)+'px;bottom:'+Math.max(8,(window.innerHeight-r.top+6))+'px;max-width:'+(r.width-28)+'px;';
       bar.innerHTML='';
       qs.forEach(function(q){var b=document.createElement('button');b.textContent=(q.data?'📎 ':'')+(q.title||(q.text||'').slice(0,15));b.title=q.text||'';b.style.cssText='background:#e7f7ee;border:1px solid #12b866;color:#0b7a3e;border-radius:16px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.14);';b.onmousedown=function(e){e.preventDefault();};b.onclick=function(e){e.preventDefault();e.stopPropagation();act(q);};bar.appendChild(b);});
     }
-    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,2000);}
+    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);}
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
@@ -932,7 +973,7 @@ function applyLeadButton(accId) {
   const js = `(function(){
     if(!window.__ott_lead_init){window.__ott_lead_init=true;window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];
       try{WPP.on('chat.new_message',function(m){try{if(!m)return;var body=(m.body||'');if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});return;}var u=m.from&&m.from.user;if(u)window.__ott_inq.push(u);}catch(e){}});}catch(e){}
-      setInterval(place,2500);
+      setInterval(place,4000);
     }
     function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){var u=(c.id&&c.id.user)||'';var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;window.__ott_leadq.push({number:u,name:nm});var b=document.getElementById('ott-lead-btn');if(b){b.textContent='\\u2713 Lead saved';setTimeout(function(){b.textContent='\\uFF0B Lead';},1500);}}}catch(e){}}
     function place(){var header=document.querySelector('#main header');if(!header||document.getElementById('ott-lead-btn'))return;var b=document.createElement('button');b.id='ott-lead-btn';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:#12b866;color:#fff;border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
@@ -940,14 +981,7 @@ function applyLeadButton(accId) {
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
-async function drainLeadQueues() {
-  const w = activeWv(); if (!w) return;
-  const data = await w.executeJavaScript('(function(){var a=window.__ott_leadq||[];var b=window.__ott_inq||[];var c=window.__ott_cmdq||[];window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];return {leads:a,incoming:b,cmds:c};})()').catch(() => null);
-  if (!data) return;
-  (data.leads || []).forEach(saveLead);
-  if ((data.incoming || []).length) markRepliedLeads(data.incoming);
-  (data.cmds || []).forEach(processInvoiceCommand);
-}
+// (queue draining is now folded into pollTick — one IPC round-trip instead of two)
 function parseInvoiceCommand(body) {
   const lines = String(body).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return null;
