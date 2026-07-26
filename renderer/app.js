@@ -9,7 +9,7 @@ const el = (t, p = {}, ...kids) => {
 const svg = (d) => { const s = document.createElement('span'); s.style.display = 'inline-flex'; s.innerHTML = d; return s.firstChild; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Keys mirrored to a durable file in userData so they survive every app update.
-const PERSIST_KEYS = ['ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs', 'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items'];
+const PERSIST_KEYS = ['ott_theme', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs', 'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -199,12 +199,14 @@ const partOf = (id) => `persist:wa-${id}`;
 
 async function enterApp() {
   $('#gate').classList.add('hidden'); $('#app').classList.remove('hidden');
+  try { applyTheme(store.get('ott_theme', 'emerald'), false); } catch (e) {}
   updateTrialBanner();
   await restorePersisted();
   engineSrc = await ott.getEngine();
   renderRail();
   $('#addAccountTop').onclick = addAccount;
   $('#addFirst').onclick = addAccount;
+  $('#themeBtn').onclick = openThemePicker;
   $('#deactivateBtn').onclick = async () => { if (confirm('Deactivate this device? You will need the key again.')) { await ott.licenseClear(); location.reload(); } };
   $('#fpClose').onclick = closeFeature;
   makeDraggable($('#featurePanel'), $('#featurePanel .fp-head'));
