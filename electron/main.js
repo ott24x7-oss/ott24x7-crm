@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
@@ -148,6 +148,36 @@ ipcMain.handle('app:importNumbers', async (_e, filePath) => {
 
 // Durable data store in userData (survives app updates — NSIS never touches userData).
 function dataDir() { const d = path.join(app.getPath('userData'), 'data'); fs.mkdirSync(d, { recursive: true }); return d; }
+// Backup to a real file the user chooses. A CRM's whole value is its history, and until
+// now that history only existed in this machine's localStorage.
+ipcMain.handle('backup:save', async (_e, json) => {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Save WA-CRM backup',
+    defaultPath: `wa-crm-backup-${stamp}.json`,
+    filters: [{ name: 'WA-CRM backup', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, json, 'utf8');
+    return { ok: true, path: filePath, bytes: Buffer.byteLength(json) };
+  } catch (e) { return { ok: false, err: String(e.message || e) }; }
+});
+
+ipcMain.handle('backup:open', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Open WA-CRM backup',
+    properties: ['openFile'],
+    filters: [{ name: 'WA-CRM backup', extensions: ['json'] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
+  try {
+    const raw = fs.readFileSync(filePaths[0], 'utf8');
+    if (raw.length > 80 * 1024 * 1024) return { ok: false, err: 'That file is too large to be a backup.' };
+    return { ok: true, json: raw, path: filePaths[0] };
+  } catch (e) { return { ok: false, err: String(e.message || e) }; }
+});
+
 ipcMain.handle('persist:load', (_e, key) => {
   try { const p = path.join(dataDir(), key.replace(/[^\w-]/g, '') + '.json'); if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}
   return null;

@@ -9,7 +9,11 @@ const el = (t, p = {}, ...kids) => {
 const svg = (d) => { const s = document.createElement('span'); s.style.display = 'inline-flex'; s.innerHTML = d; return s.firstChild; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Keys mirrored to a durable file in userData so they survive every app update.
-const PERSIST_KEYS = ['ott_theme', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs', 'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items'];
+// Everything the user would be upset to lose must be written to the durable file store
+// in userData, not just localStorage — localStorage does not survive a profile reset.
+const PERSIST_KEYS = ['ott_theme', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
+  'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items',
+  'ott_reminders', 'ott_schedule', 'ott_sig'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -38,6 +42,7 @@ function downloadCsv(name, rows, cols) {
 const digits = (s) => s.replace(/\D/g, '');
 
 const IC = {
+  save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v13"/></svg>',
   broadcast: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
   bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4M8 4h8"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
@@ -78,6 +83,7 @@ const FEATURES = [
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
   { id: 'translate', name: 'Message Translation', icon: IC.languages, impl: true },
   { id: 'signature', name: 'Message Signature', icon: IC.pen, impl: true },
+  { id: 'backup', name: 'Backup & Restore', icon: IC.save, impl: true },
 ];
 
 // ================= boot / license =================
@@ -345,8 +351,12 @@ function renderRail() {
   });
 }
 let openFeatureId = null;
+// Features that do not touch WhatsApp at all. Backup in particular must work on a fresh
+// machine, before any account has been connected — that is exactly when you restore.
+const NO_ACCOUNT_NEEDED = new Set(['backup']);
+
 function openFeature(f) {
-  if (!activeWv()) return toast('Add a WhatsApp account first', 'err');
+  if (!NO_ACCOUNT_NEEDED.has(f.id) && !activeWv()) return toast('Add a WhatsApp account first', 'err');
   const panel = $('#featurePanel');
   const wasHidden = panel.classList.contains('hidden');
   openFeatureId = f.id;
@@ -1941,6 +1951,123 @@ function typeTag(t) {
   return el('span', { style: { background: c + '22', color: c, padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' } }, t || 'new');
 }
 function chkRow(input, label) { return el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, input, label); }
+
+// ================= Backup & Restore =================
+// One file format shared with the WA-CRM Chrome extension, so a backup taken on either
+// side restores into the other. Desktop keys are ott_*, the extension's are wa_*; the
+// map below is what makes them interchangeable.
+const BACKUP_MAP = [
+  ['ott_leads', 'wa_leads', 'Leads'],
+  ['ott_quick', 'wa_quick', 'Quick replies'],
+  ['ott_invoice_cfg', 'wa_business', 'Business details'],
+  ['ott_invoices', null, 'Invoices'],
+  ['ott_invoice_items', null, 'Saved invoice items'],
+  ['ott_reminders', 'wa_reminders', 'Reminders'],
+  ['ott_schedule', 'wa_scheduled', 'Scheduled messages'],
+  ['ott_lead_seqs', 'wa_funnels', 'Follow-up sequences'],
+  ['ott_offers', null, 'Auto offer posts'],
+  ['ott_sig', null, 'Message signature'],
+];
+const bkCount = (v) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : (v ? 1 : 0)));
+
+function collectBackup() {
+  const data = {}; const compat = {};
+  for (const [dk, wk] of BACKUP_MAP) {
+    const v = store.get(dk, null);
+    if (v == null) continue;
+    data[dk] = v;
+    if (wk) compat[wk] = v;
+  }
+  return {
+    app: 'WA-CRM', kind: 'backup', version: 1, platform: 'desktop',
+    exportedAt: new Date().toISOString(), data, compat,
+  };
+}
+
+// Accept a file written by either product.
+function readBackup(payload) {
+  if (!payload || payload.app !== 'WA-CRM' || (!payload.data && !payload.compat)) return null;
+  const src = payload.data || {};
+  const ext = payload.compat || payload.data || {};
+  const out = {};
+  for (const [dk, wk] of BACKUP_MAP) {
+    if (dk in src) out[dk] = src[dk];
+    else if (wk && wk in ext) out[dk] = ext[wk];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function bkMerge(key, incoming) {
+  const cur = store.get(key, Array.isArray(incoming) ? [] : null);
+  if (Array.isArray(cur) && Array.isArray(incoming)) {
+    const idOf = (x) => String((x && (x.number || x.id || x.title || x.name)) || JSON.stringify(x));
+    const seen = new Set(cur.map(idOf));
+    return cur.concat(incoming.filter((x) => !seen.has(idOf(x))));
+  }
+  if (cur && typeof cur === 'object' && incoming && typeof incoming === 'object') return Object.assign({}, cur, incoming);
+  return incoming;
+}
+
+RENDER.backup = (b) => {
+  const stats = el('div', { className: 'log', style: { maxHeight: '220px' } });
+  BACKUP_MAP.forEach(([dk, , label]) => {
+    line(stats, `${label}: ${bkCount(store.get(dk, null))}`);
+  });
+
+  const msg = el('div', { className: 'muted', style: { fontSize: '12.5px', minHeight: '20px', marginTop: '10px' } });
+
+  const doExport = async () => {
+    const json = JSON.stringify(collectBackup(), null, 2);
+    const r = await ott.backupSave(json);
+    if (!r || r.canceled) return;
+    if (r.ok) {
+      msg.textContent = `Saved to ${r.path} (${Math.max(1, Math.round(r.bytes / 1024))} KB).`;
+      toast('Backup saved');
+    } else {
+      msg.textContent = 'Could not save: ' + (r.err || 'unknown error');
+    }
+  };
+
+  const doImport = async (mode) => {
+    const f = await ott.backupOpen();
+    if (!f || f.canceled) return;
+    if (!f.ok) { msg.textContent = 'Could not read that file: ' + (f.err || ''); return; }
+    let payload;
+    try { payload = JSON.parse(f.json); } catch (e) { msg.textContent = 'That file is not a WA-CRM backup.'; return; }
+    const incoming = readBackup(payload);
+    if (!incoming) { msg.textContent = 'That file is not a WA-CRM backup.'; return; }
+
+    const summary = BACKUP_MAP.filter(([dk]) => dk in incoming)
+      .map(([dk, , label]) => `${label}: ${bkCount(incoming[dk])}`).join('\n');
+    const where = payload.platform === 'desktop' ? 'the desktop app' : 'the Chrome extension';
+    const verb = mode === 'replace' ? 'REPLACE everything currently stored' : 'ADD to what is already stored';
+    if (!confirm(`Backup from ${where}, taken ${String(payload.exportedAt || '').slice(0, 10)}.\n\n${summary}\n\nThis will ${verb}. Continue?`)) return;
+
+    for (const [dk] of BACKUP_MAP) {
+      if (!(dk in incoming)) continue;
+      store.set(dk, mode === 'replace' ? incoming[dk] : bkMerge(dk, incoming[dk]));
+    }
+    msg.textContent = 'Restored.';
+    toast('Backup restored');
+    refreshPanel('backup');
+  };
+
+  b.append(
+    el('div', { className: 'muted', style: { fontSize: '12.5px', marginBottom: '14px', lineHeight: '1.6' } },
+      'Your leads, invoices and saved replies live on this computer. Export a backup before '
+      + 'changing machine, then import it on the new one. The same file works in the WA-CRM '
+      + 'Chrome extension, and a backup taken there restores here.'),
+    lbl('What is stored right now', stats),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn primary', onclick: doExport }, 'Save a backup file'),
+      el('button', { className: 'btn ghost', onclick: () => doImport('merge') }, 'Merge from a file'),
+      el('button', { className: 'btn ghost', onclick: () => doImport('replace') }, 'Replace from a file')),
+    msg,
+    el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '16px', lineHeight: '1.6' } },
+      'Your licence key is not included. A licence belongs to the machine it was activated on '
+      + '— enter your key on the new computer and this data will be waiting.'));
+};
+
 function lbl(t, c) { return el('label', {}, t, c); }
 function line(box, text, cls) { const s = el('span', cls ? { className: cls } : {}); s.textContent = text + '\n'; box.append(s); box.scrollTop = box.scrollHeight; }
 function quickInsert(target) {
