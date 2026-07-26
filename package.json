@@ -57,10 +57,11 @@
       ],
       "identity": null,
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "artifactName": "WA-CRM-${version}-mac-${arch}.${ext}"
     },
     "dmg": {
-      "artifactName": "WA-CRM-${version}-${arch}.dmg"
+      "artifactName": "WA-CRM-${version}-mac-${arch}.dmg"
     }
   },
   "devDependencies": {

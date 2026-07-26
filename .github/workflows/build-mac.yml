@@ -43,6 +43,16 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false' # unsigned; see header for how to sign
         run: npx electron-builder --mac --publish never
 
+      # wa-crm.in links to fixed filenames so the download URLs survive a version bump,
+      # the same way WA-CRM-Setup.exe does on Windows.
+      - name: Add stable-name copies
+        run: |
+          cd release
+          for arch in arm64 x64; do
+            src=$(ls *mac-$arch.dmg 2>/dev/null | head -1)
+            [ -n "$src" ] && cp "$src" "WA-CRM-mac-$arch.dmg" && echo "$src -> WA-CRM-mac-$arch.dmg"
+          done
+
       - name: List artifacts
         run: ls -lh release/ | grep -Ei 'dmg|zip' || ls -lh release/
 
