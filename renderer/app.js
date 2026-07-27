@@ -878,13 +878,12 @@ function applyQuickReplies(accId) {
     function css(){
       if(document.getElementById('ott-qr-css'))return;
       var s=document.createElement('style');s.id='ott-qr-css';
-      /* z-index 100, deliberately modest. At 99999 this sat above WhatsApp's own attach and
-         emoji menus, so a click meant for Document or Photos landed on us instead and
-         WhatsApp closed the menu as a click-outside. Sitting in WhatsApp's own band lets its
-         popups render on top and take their own clicks, with no guessing about their markup.
-         pointer-events on the container means the gaps between chips never intercept. */
-      s.textContent='#ott-qr-bar{position:fixed;z-index:100;pointer-events:none;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}'
-        +'.ott-qr-chip{pointer-events:auto}'
+      /* No position and no z-index: the dock sits in WhatsApp's own layout, so every
+         positioned thing WhatsApp draws — attach menu, emoji picker, tooltips — paints
+         above it and keeps its clicks. Floating here could not be made to work: any
+         z-index high enough to be visible also covered those menus. */
+      s.textContent='#ott-dock{display:flex;align-items:center;gap:8px;padding:4px 16px 0;flex:0 0 auto}'
+        +'#ott-qr-bar{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}'
         +'#ott-qr-bar::-webkit-scrollbar{display:none}'
         +'.ott-qr-chip{flex:none;cursor:pointer;height:30px;padding:0 13px;border-radius:15px;display:inline-flex;align-items:center;gap:6px;color:#12a054;font:600 12px Inter,system-ui,-apple-system,sans-serif;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.96);border:1px solid rgba(9,30,22,.14);box-shadow:0 1px 2px rgba(11,20,26,.14),0 4px 12px -6px rgba(11,20,26,.3);transition:background .16s cubic-bezier(.2,0,0,1),color .16s cubic-bezier(.2,0,0,1),transform .16s cubic-bezier(.2,0,0,1)}'
         +'.ott-qr-chip:hover{color:#fff;background:linear-gradient(180deg,#2ee178 0%,#12a054 100%);transform:translateY(-1px)}'
@@ -901,45 +900,37 @@ function applyQuickReplies(accId) {
       b.onclick=function(e){e.preventDefault();e.stopPropagation();fn();};
       return b;
     }
-    function sig(qs,r){var t='';for(var i=0;i<qs.length;i++){t+=(qs[i].data?'1':'0')+(qs[i].title||'')+'\\u0001';}
-      return t+'@'+Math.round(r.left)+','+Math.round(r.top)+','+Math.round(r.width);}
+    function sig(qs){var t='';for(var i=0;i<qs.length;i++){t+=(qs[i].data?'1':'0')+(qs[i].title||'')+'\\u0001';}return t;}
     function render(){
-      var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
+      var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
       /* Render the bar even with nothing saved: an empty strip hides the feature, so the
          "add" chip is the only way a new user discovers quick replies exist. */
-      var hide=function(){if(bar)bar.style.display='none';window.__ottReserve('qr',0);};
-      if(!footer){hide();return;}
-      var r=footer.getBoundingClientRect();
-      if(r.width<320){hide();return;}
-      /* Same collision as the widget: the attach and emoji menus open right here. */
-      var bh=(bar&&bar.offsetHeight)||34;
-      if(window.__ottMenuOpen({left:r.left+14,right:r.right-14,top:r.top-bh-6,bottom:r.top-6})){hide();return;}
-      var s=sig(qs,r);
-      /* Nothing moved and no chip changed -> zero DOM writes this tick. Still re-assert the
-         reserved space: WhatsApp drops our padding whenever it re-renders the panel. */
-      if(bar&&bar.getAttribute('data-sig')===s){
+      var hide=function(){if(bar)bar.style.display='none';};
+      var dock=window.__ottDock();
+      /* No conversation open -> no dock to sit in. */
+      if(!dock){hide();return;}
+      var s=sig(qs);
+      /* Nothing changed -> zero DOM writes this tick. The dock call above still re-seats
+         the row after a WhatsApp re-render, which is the part that must run every time. */
+      if(bar&&bar.parentNode===dock&&bar.getAttribute('data-sig')===s){
         if(bar.style.display==='none')bar.style.display='flex';
-        window.__ottReserve('qr',bh+6);
         return;
       }
       css();
-      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';bar.setAttribute('role','toolbar');bar.setAttribute('aria-label','Quick replies');document.body.appendChild(bar);}
-      bar.setAttribute('data-sig',s);
-      /* All layout now comes from the stylesheet, so wipe any inline leftovers — an
-         older build positioned this with bottom/max-width, which would fight top/width. */
+      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';bar.setAttribute('role','toolbar');bar.setAttribute('aria-label','Quick replies');}
+      /* All layout comes from the stylesheet now; an older build left inline fixed
+         positioning behind, which would fight the dock. */
       bar.removeAttribute('style');
-      bar.style.left=(r.left+14)+'px';
-      bar.style.width=Math.max(200,r.width-28)+'px';
+      if(bar.parentNode!==dock)dock.appendChild(bar);
+      bar.setAttribute('data-sig',s);
       bar.innerHTML='';
       if(!qs.length){bar.appendChild(chip('+  Add a quick reply','Set up one-tap replies','ott-qr-add',manage));}
       else{
         qs.forEach(function(q){bar.appendChild(chip((q.data?'📎 ':'')+(q.title||(q.text||'').slice(0,20)),q.text||'','',function(){act(q);}));});
         bar.appendChild(chip('+','Manage quick replies','ott-qr-add',manage));
       }
-      /* Sit flush above the composer, measured after layout so the height is real. */
-      var hgt=bar.offsetHeight;
-      bar.style.top=Math.round(r.top-hgt-6)+'px';
-      window.__ottReserve('qr',hgt+6);
+      /* In flow now, so the conversation shrinks by itself — nothing to reserve. */
+      window.__ottReserve('qr',0);
     }
     function manage(){(window.__ott_actq=window.__ott_actq||[]).push({op:'quick'});}
     render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);window.addEventListener('resize',render);window.__ottOnMenu(render);}
@@ -1104,10 +1095,11 @@ function applyChatWidget(accId) {
     function css(){
       if(document.getElementById('ott-w-css'))return;
       var s=document.createElement('style'); s.id='ott-w-css';
-      /* See the note on #ott-qr-bar: a modest z-index keeps WhatsApp's own menus clickable. */
-      s.textContent='#ott-w{position:fixed;z-index:101;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
-      +'#ott-w .a,#ott-w .h{pointer-events:auto}'
-      +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1)}'
+      /* The handle rides in the dock, in flow, so WhatsApp's menus paint above it. Only the
+         action list floats, and only while the user has it open — at that moment it is the
+         thing they just asked for, so it is allowed to sit on top. */
+      s.textContent='#ott-w{position:relative;flex:0 0 auto;display:flex;align-items:center}'
+      +'#ott-w .acts{position:absolute;left:0;bottom:calc(100% + 8px);z-index:2147482000;display:flex;flex-direction:column;gap:6px;opacity:0;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1)}'
       +'#ott-w.open .acts{opacity:1;pointer-events:auto;transform:none}'
       +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'
       +'font:600 12.5px Inter,-apple-system,"Segoe UI",sans-serif;color:#12a054;background:linear-gradient(180deg,#fff 0%,#f2f6f4 100%);'
@@ -1135,7 +1127,6 @@ function applyChatWidget(accId) {
       var h=document.createElement('button'); h.className='h'; h.type='button'; h.title='WA-CRM actions'; h.textContent='WA';
       h.onclick=function(e){e.preventDefault();e.stopPropagation();w.classList.toggle('open');};
       w.appendChild(acts); w.appendChild(h);
-      document.body.appendChild(w);
       document.addEventListener('click',function(e){if(!w.contains(e.target))w.classList.remove('open');},true);
       document.addEventListener('keydown',function(e){if(e.key==='Escape')w.classList.remove('open');});
       return w;
@@ -1153,42 +1144,17 @@ function applyChatWidget(accId) {
         window.__ott_actq.push({op:op,number:u,name:nm});
       }catch(e){}
     }
-    // Anchor to the composer so the widget sits inside the conversation at any width and
-    // never lands on WhatsApp's own left rail.
+    // The handle lives in the dock — an in-flow row between the message list and the
+    // composer — so it can never cover a message or steal a click from WhatsApp's menus.
     function place(){
       var w=build();
-      var main=document.querySelector('#main');
-      if(!main){w.style.display='none';return;}
-      var r=main.getBoundingClientRect();
-      if(r.width<320){w.style.display='none';return;}
-      /* WhatsApp's own menus (attach, emoji, context) open over the composer — exactly
-         where this sits. Ours is on a higher layer, so it would swallow their clicks.
-         Stand down while any of them is open. */
-      var f=main.querySelector('footer'); var fr=f?f.getBoundingClientRect():null;
-      var bottom=(fr&&fr.height>20)?fr.top:r.bottom;
-      /* The quick-reply strip occupies the same left edge just above the composer, and we
-         sit on a higher layer — so without this the handle covered the first chips and ate
-         their clicks. Stack above the strip whenever it is showing. */
-      var qb=document.getElementById('ott-qr-bar');
-      if(qb&&qb.style.display!=='none'){
-        var qr=qb.getBoundingClientRect();
-        if(qr.height>0)bottom=Math.min(bottom,qr.top-8);
-      }
-      var h=w.offsetHeight||250;
-      var left=Math.round(r.left+14), top=Math.round(Math.max(r.top+8,bottom-h-14));
-      /* Collapsed, the action column is still laid out (opacity 0, no pointer events), so
-         w's own box is ~250px of mostly nothing. Test the handle instead, or a tall menu
-         overlapping only the invisible part would hide the widget for no reason. */
-      var hit=w.querySelector('.h'), hh=(hit&&hit.offsetHeight)||42, hw=(hit&&hit.offsetWidth)||42;
-      var open=w.className.indexOf('open')>-1;
-      var box=open?{left:left,top:top,right:left+(w.offsetWidth||220),bottom:top+h}
-                  :{left:left,top:top+h-hh,right:left+hw,bottom:top+h};
-      if(window.__ottMenuOpen(box)){w.style.display='none';window.__ottReserve('w',0);return;}
+      var dock=window.__ottDock();
+      /* No conversation open -> no dock to sit in. */
+      if(!dock){w.style.display='none';window.__ottReserve('w',0);return;}
       w.style.display='flex';
-      w.style.left=left+'px';
-      w.style.top=top+'px';
-      /* Only the handle is ever visible when closed, so that is all we reserve. */
-      window.__ottReserve('w',hh+10);
+      /* First child, so the handle leads the row and the chips follow it. */
+      if(w.parentNode!==dock||dock.firstChild!==w)dock.insertBefore(w,dock.firstChild);
+      window.__ottReserve('w',0);
     }
     place(); setInterval(place,1200); window.addEventListener('resize',place);
     /* A 1.2s poll would leave the menu blocked for up to a second, which reads as
@@ -2928,6 +2894,27 @@ const MENU_GUARD = `window.__ottMenuOpen=window.__ottMenuOpen||function(box){
    cover the newest messages — the one place the user is actually reading. Padding the
    message scroller reserves that space instead, so WhatsApp scrolls its own content clear
    of us. Each caller registers its own height and the total is applied once. */
+/* A strip that sits IN WhatsApp's layout, between the message list and the composer,
+   rather than floating over it.
+   Floating meant picking a z-index, and there is no winning value: high enough to be
+   visible put us over WhatsApp's attach menu and tooltips so they stopped taking clicks,
+   and low enough to clear them put us behind the conversation. An element in normal flow
+   with no positioning and no z-index paints beneath every positioned element WhatsApp
+   has, so its menus and tooltips always win, and it occupies real space so it can never
+   cover a message. No assumptions about WhatsApp's markup either way. */
+window.__ottDock=window.__ottDock||function(){
+  var main=document.querySelector('#main'); if(!main)return null;
+  var footer=main.querySelector('footer'); if(!footer||!footer.parentNode)return null;
+  var d=document.getElementById('ott-dock');
+  if(!d){d=document.createElement('div');d.id='ott-dock';}
+  /* WhatsApp re-renders #main and drops our node, so re-seat it whenever it has been
+     removed or has drifted away from its slot just above the composer. */
+  if(d.parentNode!==footer.parentNode||d.nextElementSibling!==footer){
+    try{footer.parentNode.insertBefore(d,footer);}catch(e){return null;}
+  }
+  return d;
+};
+
 /* Cached: this runs on every DOM mutation, and #main holds thousands of divs once a
    conversation is loaded. Re-scanning each time made WhatsApp itself sluggish. */
 window.__ottScroller=window.__ottScroller||function(){
