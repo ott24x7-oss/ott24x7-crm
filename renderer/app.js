@@ -851,6 +851,7 @@ function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const replies = store.get('ott_quick', []).filter(q => q.pinned !== false); // only pinned show as chips
   const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
+    ${MENU_GUARD}
     function insert(text){var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(!box)return;box.focus();try{var dt=new DataTransfer();dt.setData('text/plain',String(text));box.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));return;}catch(e){}try{var lines=String(text).replace(/\\r\\n?/g,'\\n').split('\\n');for(var i=0;i<lines.length;i++){if(i>0)document.execCommand('insertLineBreak');if(lines[i])document.execCommand('insertText',false,lines[i]);}}catch(e){}}
     function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
     /* One stylesheet instead of a cssText string per chip — hover and focus states are
@@ -884,6 +885,9 @@ function applyQuickReplies(accId) {
       if(!footer){if(bar)bar.style.display='none';return;}
       var r=footer.getBoundingClientRect();
       if(r.width<320){if(bar)bar.style.display='none';return;}
+      /* Same collision as the widget: the attach and emoji menus open right here. */
+      var bh=(bar&&bar.offsetHeight)||34;
+      if(window.__ottMenuOpen({left:r.left+14,right:r.right-14,top:r.top-bh-6,bottom:r.top-6})){if(bar)bar.style.display='none';return;}
       var s=sig(qs,r);
       /* Nothing moved and no chip changed -> zero DOM writes this tick. */
       if(bar&&bar.getAttribute('data-sig')===s){if(bar.style.display==='none')bar.style.display='flex';return;}
@@ -905,7 +909,7 @@ function applyQuickReplies(accId) {
       bar.style.top=Math.round(r.top-bar.offsetHeight-6)+'px';
     }
     function manage(){(window.__ott_actq=window.__ott_actq||[]).push({op:'quick'});}
-    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);window.addEventListener('resize',render);}
+    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);window.addEventListener('resize',render);window.__ottOnMenu(render);}
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
@@ -1054,6 +1058,7 @@ function applyChatWidget(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const js = `(function(){
     if(window.__ott_widget_init)return; window.__ott_widget_init=true;
+    ${MENU_GUARD}
     ${PH_RESOLVER}
     window.__ott_actq=window.__ott_actq||[];
     var A=[['deal','Deal done','M20.6 13.4 12 22l-9-9V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01'],
@@ -1121,13 +1126,22 @@ function applyChatWidget(accId) {
       if(!main){w.style.display='none';return;}
       var r=main.getBoundingClientRect();
       if(r.width<320){w.style.display='none';return;}
+      /* WhatsApp's own menus (attach, emoji, context) open over the composer — exactly
+         where this sits. Ours is on a higher layer, so it would swallow their clicks.
+         Stand down while any of them is open. */
       var f=main.querySelector('footer'); var fr=f?f.getBoundingClientRect():null;
       var bottom=(fr&&fr.height>20)?fr.top:r.bottom;
+      var h=w.offsetHeight||250;
+      var left=Math.round(r.left+14), top=Math.round(Math.max(r.top+8,bottom-h-14));
+      if(window.__ottMenuOpen({left:left,top:top,right:left+(w.offsetWidth||220),bottom:top+h})){w.style.display='none';return;}
       w.style.display='flex';
-      w.style.left=Math.round(r.left+14)+'px';
-      w.style.top=Math.round(Math.max(r.top+8,bottom-(w.offsetHeight||250)-14))+'px';
+      w.style.left=left+'px';
+      w.style.top=top+'px';
     }
     place(); setInterval(place,1200); window.addEventListener('resize',place);
+    /* A 1.2s poll would leave the menu blocked for up to a second, which reads as
+       "the button does nothing". React to the DOM change instead. */
+    window.__ottOnMenu(place);
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
@@ -2770,6 +2784,46 @@ async function savedSet() {
   return new Set(arr);
 }
 // Injected resolver: WID -> real phone number, '' for privacy LIDs that can't be resolved.
+// Injected into the webview and shared by the chat widget and the quick-reply bar.
+//
+// Both float over the bottom of the conversation on a layer above WhatsApp's own UI, so
+// when WhatsApp opens the attach menu, emoji picker or a context menu in that same space,
+// our elements sit on top and eat the clicks — the menu items look dead. __ottMenuOpen()
+// reports whether one of those surfaces is up so callers can stand down, and __ottOnMenu()
+// fires a callback as soon as the DOM changes rather than on the next poll.
+const MENU_GUARD = `window.__ottMenuOpen=window.__ottMenuOpen||function(box){
+  try{
+    var sel='[role="menu"],[role="dialog"],[role="listbox"],[data-animate-dropdown-in="true"],[data-animate-modal-body="true"]';
+    var ns=document.querySelectorAll(sel);
+    for(var i=0;i<ns.length;i++){
+      var n=ns[i];
+      /* Skip our own surfaces. */
+      if(n.id&&n.id.indexOf('ott-')===0)continue;
+      if(n.closest&&n.closest('#ott-w,#ott-qr-bar'))continue;
+      var r=n.getBoundingClientRect();
+      if(r.width<60||r.height<60)continue;
+      /* An element spanning almost the whole viewport is the app shell, not a popup. */
+      if(r.width>innerWidth*0.9&&r.height>innerHeight*0.9)continue;
+      /* Only stand down for something that actually covers us — an unrelated dialog
+         elsewhere on screen is no reason to disappear. */
+      if(!box)return true;
+      if(r.left<box.right&&r.right>box.left&&r.top<box.bottom&&r.bottom>box.top)return true;
+    }
+  }catch(e){}
+  return false;
+};
+window.__ottOnMenu=window.__ottOnMenu||function(fn){
+  var cbs=window.__ottMenuCbs=window.__ottMenuCbs||[];
+  cbs.push(fn);
+  if(window.__ottMenuObs)return;
+  var t=0;
+  var fire=function(){clearTimeout(t);t=setTimeout(function(){cbs.forEach(function(f){try{f();}catch(e){}});},40);};
+  window.__ottMenuObs=new MutationObserver(fire);
+  window.__ottMenuObs.observe(document.body,{childList:true,subtree:true});
+  document.addEventListener('click',fire,true);
+  document.addEventListener('keydown',fire,true);
+};`;
+
 const PH_RESOLVER = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
 
 // ================= tiny utils =================
