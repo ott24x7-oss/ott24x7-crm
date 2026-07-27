@@ -265,7 +265,7 @@ function createWebview(acc) {
   wv.setAttribute('webpreferences', 'backgroundThrottling=false');
   wv.addEventListener('dom-ready', async () => {
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyWaTheme(acc.id); applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); } catch (e) { console.warn('inject', e); }
+    try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyWaTheme(acc.id); applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); applyChatWidget(acc.id); } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
@@ -300,9 +300,9 @@ function renderTabs() {
 const statusMap = {};
 // ONE round-trip per tick: connection status + all three in-page queues.
 // (Was two separate executeJavaScript IPC calls every 2.5s.)
-const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[]};
-try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[];
-window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];o.leads=a;o.incoming=b;o.cmds=c;}catch(e){}
+const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[],acts:[]};
+try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[],d=window.__ott_actq||[];
+window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];window.__ott_actq=[];o.leads=a;o.incoming=b;o.cmds=c;o.acts=d;}catch(e){}
 try{if(typeof WPP==='undefined')return o;
 var au=await WPP.conn.isAuthenticated();if(!au){o.s='qr';return o;}
 try{o.me=WPP.conn.getMyUserId()&&WPP.conn.getMyUserId().user}catch(_){}
@@ -328,6 +328,7 @@ async function pollTick() {
   if (info.leads && info.leads.length) info.leads.forEach(saveLead);
   if (info.incoming && info.incoming.length) markRepliedLeads(info.incoming);
   if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
+  if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
 }
 
 // ================= feature rail + panel =================
@@ -1000,6 +1001,120 @@ function applyLeadButton(accId) {
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
+
+// ---- In-chat action widget (injected into the WhatsApp webview) ----
+// Same shape as the Chrome extension: one handle above the message box that fans out into
+// labelled actions. The guest page cannot reach the CRM, so a click pushes onto
+// window.__ott_actq and pollTick drains it — the queue pattern already used for leads.
+let pendingChatAction = null;   // read by the Schedule / Reminder / Invoice panels
+
+function applyChatWidget(accId) {
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const js = `(function(){
+    if(window.__ott_widget_init)return; window.__ott_widget_init=true;
+    window.__ott_actq=window.__ott_actq||[];
+    var A=[['note','Chat note','M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15h6M9 11h6'],
+           ['lead','Save as lead','M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6'],
+           ['later','Schedule to this chat','M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z'],
+           ['remind','Remind me about this','M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0'],
+           ['invoice','Send an invoice','M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5']];
+    function ico(d){return '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="'+d+'"/></svg>';}
+    function css(){
+      if(document.getElementById('ott-w-css'))return;
+      var s=document.createElement('style'); s.id='ott-w-css';
+      s.textContent='#ott-w{position:fixed;z-index:2147482000;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
+      +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1)}'
+      +'#ott-w.open .acts{opacity:1;pointer-events:auto;transform:none}'
+      +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'
+      +'font:600 12.5px Inter,-apple-system,"Segoe UI",sans-serif;color:#12a054;background:linear-gradient(180deg,#fff 0%,#f2f6f4 100%);'
+      +'border:1px solid rgba(9,30,22,.12);box-shadow:inset 0 1px 0 #fff,0 1px 2px rgba(11,20,26,.18),0 6px 16px -6px rgba(11,20,26,.35);transition:all .16s cubic-bezier(.2,0,0,1)}'
+      +'#ott-w .a:hover{color:#fff;transform:translateX(3px);background:linear-gradient(180deg,#2ee178 0%,#12a054 100%)}'
+      +'#ott-w .a:active{transform:translateY(1px)}'
+      +'#ott-w .h{position:relative;width:42px;height:42px;border-radius:50%;cursor:pointer;display:grid;place-items:center;color:#04240f;'
+      +'font:800 12px Inter,sans-serif;background:linear-gradient(180deg,#3bef8c 0%,#1cbc64 46%,#109a4f 100%);border:1px solid rgba(255,255,255,.3);'
+      +'box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 2px 4px rgba(11,20,26,.28),0 10px 24px -8px rgba(18,160,84,.7);transition:transform .2s}'
+      +'#ott-w .h:hover{transform:translateY(-2px)}'
+      +'@media (prefers-reduced-motion:reduce){#ott-w .acts,#ott-w .a,#ott-w .h{transition:none}}';
+      document.documentElement.appendChild(s);
+    }
+    function build(){
+      var ex=document.getElementById('ott-w'); if(ex)return ex;
+      css();
+      var w=document.createElement('div'); w.id='ott-w';
+      var acts=document.createElement('div'); acts.className='acts';
+      A.forEach(function(a){
+        var b=document.createElement('button'); b.className='a'; b.type='button';
+        b.innerHTML=ico(a[2])+'<span>'+a[1]+'</span>';
+        b.onclick=function(e){e.preventDefault();e.stopPropagation();push(a[0]);w.classList.remove('open');};
+        acts.appendChild(b);
+      });
+      var h=document.createElement('button'); h.className='h'; h.type='button'; h.title='WA-CRM actions'; h.textContent='WA';
+      h.onclick=function(e){e.preventDefault();e.stopPropagation();w.classList.toggle('open');};
+      w.appendChild(acts); w.appendChild(h);
+      document.body.appendChild(w);
+      document.addEventListener('click',function(e){if(!w.contains(e.target))w.classList.remove('open');},true);
+      document.addEventListener('keydown',function(e){if(e.key==='Escape')w.classList.remove('open');});
+      return w;
+    }
+    function push(op){
+      try{
+        var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();
+        if(!c)return;
+        var u=(c.id&&c.id.user)||'';
+        var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;
+        window.__ott_actq.push({op:op,number:u,name:nm});
+      }catch(e){}
+    }
+    // Anchor to the composer so the widget sits inside the conversation at any width and
+    // never lands on WhatsApp's own left rail.
+    function place(){
+      var w=build();
+      var main=document.querySelector('#main');
+      if(!main){w.style.display='none';return;}
+      var r=main.getBoundingClientRect();
+      if(r.width<320){w.style.display='none';return;}
+      var f=main.querySelector('footer'); var fr=f?f.getBoundingClientRect():null;
+      var bottom=(fr&&fr.height>20)?fr.top:r.bottom;
+      w.style.display='flex';
+      w.style.left=Math.round(r.left+14)+'px';
+      w.style.top=Math.round(Math.max(r.top+8,bottom-(w.offsetHeight||250)-14))+'px';
+    }
+    place(); setInterval(place,1200); window.addEventListener('resize',place);
+  })();`;
+  wv.executeJavaScript(js).catch(() => {});
+}
+
+// One widget click, handled in the host where the CRM data lives. Rather than rebuild
+// forms here, this prefills the feature panel that already knows how to do the job.
+async function handleChatAction(a) {
+  if (!a || !a.number) return;
+  const num = digits(String(a.number));
+  if (!num) return;
+  const name = a.name || num;
+
+  if (a.op === 'lead') { saveLead({ number: num, name }); return; }
+
+  if (a.op === 'note') {
+    const notes = store.get('ott_notes', {});
+    const n = await promptModal(`Note · ${name}`, 'Private to you — never sent to the customer', notes[num] || '');
+    if (n == null) return;
+    notes[num] = n;
+    store.set('ott_notes', notes);
+    // Keep it on the lead too, so it shows up in Lead Manager.
+    const leads = store.get('ott_leads', []);
+    const L = leads.find((x) => digits(String(x.number)) === num);
+    if (L) { L.notes = n; store.set('ott_leads', leads); refreshPanel('leads'); }
+    toast('Note saved');
+    return;
+  }
+
+  const target = { later: 'schedule', remind: 'reminder', invoice: 'invoice' }[a.op];
+  if (!target) return;
+  pendingChatAction = { op: a.op, number: num, name };
+  const f = FEATURES.find((x) => x.id === target);
+  if (f) openFeature(f);
+}
+
 // (queue draining is now folded into pollTick — one IPC round-trip instead of two)
 function parseInvoiceCommand(body) {
   const lines = String(body).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -1341,6 +1456,12 @@ RENDER.invoice = (b) => {
   }
   function createView() {
     const cn = inp('', 'Customer name'), cp = inp('', 'Customer phone (country code)'), ce = inp('', 'Email (optional)'), ca = ta('', 'Address'), cg = inp('', 'GSTIN (optional)'), cs = inp('', 'State code');
+    // Arrived from the in-chat widget: the customer is already known.
+    if (pendingChatAction && pendingChatAction.op === 'invoice') {
+      cn.value = pendingChatAction.name;
+      cp.value = pendingChatAction.number;
+      pendingChatAction = null;
+    }
     let items = [{ desc: '', qty: 1, price: 0, hsn: '', gst: 18 }];
     const itemsBox = el('div', {});
     const catalog = store.get('ott_invoice_items', []);
@@ -1592,6 +1713,12 @@ RENDER.schedule = (b) => {
   const msg = el('textarea', { placeholder: 'Message · {a|b} spin, signature auto-appended' });
   const when = el('input', { type: 'datetime-local' });
   const dMin = el('input', { type: 'number', value: '4', min: '1' }); const dMax = el('input', { type: 'number', value: '9', min: '1' });
+  // Arrived from the in-chat widget: prefill the customer so only the message is left to write.
+  if (pendingChatAction && pendingChatAction.op === 'later') {
+    numbers.value = pendingChatAction.number;
+    setTimeout(() => msg.focus(), 0);
+    pendingChatAction = null;
+  }
   const list = el('div', { className: 'rules' });
   const draw = () => {
     list.innerHTML = ''; const jobs = store.get('ott_schedule', []).filter(j => j.accId === activeId).reverse();
@@ -1625,6 +1752,13 @@ RENDER.reminder = (b) => {
   const repeat = el('select');
   [['once', 'Once'], ['daily', 'Every day at this time']].forEach(([v, n]) => repeat.append(el('option', { value: v }, n)));
   const number = el('input', { placeholder: 'Optional - also WhatsApp this number' });
+  // Arrived from the in-chat widget: name the customer and fill their number.
+  if (pendingChatAction && pendingChatAction.op === 'remind') {
+    title.value = 'Follow up · ' + pendingChatAction.name;
+    number.value = pendingChatAction.number;
+    setTimeout(() => text.focus(), 0);
+    pendingChatAction = null;
+  }
   const sound = chk(true);
   const list = el('div', { className: 'rules' });
 
