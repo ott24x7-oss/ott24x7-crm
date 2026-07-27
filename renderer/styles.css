@@ -521,3 +521,31 @@ input[type="range"]:active::-webkit-slider-thumb { filter: brightness(1.1); }
 .bk-amt { flex: none; font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .bk-amt.in { color: var(--green-soft); }
 .bk-amt.out { color: var(--muted); }
+
+/* ===== Deals & Renewals ===== */
+/* The settings block is a <details> so the dashboard stays the focus; the default
+   disclosure marker is restyled to match the panel rather than the browser. */
+.deal-set { border: 1px solid var(--line); border-radius: 12px; background: var(--sunken); margin-top: 14px; }
+.deal-set > summary {
+  cursor: pointer; list-style: none; padding: 11px 13px;
+  font-size: 12.5px; font-weight: 700; color: var(--muted);
+  display: flex; align-items: center; gap: 8px;
+}
+.deal-set > summary::-webkit-details-marker { display: none; }
+.deal-set > summary::before {
+  content: ''; width: 7px; height: 7px; flex: none;
+  border-right: 2px solid var(--muted-2); border-bottom: 2px solid var(--muted-2);
+  transform: rotate(-45deg); transition: transform .16s cubic-bezier(.2, 0, 0, 1);
+}
+.deal-set[open] > summary::before { transform: rotate(45deg); }
+.deal-set > summary:hover { color: var(--text); }
+.deal-set .deal-set-body { padding: 0 13px 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+.deal-when { font-size: 11.5px; font-weight: 700; margin-left: auto; }
+.deal-when.ok { color: var(--green-soft); }
+.deal-when.soon { color: #f5c37b; }
+.deal-when.gone { color: #ff8f8f; }
+
+@media (prefers-reduced-motion: reduce) {
+  .deal-set > summary::before { transition: none; }
+}

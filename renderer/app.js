@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // in userData, not just localStorage — localStorage does not survive a profile reset.
 const PERSIST_KEYS = ['ott_theme', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
   'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items',
-  'ott_reminders', 'ott_schedule', 'ott_sig', 'ott_notes', 'ott_books'];
+  'ott_reminders', 'ott_schedule', 'ott_sig', 'ott_notes', 'ott_books', 'ott_deals', 'ott_deal_cfg'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -42,6 +42,7 @@ function downloadCsv(name, rows, cols) {
 const digits = (s) => s.replace(/\D/g, '');
 
 const IC = {
+  deal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.6 13.4 12 22l-9-9V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
   save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v13"/></svg>',
   broadcast: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
   bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4M8 4h8"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg>',
@@ -83,6 +84,7 @@ const FEATURES = [
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
   { id: 'translate', name: 'Message Translation', icon: IC.languages, impl: true },
   { id: 'signature', name: 'Message Signature', icon: IC.pen, impl: true },
+  { id: 'deals', name: 'Deals & Renewals', icon: IC.deal, impl: true },
   { id: 'books', name: 'Sales & Expenses', icon: IC.rocket, impl: true },
   { id: 'notes', name: 'Chat Notes', icon: IC.pen, impl: true },
   { id: 'backup', name: 'Backup & Restore', icon: IC.save, impl: true },
@@ -1054,7 +1056,8 @@ function applyChatWidget(accId) {
     if(window.__ott_widget_init)return; window.__ott_widget_init=true;
     ${PH_RESOLVER}
     window.__ott_actq=window.__ott_actq||[];
-    var A=[['note','Chat note','M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15h6M9 11h6'],
+    var A=[['deal','Deal done','M20.6 13.4 12 22l-9-9V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01'],
+           ['note','Chat note','M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15h6M9 11h6'],
            ['lead','Save as lead','M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6'],
            ['later','Schedule to this chat','M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z'],
            ['remind','Remind me about this','M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0'],
@@ -1145,6 +1148,8 @@ async function handleChatAction(a) {
   if (a.op === 'lead') { saveLead({ number: num, name }); return; }
 
   if (a.op === 'note') { noteModal(num, name); return; }
+
+  if (a.op === 'deal') { dealModal(num, name); return; }
 
   const target = { later: 'schedule', remind: 'reminder', invoice: 'invoice' }[a.op];
   if (!target) return;
@@ -1589,6 +1594,7 @@ function startScheduler() {
     for (const r of store.get('ott_reminders', [])) if (r.status === 'pending' && new Date(r.when).getTime() <= now) { setJobStatus('ott_reminders', r.id, 'firing'); fireReminder(r); }
     autopostTick();
     leadFollowupTick();
+    dealTick();
   }, 15000);
 }
 
@@ -2426,6 +2432,295 @@ function bEntryModal(all, redraw) {
   setTimeout(() => amount.focus(), 0);
 }
 
+// ================= Deals =================
+// Records what a customer actually bought, straight from the chat widget, and then works
+// the relationship on its own: a feedback nudge a week in, and a renewal reminder before
+// the validity runs out. Both messages go out through the same send path as follow-ups,
+// so they only fire while the app is running — the scheduler is not a server.
+
+const DEAL_DEFAULTS = {
+  feedbackUrl: '',
+  fbDays: 7,
+  fbTpl: 'Hi {name}, it has been {days} days since you started {item}. Is everything working well for you?\n\nIf anything is not right, tell us here and we will fix it: {link}',
+  rnLead: 3,
+  rnTpl: 'Hi {name}, your {item} expires on {expiry}. Reply RENEW and we will keep it running without a break.',
+  autoFeedback: true,
+  autoRenew: true,
+};
+const dealCfg = () => ({ ...DEAL_DEFAULTS, ...store.get('ott_deal_cfg', {}) });
+const DAY = 86400000;
+const dealDate = (ms) => new Date(ms).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+
+// Recompute the two due-dates from the purchase date and validity, so editing a deal
+// re-arms anything that has not gone out yet.
+function dealSchedule(d, cfg) {
+  d.fbAt = d.start + Math.max(1, cfg.fbDays) * DAY;
+  d.rnAt = d.expires - Math.max(0, cfg.rnLead) * DAY;
+  return d;
+}
+
+function dealFill(tpl, d) {
+  const cfg = dealCfg();
+  return String(tpl)
+    .replace(/\{name\}/g, d.name || 'there')
+    .replace(/\{item\}/g, d.item || 'your plan')
+    .replace(/\{days\}/g, String(Math.max(1, Math.round((Date.now() - d.start) / DAY))))
+    .replace(/\{expiry\}/g, dealDate(d.expires))
+    .replace(/\{amount\}/g, d.amount ? '₹' + d.amount : '')
+    .replace(/\{link\}/g, cfg.feedbackUrl || '')
+    .trim();
+}
+
+function dealLog(id, text, ok) {
+  const ds = store.get('ott_deals', []); const D = ds.find((x) => x.id === id);
+  if (!D) return;
+  D.logs = [{ ts: Date.now(), text, ok }, ...(D.logs || [])].slice(0, 20);
+  store.set('ott_deals', ds);
+}
+
+async function sendDealMsg(d, kind) {
+  const cfg = dealCfg();
+  const tpl = kind === 'feedback' ? cfg.fbTpl : cfg.rnTpl;
+  const body = dealFill(tpl, d);
+  if (!body) return { ok: false };
+  const accId = d.accId && document.querySelector(`webview[data-acc="${d.accId}"]`) ? d.accId : activeId;
+  const r = await sendToJidOn(accId, digits(d.number) + '@c.us', body);
+  dealLog(d.id, (kind === 'feedback' ? 'Feedback check-in' : 'Renewal reminder') + (r.ok ? ' sent' : ' failed'), r.ok);
+  return r;
+}
+
+// Runs on the shared 15s scheduler tick. Marks the flag before sending so a slow send
+// cannot be started twice by the next tick.
+function dealTick() {
+  const cfg = dealCfg();
+  const ds = store.get('ott_deals', []); const now = Date.now(); let ch = false;
+  for (const d of ds) {
+    if (d.status !== 'active') continue;
+    if (cfg.autoFeedback && !d.fbSent && d.fbAt && d.fbAt <= now) { d.fbSent = true; ch = true; sendDealMsg(d, 'feedback'); }
+    if (cfg.autoRenew && !d.rnSent && d.rnAt && d.rnAt <= now) { d.rnSent = true; ch = true; sendDealMsg(d, 'renew'); }
+  }
+  if (ch) { store.set('ott_deals', ds); if (openFeatureId === 'deals') refreshPanel('deals'); }
+}
+
+// ---- Add / edit a deal ----
+// Opened from the chat widget with the number already captured, or from the dashboard.
+function dealModal(number, name, existing) {
+  const cfg = dealCfg();
+  const d = existing || {};
+  const item = el('input', { placeholder: 'What did they buy?', value: d.item || '' });
+  const amount = el('input', { type: 'number', placeholder: 'Amount ₹ (optional)', value: d.amount || '' });
+  const days = el('input', { type: 'number', min: '1', value: String(d.days || 30) });
+  const start = el('input', { type: 'date', value: new Date(d.start || Date.now()).toISOString().slice(0, 10) });
+  const note = el('textarea', { placeholder: 'Note (optional)', value: d.note || '' });
+  const toBooks = chk(!existing);
+
+  const expiryNote = el('div', { className: 'fp-note', style: { margin: '2px 0 0' } });
+  const restate = () => {
+    const dv = Math.max(1, Number(days.value) || 1);
+    const st = new Date(start.value || Date.now()).getTime();
+    expiryNote.textContent = `Expires ${dealDate(st + dv * DAY)} · feedback check-in after ${cfg.fbDays} days`
+      + (cfg.rnLead ? ` · renewal reminder ${cfg.rnLead} days before expiry` : '');
+  };
+  days.oninput = start.onchange = restate; restate();
+
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) scrim.remove(); } },
+    el('div', { className: 'modal-box', style: { width: '440px', textAlign: 'left' } },
+      el('h3', {}, existing ? 'Edit deal' : 'Deal done'),
+      el('div', { className: 'fp-note' }, `${name || number} · ${number}`),
+      lbl('Item / plan', item),
+      el('div', { className: 'row' }, lbl('Amount', amount), lbl('Validity (days)', days)),
+      lbl('Purchased on', start),
+      expiryNote,
+      lbl('Note', note),
+      existing ? null : chkRow(toBooks, 'Also record this as a sale in Sales & Expenses'),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn ghost', onclick: () => scrim.remove() }, 'Cancel'),
+        el('button', { className: 'btn primary', onclick: () => {
+          if (!item.value.trim()) return toast('Enter what they bought', 'err');
+          const dv = Math.max(1, Number(days.value) || 1);
+          const st = new Date(start.value || Date.now()).getTime();
+          const ds = store.get('ott_deals', []);
+          if (existing) {
+            const D = ds.find((x) => x.id === existing.id);
+            if (D) {
+              Object.assign(D, { item: item.value.trim(), amount: Number(amount.value) || 0, days: dv, start: st, expires: st + dv * DAY, note: note.value.trim() });
+              // Re-arm anything that has not fired yet against the new dates.
+              dealSchedule(D, cfg);
+              store.set('ott_deals', ds);
+            }
+          } else {
+            const nd = dealSchedule({
+              id: Date.now(), number: digits(String(number)), name: name || '', accId: activeId,
+              item: item.value.trim(), amount: Number(amount.value) || 0, days: dv,
+              start: st, expires: st + dv * DAY, note: note.value.trim(),
+              fbSent: false, rnSent: false, status: 'active', logs: [],
+            }, cfg);
+            ds.push(nd);
+            store.set('ott_deals', ds);
+            if (toBooks.checked && nd.amount > 0) {
+              const bk = store.get('ott_books', []);
+              bk.push({ id: Date.now() + 1, ts: Date.now(), date: new Date(st).toISOString().slice(0, 10), kind: 'sale',
+                party: name || number, item: nd.item, category: '', qty: 1, amount: nd.amount, cost: 0,
+                method: 'Cash', note: 'From deal' });
+              store.set('ott_books', bk);
+            }
+          }
+          scrim.remove();
+          if (openFeatureId === 'deals') refreshPanel('deals');
+          toast(existing ? 'Deal updated' : 'Deal saved');
+        } }, existing ? 'Save changes' : 'Save deal'))));
+
+  document.body.append(scrim);
+  setTimeout(() => item.focus(), 0);
+}
+
+// ---- Dashboard ----
+RENDER.deals = (b) => {
+  const wrap = el('div', {});
+  let filter = 'active';
+
+  const draw = () => {
+    wrap.innerHTML = '';
+    const cfg = dealCfg();
+    const ds = store.get('ott_deals', []);
+    const now = Date.now();
+    const active = ds.filter((d) => d.status === 'active' && d.expires > now);
+    const expired = ds.filter((d) => d.status === 'active' && d.expires <= now);
+    const soon = active.filter((d) => d.expires - now <= 7 * DAY);
+    const revenue = ds.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+
+    wrap.append(el('div', { className: 'bk-kpis', style: { gridTemplateColumns: 'repeat(4, 1fr)' } },
+      dKpi('Active deals', String(active.length), 'Running right now', 'good'),
+      dKpi('Expiring in 7 days', String(soon.length), soon.length ? 'Reach out before they lapse' : 'Nothing due', soon.length ? 'warn' : ''),
+      dKpi('Expired', String(expired.length), 'Awaiting renewal', expired.length ? 'bad' : ''),
+      dKpi('Total value', '₹' + revenue.toLocaleString('en-IN'), 'All deals recorded')));
+
+    const tabs = el('div', { className: 'row', style: { marginTop: '10px' } });
+    [['active', `Active (${active.length})`], ['soon', `Expiring (${soon.length})`], ['expired', `Expired (${expired.length})`], ['all', `All (${ds.length})`]]
+      .forEach(([k, lab]) => tabs.append(el('button', {
+        className: 'btn small' + (filter === k ? ' primary' : ''),
+        onclick: () => { filter = k; draw(); },
+      }, lab)));
+    tabs.append(el('button', { className: 'btn small ghost', onclick: () => exportDealsCsv(ds) }, 'Export CSV'));
+    wrap.append(tabs);
+
+    const shown = filter === 'active' ? active : filter === 'soon' ? soon : filter === 'expired' ? expired : ds;
+    const list = el('div', { className: 'rules', style: { marginTop: '10px' } });
+    if (!shown.length) {
+      list.append(el('div', { className: 'muted' }, ds.length
+        ? 'No deals in this view.'
+        : 'No deals yet — open a chat and use “Deal done” on the widget above the message box.'));
+    }
+    shown.slice().sort((x, y) => x.expires - y.expires).forEach((d) => list.append(dealCard(d, cfg, draw)));
+    wrap.append(list);
+    wrap.append(dealSettings(cfg, draw));
+  };
+
+  b.append(el('div', { className: 'fp-note' },
+    'Log what each customer bought, and this checks in on them automatically: a feedback message once they have had time to use it, and a renewal reminder before their validity runs out. Both send only while WA-CRM is open.'), wrap);
+  draw();
+};
+
+function dKpi(label, value, sub, tone) {
+  return el('div', { className: 'bk-kpi' + (tone ? ' ' + tone : '') },
+    el('span', { className: 'k-lab' }, label),
+    el('b', {}, value),
+    el('span', { className: 'k-hint' }, sub));
+}
+
+function dealCard(d, cfg, redraw) {
+  const now = Date.now();
+  const left = Math.ceil((d.expires - now) / DAY);
+  const tone = left < 0 ? 'gone' : left <= 7 ? 'soon' : 'ok';
+  const state = left < 0 ? `Expired ${Math.abs(left)}d ago` : left === 0 ? 'Expires today' : `${left} days left`;
+
+  const act = (label, fn, ghost) => el('button', { className: 'btn small' + (ghost ? ' ghost' : ''), onclick: fn }, label);
+
+  return el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+    el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+      el('b', {}, d.item || '(no item)'),
+      d.amount ? el('span', { className: 'muted', style: { fontSize: '12px' } }, '₹' + Number(d.amount).toLocaleString('en-IN')) : null,
+      el('span', { className: 'deal-when ' + tone }, state)),
+    el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } },
+      `${d.name || d.number} · ${d.number} · ${dealDate(d.start)} → ${dealDate(d.expires)}`),
+    el('div', { className: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } },
+      `Feedback ${d.fbSent ? 'sent' : 'due ' + dealDate(d.fbAt)} · Renewal ${d.rnSent ? 'sent' : 'due ' + dealDate(d.rnAt)}`),
+    d.note ? el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } }, d.note) : null,
+    el('div', { className: 'row', style: { marginTop: '8px' } },
+      act('Send feedback now', async () => {
+        if (!cfg.feedbackUrl) toast('Tip: add a feedback link below', 'err');
+        const r = await sendDealMsg(d, 'feedback');
+        if (r.ok) { const ds = store.get('ott_deals', []); const D = ds.find((x) => x.id === d.id); if (D) { D.fbSent = true; store.set('ott_deals', ds); } redraw(); toast('Feedback message sent'); }
+        else toast('Could not send — is this account linked?', 'err');
+      }),
+      act('Send renewal now', async () => {
+        const r = await sendDealMsg(d, 'renew');
+        if (r.ok) { const ds = store.get('ott_deals', []); const D = ds.find((x) => x.id === d.id); if (D) { D.rnSent = true; store.set('ott_deals', ds); } redraw(); toast('Renewal reminder sent'); }
+        else toast('Could not send — is this account linked?', 'err');
+      }, true),
+      act('Renewed', () => {
+        // Roll the same plan forward from today and re-arm both messages.
+        const ds = store.get('ott_deals', []); const D = ds.find((x) => x.id === d.id);
+        if (D) { D.start = Date.now(); D.expires = D.start + D.days * DAY; D.fbSent = false; D.rnSent = false; dealSchedule(D, cfg); store.set('ott_deals', ds); }
+        redraw(); toast('Rolled forward — validity restarts today');
+      }, true),
+      act('Edit', () => dealModal(d.number, d.name, d), true),
+      act('Delete', () => {
+        store.set('ott_deals', store.get('ott_deals', []).filter((x) => x.id !== d.id));
+        redraw();
+      }, true)));
+}
+
+function dealSettings(cfg, redraw) {
+  const link = el('input', { placeholder: 'https://… your feedback form', value: cfg.feedbackUrl });
+  const fbDays = el('input', { type: 'number', min: '1', value: String(cfg.fbDays) });
+  const rnLead = el('input', { type: 'number', min: '0', value: String(cfg.rnLead) });
+  const fbTpl = el('textarea', { value: cfg.fbTpl });
+  const rnTpl = el('textarea', { value: cfg.rnTpl });
+  const autoF = chk(cfg.autoFeedback), autoR = chk(cfg.autoRenew);
+
+  const save = () => {
+    store.set('ott_deal_cfg', {
+      feedbackUrl: link.value.trim(), fbDays: Math.max(1, Number(fbDays.value) || 7),
+      rnLead: Math.max(0, Number(rnLead.value) || 0),
+      fbTpl: fbTpl.value, rnTpl: rnTpl.value,
+      autoFeedback: autoF.checked, autoRenew: autoR.checked,
+    });
+    // Re-arm every deal that has not been messaged yet against the new timings.
+    const c = dealCfg(); const ds = store.get('ott_deals', []);
+    ds.forEach((d) => { if (!d.fbSent || !d.rnSent) dealSchedule(d, c); });
+    store.set('ott_deals', ds);
+    toast('Deal settings saved'); redraw();
+  };
+
+  return el('details', { className: 'deal-set' },
+    el('summary', {}, 'Follow-up settings'),
+    el('div', { className: 'deal-set-body' },
+      el('div', { className: 'fp-note' }, 'Placeholders: {name} {item} {days} {expiry} {amount} {link}'),
+      lbl('Feedback link — fills {link}', link),
+      el('div', { className: 'row' }, lbl('Feedback after (days)', fbDays), lbl('Renewal reminder (days before expiry)', rnLead)),
+      lbl('Feedback message', fbTpl),
+      lbl('Renewal message', rnTpl),
+      chkRow(autoF, 'Send the feedback check-in automatically'),
+      chkRow(autoR, 'Send the renewal reminder automatically'),
+      el('button', { className: 'btn primary', style: { marginTop: '8px' }, onclick: save }, 'Save settings')));
+}
+
+function exportDealsCsv(ds) {
+  if (!ds.length) return toast('No deals to export', 'err');
+  const rows = ds.map((d) => ({
+    name: d.name || '', number: d.number, item: d.item || '', amount: d.amount || 0,
+    validity_days: d.days, purchased: new Date(d.start).toISOString().slice(0, 10),
+    expires: new Date(d.expires).toISOString().slice(0, 10),
+    days_left: Math.ceil((d.expires - Date.now()) / DAY),
+    feedback_sent: d.fbSent ? 'yes' : 'no', renewal_sent: d.rnSent ? 'yes' : 'no',
+    status: d.expires <= Date.now() ? 'expired' : d.status, note: d.note || '',
+  }));
+  downloadCsv('wa-crm-deals.csv', rows, ['name', 'number', 'item', 'amount', 'validity_days',
+    'purchased', 'expires', 'days_left', 'feedback_sent', 'renewal_sent', 'status', 'note']);
+}
+
+
 function promptModal(title, sub, def = '') {
   return new Promise((resolve) => {
     const inp = el('input', { value: def, placeholder: sub || '' });
@@ -2510,6 +2805,8 @@ const BACKUP_MAP = [
   ['ott_sig', null, 'Message signature'],
   ['ott_notes', 'wa_notes', 'Chat notes'],
   ['ott_books', 'wa_books', 'Sales, purchases & expenses'],
+  ['ott_deals', 'wa_deals', 'Deals & renewals'],
+  ['ott_deal_cfg', 'wa_deal_cfg', 'Deal follow-up settings'],
 ];
 const bkCount = (v) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : (v ? 1 : 0)));
 
