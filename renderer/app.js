@@ -851,22 +851,59 @@ function applyQuickReplies(accId) {
   const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
     function insert(text){var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(!box)return;box.focus();try{var dt=new DataTransfer();dt.setData('text/plain',String(text));box.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));return;}catch(e){}try{var lines=String(text).replace(/\\r\\n?/g,'\\n').split('\\n');for(var i=0;i<lines.length;i++){if(i>0)document.execCommand('insertLineBreak');if(lines[i])document.execCommand('insertText',false,lines[i]);}}catch(e){}}
     function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
+    /* One stylesheet instead of a cssText string per chip — hover and focus states are
+       impossible with inline styles, and this is what makes the bar match the extension. */
+    function css(){
+      if(document.getElementById('ott-qr-css'))return;
+      var s=document.createElement('style');s.id='ott-qr-css';
+      s.textContent='#ott-qr-bar{position:fixed;z-index:99999;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}'
+        +'#ott-qr-bar::-webkit-scrollbar{display:none}'
+        +'.ott-qr-chip{flex:none;cursor:pointer;height:30px;padding:0 13px;border-radius:15px;display:inline-flex;align-items:center;gap:6px;color:#12a054;font:600 12px Inter,system-ui,-apple-system,sans-serif;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.96);border:1px solid rgba(9,30,22,.14);box-shadow:0 1px 2px rgba(11,20,26,.14),0 4px 12px -6px rgba(11,20,26,.3);transition:background .16s cubic-bezier(.2,0,0,1),color .16s cubic-bezier(.2,0,0,1),transform .16s cubic-bezier(.2,0,0,1)}'
+        +'.ott-qr-chip:hover{color:#fff;background:linear-gradient(180deg,#2ee178 0%,#12a054 100%);transform:translateY(-1px)}'
+        +'.ott-qr-chip:active{transform:translateY(1px)}'
+        +'.ott-qr-chip:focus-visible{outline:2px solid #12a054;outline-offset:2px}'
+        +'.ott-qr-add{padding:0 11px}'
+        +'@media (prefers-reduced-motion:reduce){.ott-qr-chip{transition:none}}';
+      document.head.appendChild(s);
+    }
+    function chip(label,tip,cls,fn){
+      var b=document.createElement('button');b.type='button';b.className='ott-qr-chip'+(cls?' '+cls:'');
+      b.textContent=label;if(tip)b.title=tip;
+      b.onmousedown=function(e){e.preventDefault();};
+      b.onclick=function(e){e.preventDefault();e.stopPropagation();fn();};
+      return b;
+    }
     function sig(qs,r){var t='';for(var i=0;i<qs.length;i++){t+=(qs[i].data?'1':'0')+(qs[i].title||'')+'\\u0001';}
       return t+'@'+Math.round(r.left)+','+Math.round(r.top)+','+Math.round(r.width);}
     function render(){
       var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
-      if(!footer||!qs.length){if(bar)bar.style.display='none';return;}
+      /* Render the bar even with nothing saved: an empty strip hides the feature, so the
+         "add" chip is the only way a new user discovers quick replies exist. */
+      if(!footer){if(bar)bar.style.display='none';return;}
       var r=footer.getBoundingClientRect();
+      if(r.width<320){if(bar)bar.style.display='none';return;}
       var s=sig(qs,r);
       /* Nothing moved and no chip changed -> zero DOM writes this tick. */
       if(bar&&bar.getAttribute('data-sig')===s){if(bar.style.display==='none')bar.style.display='flex';return;}
-      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';document.body.appendChild(bar);}
+      css();
+      if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';bar.setAttribute('role','toolbar');bar.setAttribute('aria-label','Quick replies');document.body.appendChild(bar);}
       bar.setAttribute('data-sig',s);
-      bar.style.cssText='position:fixed;z-index:99999;display:flex;flex-wrap:wrap;gap:6px;left:'+(r.left+14)+'px;bottom:'+Math.max(8,(window.innerHeight-r.top+6))+'px;max-width:'+(r.width-28)+'px;';
+      /* All layout now comes from the stylesheet, so wipe any inline leftovers — an
+         older build positioned this with bottom/max-width, which would fight top/width. */
+      bar.removeAttribute('style');
+      bar.style.left=(r.left+14)+'px';
+      bar.style.width=Math.max(200,r.width-28)+'px';
       bar.innerHTML='';
-      qs.forEach(function(q){var b=document.createElement('button');b.textContent=(q.data?'📎 ':'')+(q.title||(q.text||'').slice(0,15));b.title=q.text||'';b.style.cssText='background:#e7f7ee;border:1px solid #12b866;color:#0b7a3e;border-radius:16px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.14);';b.onmousedown=function(e){e.preventDefault();};b.onclick=function(e){e.preventDefault();e.stopPropagation();act(q);};bar.appendChild(b);});
+      if(!qs.length){bar.appendChild(chip('+  Add a quick reply','Set up one-tap replies','ott-qr-add',manage));}
+      else{
+        qs.forEach(function(q){bar.appendChild(chip((q.data?'📎 ':'')+(q.title||(q.text||'').slice(0,20)),q.text||'','',function(){act(q);}));});
+        bar.appendChild(chip('+','Manage quick replies','ott-qr-add',manage));
+      }
+      /* Sit flush above the composer, measured after layout so the height is real. */
+      bar.style.top=Math.round(r.top-bar.offsetHeight-6)+'px';
     }
-    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);}
+    function manage(){(window.__ott_actq=window.__ott_actq||[]).push({op:'quick'});}
+    render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);window.addEventListener('resize',render);}
   })();`;
   wv.executeJavaScript(js).catch(() => {});
 }
@@ -1095,7 +1132,12 @@ function applyChatWidget(accId) {
 // One widget click, handled in the host where the CRM data lives. Rather than rebuild
 // forms here, this prefills the feature panel that already knows how to do the job.
 async function handleChatAction(a) {
-  if (!a || !a.number) return;
+  if (!a) return;
+
+  // Opening a manager panel needs no chat context, so it runs before the number check.
+  if (a.op === 'quick') { const f = FEATURES.find((x) => x.id === 'quick'); if (f) openFeature(f); return; }
+
+  if (!a.number) return;
   const num = digits(String(a.number));
   if (!num) return;
   const name = a.name || num;
