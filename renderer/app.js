@@ -106,6 +106,15 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList.add('hidden'); }
 
+// The badge used to be a hardcoded string in index.html, so it still read v0.30.0 after
+// every later release and made a successful update look like it had not installed.
+try {
+  ott.config().then((c) => {
+    const n = $('#verBadge');
+    if (n && c && c.version) n.textContent = 'v' + c.version;
+  }).catch(() => {});
+} catch (e) {}
+
 // ---- Auto-update wiring (registered at load so the popup event is never missed) ----
 let _updChecking = false;
 try {
@@ -869,7 +878,13 @@ function applyQuickReplies(accId) {
     function css(){
       if(document.getElementById('ott-qr-css'))return;
       var s=document.createElement('style');s.id='ott-qr-css';
-      s.textContent='#ott-qr-bar{position:fixed;z-index:99999;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}'
+      /* z-index 100, deliberately modest. At 99999 this sat above WhatsApp's own attach and
+         emoji menus, so a click meant for Document or Photos landed on us instead and
+         WhatsApp closed the menu as a click-outside. Sitting in WhatsApp's own band lets its
+         popups render on top and take their own clicks, with no guessing about their markup.
+         pointer-events on the container means the gaps between chips never intercept. */
+      s.textContent='#ott-qr-bar{position:fixed;z-index:100;pointer-events:none;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}'
+        +'.ott-qr-chip{pointer-events:auto}'
         +'#ott-qr-bar::-webkit-scrollbar{display:none}'
         +'.ott-qr-chip{flex:none;cursor:pointer;height:30px;padding:0 13px;border-radius:15px;display:inline-flex;align-items:center;gap:6px;color:#12a054;font:600 12px Inter,system-ui,-apple-system,sans-serif;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.96);border:1px solid rgba(9,30,22,.14);box-shadow:0 1px 2px rgba(11,20,26,.14),0 4px 12px -6px rgba(11,20,26,.3);transition:background .16s cubic-bezier(.2,0,0,1),color .16s cubic-bezier(.2,0,0,1),transform .16s cubic-bezier(.2,0,0,1)}'
         +'.ott-qr-chip:hover{color:#fff;background:linear-gradient(180deg,#2ee178 0%,#12a054 100%);transform:translateY(-1px)}'
@@ -1089,7 +1104,9 @@ function applyChatWidget(accId) {
     function css(){
       if(document.getElementById('ott-w-css'))return;
       var s=document.createElement('style'); s.id='ott-w-css';
-      s.textContent='#ott-w{position:fixed;z-index:2147482000;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
+      /* See the note on #ott-qr-bar: a modest z-index keeps WhatsApp's own menus clickable. */
+      s.textContent='#ott-w{position:fixed;z-index:101;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
+      +'#ott-w .a,#ott-w .h{pointer-events:auto}'
       +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1)}'
       +'#ott-w.open .acts{opacity:1;pointer-events:auto;transform:none}'
       +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'

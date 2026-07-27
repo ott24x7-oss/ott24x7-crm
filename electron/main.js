@@ -101,6 +101,7 @@ ipcMain.handle('wa:getEngine', () => {
 ipcMain.handle('app:config', () => ({
   server: config.LICENSE_SERVER,
   product: config.PRODUCT_SLUG,
+  version: app.getVersion(),
 }));
 
 // Import numbers from a .csv / .txt / .xlsx / .xls file.
