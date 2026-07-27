@@ -2468,8 +2468,16 @@ const dealDate = (ms) => new Date(ms).toLocaleDateString(undefined, { day: '2-di
 // Recompute the two due-dates from the purchase date and validity, so editing a deal
 // re-arms anything that has not gone out yet.
 function dealSchedule(d, cfg) {
-  d.fbAt = d.start + Math.max(1, cfg.fbDays) * DAY;
-  d.rnAt = d.expires - Math.max(0, cfg.rnLead) * DAY;
+  const lead = Math.max(0, cfg.rnLead) * DAY;
+  // A renewal reminder must never land before the sale itself. On a plan shorter than the
+  // lead time there is no "before" to aim at, so remind on the expiry day instead —
+  // otherwise a 1-day trial tells the customer to renew seconds after they paid.
+  d.rnAt = d.expires - lead > d.start ? d.expires - lead : d.expires;
+  // Ask for feedback while the plan is still running, and never so late that it arrives
+  // alongside the renewal nudge. 0 means "not scheduled" — on a short plan there is no
+  // useful gap, and two messages at once reads as spam.
+  const fb = d.start + Math.max(1, cfg.fbDays) * DAY;
+  d.fbAt = fb < d.rnAt ? fb : 0;
   return d;
 }
 
@@ -2529,11 +2537,15 @@ function dealModal(number, name, existing) {
   const toBooks = chk(!existing);
 
   const expiryNote = el('div', { className: 'fp-note', style: { margin: '2px 0 0' } });
+  // Derive the note from dealSchedule itself, so what it promises is exactly what will be
+  // sent — a hardcoded "3 days before expiry" lies on plans shorter than the lead time.
   const restate = () => {
     const dv = Math.max(1, Number(days.value) || 1);
     const st = new Date(start.value || Date.now()).getTime();
-    expiryNote.textContent = `Expires ${dealDate(st + dv * DAY)} · feedback check-in after ${cfg.fbDays} days`
-      + (cfg.rnLead ? ` · renewal reminder ${cfg.rnLead} days before expiry` : '');
+    const p = dealSchedule({ start: st, expires: st + dv * DAY }, cfg);
+    expiryNote.textContent = `Expires ${dealDate(p.expires)}`
+      + (p.fbAt ? ` · feedback check-in ${dealDate(p.fbAt)}` : ' · too short for a feedback check-in')
+      + ` · renewal reminder ${dealDate(p.rnAt)}`;
   };
   days.oninput = start.onchange = restate; restate();
 
@@ -2658,7 +2670,8 @@ function dealCard(d, cfg, redraw) {
     el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } },
       `${d.name || d.number} · ${d.number} · ${dealDate(d.start)} → ${dealDate(d.expires)}`),
     el('div', { className: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } },
-      `Feedback ${d.fbSent ? 'sent' : 'due ' + dealDate(d.fbAt)} · Renewal ${d.rnSent ? 'sent' : 'due ' + dealDate(d.rnAt)}`),
+      `Feedback ${d.fbSent ? 'sent' : d.fbAt ? 'due ' + dealDate(d.fbAt) : 'not scheduled — plan too short'}`
+      + ` · Renewal ${d.rnSent ? 'sent' : 'due ' + dealDate(d.rnAt)}`),
     d.note ? el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } }, d.note) : null,
     el('div', { className: 'row', style: { marginTop: '8px' } },
       act('Send feedback now', async () => {
