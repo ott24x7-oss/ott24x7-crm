@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // in userData, not just localStorage — localStorage does not survive a profile reset.
 const PERSIST_KEYS = ['ott_theme', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
   'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items',
-  'ott_reminders', 'ott_schedule', 'ott_sig'];
+  'ott_reminders', 'ott_schedule', 'ott_sig', 'ott_notes', 'ott_books'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -83,6 +83,8 @@ const FEATURES = [
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
   { id: 'translate', name: 'Message Translation', icon: IC.languages, impl: true },
   { id: 'signature', name: 'Message Signature', icon: IC.pen, impl: true },
+  { id: 'books', name: 'Sales & Expenses', icon: IC.rocket, impl: true },
+  { id: 'notes', name: 'Chat Notes', icon: IC.pen, impl: true },
   { id: 'backup', name: 'Backup & Restore', icon: IC.save, impl: true },
 ];
 
@@ -1100,19 +1102,7 @@ async function handleChatAction(a) {
 
   if (a.op === 'lead') { saveLead({ number: num, name }); return; }
 
-  if (a.op === 'note') {
-    const notes = store.get('ott_notes', {});
-    const n = await promptModal(`Note · ${name}`, 'Private to you — never sent to the customer', notes[num] || '');
-    if (n == null) return;
-    notes[num] = n;
-    store.set('ott_notes', notes);
-    // Keep it on the lead too, so it shows up in Lead Manager.
-    const leads = store.get('ott_leads', []);
-    const L = leads.find((x) => digits(String(x.number)) === num);
-    if (L) { L.notes = n; store.set('ott_leads', leads); refreshPanel('leads'); }
-    toast('Note saved');
-    return;
-  }
+  if (a.op === 'note') { noteModal(num, name); return; }
 
   const target = { later: 'schedule', remind: 'reminder', invoice: 'invoice' }[a.op];
   if (!target) return;
@@ -2025,6 +2015,375 @@ function attachControl(accept) {
 }
 
 // In-app text prompt (Electron does not support window.prompt).
+
+// ---- Chat notes ----
+// What you remember about a customer between conversations. Stored per number, kept as
+// dated entries rather than one overwritten string, so you can see how a deal developed.
+//
+// Old builds saved a single string per number; readNotes migrates those in place.
+function readNotes() {
+  const raw = store.get('ott_notes', {});
+  let changed = false;
+  for (const k of Object.keys(raw)) {
+    if (typeof raw[k] === 'string') {
+      raw[k] = { name: '', entries: raw[k].trim() ? [{ ts: Date.now(), text: raw[k] }] : [] };
+      changed = true;
+    }
+  }
+  if (changed) store.set('ott_notes', raw);
+  return raw;
+}
+const noteCount = (n) => ((n && n.entries) || []).length;
+
+function noteModal(number, name) {
+  const all = readNotes();
+  const rec = all[number] || { name: name || '', entries: [] };
+  rec.name = rec.name || name || '';
+
+  const history = el('div', { className: 'log', style: { maxHeight: '210px', marginBottom: '10px' } });
+  const ta = el('textarea', { placeholder: 'What happened? Anything you want to remember next time.', style: { minHeight: '110px' } });
+
+  const drawHistory = () => {
+    history.innerHTML = '';
+    if (!rec.entries.length) { line(history, 'No notes yet for this contact.'); return; }
+    rec.entries.slice().reverse().forEach((e, idx) => {
+      const i = rec.entries.length - 1 - idx;
+      const row = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '6px 0', borderBottom: '1px solid var(--line)' } },
+        el('div', { style: { flex: '1', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } },
+          el('div', { className: 'muted', style: { fontSize: '11px', marginBottom: '2px' } },
+            new Date(e.ts).toLocaleString()),
+          e.text),
+        el('button', {
+          className: 'btn small ghost',
+          onclick: () => { rec.entries.splice(i, 1); saveRec(); drawHistory(); },
+        }, 'Delete'));
+      history.append(row);
+    });
+  };
+
+  const saveRec = () => {
+    const store2 = readNotes();
+    if (rec.entries.length) store2[number] = rec; else delete store2[number];
+    store.set('ott_notes', store2);
+    // Mirror the latest note onto the lead so Lead Manager shows it too.
+    const leads = store.get('ott_leads', []);
+    const L = leads.find((x) => digits(String(x.number)) === number);
+    if (L) { L.notes = rec.entries.length ? rec.entries[rec.entries.length - 1].text : ''; store.set('ott_leads', leads); }
+    refreshPanel('leads'); refreshPanel('notes');
+  };
+
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) scrim.remove(); } },
+    el('div', { className: 'modal-box', style: { width: '460px', textAlign: 'left' } },
+      el('h3', {}, `Notes · ${rec.name || number}`),
+      el('div', { className: 'muted', style: { fontSize: '12.5px', marginTop: '-6px' } },
+        'Private to you. Never sent to the customer.'),
+      history,
+      ta,
+      el('div', { className: 'row' },
+        el('button', { className: 'btn ghost', onclick: () => scrim.remove() }, 'Close'),
+        el('button', { className: 'btn primary', onclick: () => {
+          const t = ta.value.trim();
+          if (!t) return toast('Write something first', 'err');
+          rec.entries.push({ ts: Date.now(), text: t });
+          saveRec(); ta.value = ''; drawHistory(); toast('Note added');
+        } }, 'Add note'))));
+
+  document.body.append(scrim);
+  drawHistory();
+  setTimeout(() => ta.focus(), 0);
+}
+
+// A place to actually read them back — without this the notes were write-only.
+RENDER.notes = (b) => {
+  const search = el('input', { placeholder: 'Search notes, names or numbers' });
+  const list = el('div', { className: 'rules' });
+
+  const draw = () => {
+    const all = readNotes();
+    const q = search.value.trim().toLowerCase();
+    const rows = Object.entries(all)
+      .filter(([num, rec]) => noteCount(rec))
+      .filter(([num, rec]) => !q
+        || num.includes(q)
+        || String(rec.name || '').toLowerCase().includes(q)
+        || rec.entries.some((e) => e.text.toLowerCase().includes(q)))
+      .sort((a, x) => (x[1].entries[x[1].entries.length - 1].ts) - (a[1].entries[a[1].entries.length - 1].ts));
+
+    list.innerHTML = '';
+    if (!rows.length) {
+      list.append(el('div', { className: 'muted', style: { padding: '18px', textAlign: 'center' } },
+        q ? 'Nothing matched.' : 'No notes yet. Open a chat and use the WA button → Chat note.'));
+      return;
+    }
+    rows.forEach(([num, rec]) => {
+      const last = rec.entries[rec.entries.length - 1];
+      list.append(el('div', {
+        style: { display: 'flex', gap: '10px', alignItems: 'flex-start',
+                 padding: '11px 12px', borderRadius: '10px',
+                 border: '1px solid var(--line)', background: 'var(--sunken)' },
+      },
+        el('div', { style: { flex: '1', minWidth: '0' } },
+          el('b', {}, rec.name || '+' + num),
+          el('div', { className: 'muted', style: { fontSize: '12px' } },
+            `${rec.entries.length} note${rec.entries.length === 1 ? '' : 's'} · last ${new Date(last.ts).toLocaleDateString()}`),
+          el('div', { className: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+            last.text.slice(0, 120) + (last.text.length > 120 ? '…' : ''))),
+        el('div', { className: 'row' },
+          el('button', { className: 'btn small', onclick: () => noteModal(num, rec.name) }, 'Open'),
+          el('button', { className: 'btn small ghost', onclick: async () => {
+            const r = await openChatOn(activeId, num);
+            if (!r || !r.ok) toast('Could not open that chat', 'err');
+          } }, 'Go to chat'))));
+    });
+  };
+
+  search.oninput = draw;
+  b.append(
+    el('div', { className: 'fp-note' },
+      'Everything you have written about a customer, kept per number and dated. '
+      + 'Add notes from any chat with the WA button → Chat note.'),
+    lbl('Search', search), list);
+  draw();
+};
+
+// Open a chat by number in the active account, so "Go to chat" actually goes there.
+async function openChatOn(accId, number) {
+  const jid = JSON.stringify(digits(number) + '@c.us');
+  return waExecOn(accId, `(async()=>{try{await WPP.chat.openChatBottom(${jid});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`)
+    .catch((e) => ({ ok: false, err: String(e) }));
+}
+
+
+// ---- Sales, Purchases & Expenses ----
+// One ledger, three kinds of entry, and two profit figures on purpose:
+//
+//   Cash profit = sales − purchases − expenses. What actually landed in your pocket.
+//                 It dips on restock days; that is real, not an error.
+//   Margin      = (revenue − cost) / revenue, over sales where a cost was recorded.
+//                 Says whether the selling itself is healthy.
+//
+// Either number alone misleads — cash profit makes a good day look terrible after a big
+// purchase, and margin hides that you spent the month's takings.
+const EXPENSE_CATS = ['Rent', 'Staff', 'Ads & marketing', 'Internet & phone', 'Transport',
+  'Packaging', 'Electricity', 'Software', 'Bank & fees', 'Other'];
+const PAY_METHODS = ['Cash', 'UPI', 'Bank', 'Card', 'Credit (unpaid)'];
+const BOOK_KINDS = [['sale', 'Sale'], ['purchase', 'Purchase'], ['expense', 'Expense']];
+
+const bToday = () => new Date().toISOString().slice(0, 10);
+const bMoney = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+function bRangeStart(days) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  if (days > 1) d.setDate(d.getDate() - (days - 1));
+  return d.toISOString().slice(0, 10);
+}
+
+function bSummarise(entries, from, to) {
+  const inRange = entries.filter(e => e.date >= from && e.date <= to);
+  const sum = k => inRange.filter(e => e.kind === k).reduce((t, e) => t + (Number(e.amount) || 0), 0);
+  const sales = sum('sale'), purchases = sum('purchase'), expenses = sum('expense');
+  const costed = inRange.filter(e => e.kind === 'sale' && Number(e.cost) > 0);
+  const costedRev = costed.reduce((t, e) => t + (Number(e.amount) || 0), 0);
+  const cogs = costed.reduce((t, e) => t + (Number(e.cost) || 0), 0);
+  const unpaid = inRange.filter(e => e.kind === 'sale' && e.method === 'Credit (unpaid)')
+    .reduce((t, e) => t + (Number(e.amount) || 0), 0);
+  return { inRange, sales, purchases, expenses, cash: sales - purchases - expenses,
+    costedRev, cogs, margin: costedRev > 0 ? ((costedRev - cogs) / costedRev) * 100 : null,
+    unpaid, count: inRange.length };
+}
+
+// Hand-drawn SVG — no chart library is bundled, and none may be fetched.
+function bChart(days, w = 660, h = 160) {
+  const max = Math.max(1, ...days.map(d => Math.max(d.in, d.out)));
+  const gap = 7, bw = Math.max(5, (w - gap * (days.length - 1)) / days.length);
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h + 24}`);
+  svg.setAttribute('class', 'bk-chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Money in and out per day');
+  days.forEach((d, i) => {
+    const x = i * (bw + gap);
+    const bar = (cls, bx, bwid, val) => {
+      const bh = Math.max(val ? 2 : 0, Math.round((val / max) * h));
+      const r = document.createElementNS(NS, 'rect');
+      r.setAttribute('x', bx); r.setAttribute('y', h - bh);
+      r.setAttribute('width', Math.max(2, bwid)); r.setAttribute('height', bh);
+      r.setAttribute('rx', '2'); r.setAttribute('class', cls);
+      const t = document.createElementNS(NS, 'title');
+      t.textContent = `${d.label} · in ${bMoney(d.in)} · out ${bMoney(d.out)}`;
+      r.append(t); return r;
+    };
+    svg.append(bar('bin', x, bw / 2 - 1, d.in), bar('bout', x + bw / 2 + 1, bw / 2 - 1, d.out));
+    if (days.length <= 14 || i % Math.ceil(days.length / 10) === 0) {
+      const tx = document.createElementNS(NS, 'text');
+      tx.setAttribute('x', x + bw / 2); tx.setAttribute('y', h + 16);
+      tx.setAttribute('text-anchor', 'middle'); tx.setAttribute('class', 'clab');
+      tx.textContent = d.label; svg.append(tx);
+    }
+  });
+  return svg;
+}
+
+RENDER.books = (b) => {
+  const all = store.get('ott_books', []);
+  let days = 7;
+  const wrap = el('div', {});
+
+  const draw = () => {
+    const from = bRangeStart(days), to = bToday();
+    const s = bSummarise(all, from, to);
+
+    const buckets = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const day = all.filter(e => e.date === key);
+      buckets.push({
+        label: d.toLocaleDateString([], days > 14 ? { day: 'numeric' } : { weekday: 'short' }),
+        in: day.filter(e => e.kind === 'sale').reduce((t, e) => t + (+e.amount || 0), 0),
+        out: day.filter(e => e.kind !== 'sale').reduce((t, e) => t + (+e.amount || 0), 0),
+      });
+    }
+
+    const tile = (lab, val, cls, hint) => el('div', { className: 'bk-kpi ' + (cls || '') },
+      el('span', { className: 'k-lab' }, lab), el('b', {}, val),
+      hint ? el('span', { className: 'k-hint' }, hint) : null);
+
+    const byCat = {};
+    s.inRange.filter(e => e.kind === 'expense').forEach(e => {
+      byCat[e.category || 'Other'] = (byCat[e.category || 'Other'] || 0) + (+e.amount || 0);
+    });
+    const topCats = Object.entries(byCat).sort((a, x) => x[1] - a[1]).slice(0, 6);
+
+    wrap.innerHTML = '';
+    wrap.append(
+      el('div', { className: 'row' },
+        ...[[1, 'Today'], [7, '7 days'], [30, '30 days'], [90, '90 days']].map(([n, lab]) =>
+          el('button', { className: 'btn small' + (days === n ? ' primary' : ''), onclick: () => { days = n; draw(); } }, lab))),
+
+      el('div', { className: 'bk-kpis' },
+        tile('Sales', bMoney(s.sales), 'good'),
+        tile('Purchases', bMoney(s.purchases)),
+        tile('Expenses', bMoney(s.expenses)),
+        tile('Cash profit', bMoney(s.cash), s.cash >= 0 ? 'good' : 'bad', 'sales − purchases − expenses'),
+        tile('Margin', s.margin == null ? '—' : s.margin.toFixed(1) + '%', '',
+          s.margin == null ? 'add a cost to a sale' : 'on ' + bMoney(s.costedRev) + ' of sales'),
+        tile('Unpaid', bMoney(s.unpaid), s.unpaid ? 'warn' : '', 'sales on credit')),
+
+      el('div', { className: 'bk-chartwrap' },
+        el('div', { className: 'bk-legend' },
+          el('span', {}, el('i', { className: 'sw in' }), 'Money in'),
+          el('span', {}, el('i', { className: 'sw out' }), 'Money out')),
+        bChart(buckets)),
+
+      topCats.length ? el('div', {}, lbl('Where the money went',
+        el('div', { className: 'bk-bars' }, ...topCats.map(([c, v]) => el('div', { className: 'bk-catrow' },
+          el('span', { className: 'c-name' }, c),
+          el('span', { className: 'c-bar' }, el('i', { style: { width: Math.round((v / topCats[0][1]) * 100) + '%' } })),
+          el('span', { className: 'c-val' }, bMoney(v)))))) ) : null,
+
+      el('div', { className: 'row' },
+        el('button', { className: 'btn primary', onclick: () => bEntryModal(all, draw) }, '＋ Add entry'),
+        el('button', { className: 'btn ghost', onclick: () => {
+          if (!s.inRange.length) return toast('Nothing in this range', 'err');
+          downloadCsv(`wa-crm-books-${from}-to-${to}.csv`, s.inRange.map(e => ({
+            date: e.date, kind: e.kind, party: e.party || '', item: e.item || '',
+            category: e.category || '', qty: e.qty || '', amount: e.amount || 0,
+            cost: e.cost || '', method: e.method || '', note: e.note || '',
+          })), ['date', 'kind', 'party', 'item', 'category', 'qty', 'amount', 'cost', 'method', 'note']);
+        } }, 'Export CSV')),
+
+      lbl(`Entries · ${s.count}`, bList(s.inRange, all, draw)));
+  };
+
+  b.append(el('div', { className: 'fp-note' },
+    'Record what you sold, bought and spent. Cash profit is what reached your pocket; '
+    + 'margin is how healthy the selling itself is.'), wrap);
+  draw();
+};
+
+function bList(rows, all, redraw) {
+  const list = el('div', { className: 'bk-list' });
+  if (!rows.length) {
+    list.append(el('div', { className: 'muted', style: { padding: '18px', textAlign: 'center' } },
+      'Nothing recorded yet. Add a sale, a purchase or an expense to see your profit.'));
+    return list;
+  }
+  rows.slice().sort((a, x) => (x.ts || 0) - (a.ts || 0)).slice(0, 300).forEach(e => {
+    list.append(el('div', { className: 'bk-row' },
+      el('span', { className: 'bk-kind ' + e.kind }, e.kind[0].toUpperCase()),
+      el('div', { style: { flex: '1', minWidth: '0' } },
+        el('b', {}, e.item || e.category || e.party || (BOOK_KINDS.find(k => k[0] === e.kind) || [])[1] || ''),
+        el('div', { className: 'muted', style: { fontSize: '12px' } },
+          [e.date, e.party, e.method, e.qty > 1 ? '×' + e.qty : ''].filter(Boolean).join(' · '))),
+      el('span', { className: 'bk-amt ' + (e.kind === 'sale' ? 'in' : 'out') },
+        (e.kind === 'sale' ? '+' : '−') + bMoney(e.amount)),
+      el('button', { className: 'btn small ghost', onclick: () => {
+        const i = all.indexOf(e); if (i > -1) all.splice(i, 1);
+        store.set('ott_books', all); redraw();
+      } }, 'Delete')));
+  });
+  return list;
+}
+
+function bEntryModal(all, redraw) {
+  let kind = 'sale';
+  const date = el('input', { type: 'date', value: bToday() });
+  const party = el('input', { placeholder: 'Customer or supplier (optional)' });
+  const item = el('input', { placeholder: 'What was it?' });
+  const qty = el('input', { type: 'number', value: '1', min: '1' });
+  const amount = el('input', { type: 'number', placeholder: 'Amount ₹' });
+  const cost = el('input', { type: 'number', placeholder: 'What it cost you (optional)' });
+  const cat = el('select'); EXPENSE_CATS.forEach(c => cat.append(el('option', { value: c }, c)));
+  const method = el('select'); PAY_METHODS.forEach(m => method.append(el('option', { value: m }, m)));
+  const note = el('textarea', { placeholder: 'Note (optional)' });
+
+  const costRow = lbl('Cost price — powers your margin', cost);
+  const catRow = lbl('Category', cat);
+  const partyRow = lbl('Customer / supplier', party);
+  const applyKind = () => {
+    costRow.style.display = kind === 'sale' ? '' : 'none';
+    catRow.style.display = kind === 'expense' ? '' : 'none';
+    partyRow.style.display = kind === 'expense' ? 'none' : '';
+    item.placeholder = kind === 'expense' ? 'What was it for?' : 'What was it?';
+  };
+
+  const tabs = el('div', { className: 'row' });
+  BOOK_KINDS.forEach(([k, lab]) => tabs.append(el('button', {
+    className: 'btn small' + (kind === k ? ' primary' : ''),
+    onclick: () => {
+      kind = k;
+      [...tabs.children].forEach((btn, i) => { btn.className = 'btn small' + (BOOK_KINDS[i][0] === k ? ' primary' : ''); });
+      applyKind();
+    },
+  }, lab)));
+
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) scrim.remove(); } },
+    el('div', { className: 'modal-box', style: { width: '440px', textAlign: 'left' } },
+      el('h3', {}, 'Add to your books'),
+      tabs, lbl('Date', date), partyRow, lbl('Item', item),
+      el('div', { className: 'row' }, lbl('Qty', qty), lbl('Amount ₹', amount)),
+      costRow, catRow, lbl('Paid by', method), lbl('Note', note),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn ghost', onclick: () => scrim.remove() }, 'Cancel'),
+        el('button', { className: 'btn primary', onclick: () => {
+          const amt = Number(amount.value);
+          if (!Number.isFinite(amt) || amt <= 0) return toast('Enter an amount', 'err');
+          all.push({ id: Date.now(), ts: Date.now(), date: date.value || bToday(), kind,
+            party: kind === 'expense' ? '' : party.value.trim(), item: item.value.trim(),
+            category: kind === 'expense' ? cat.value : '',
+            qty: Math.max(1, Number(qty.value) || 1), amount: amt,
+            cost: kind === 'sale' ? (Number(cost.value) || 0) : 0,
+            method: method.value, note: note.value.trim() });
+          store.set('ott_books', all);
+          scrim.remove(); redraw(); toast('Saved');
+        } }, 'Save entry'))));
+
+  document.body.append(scrim);
+  applyKind();
+  setTimeout(() => amount.focus(), 0);
+}
+
 function promptModal(title, sub, def = '') {
   return new Promise((resolve) => {
     const inp = el('input', { value: def, placeholder: sub || '' });
@@ -2107,6 +2466,8 @@ const BACKUP_MAP = [
   ['ott_lead_seqs', 'wa_funnels', 'Follow-up sequences'],
   ['ott_offers', null, 'Auto offer posts'],
   ['ott_sig', null, 'Message signature'],
+  ['ott_notes', 'wa_notes', 'Chat notes'],
+  ['ott_books', 'wa_books', 'Sales, purchases & expenses'],
 ];
 const bkCount = (v) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : (v ? 1 : 0)));
 
