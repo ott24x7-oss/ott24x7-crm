@@ -434,9 +434,9 @@ RENDER.broadcast = (b) => {
   function renderTarget() {
     targetBox.innerHTML = ''; curList = null;
     if (mode.value === 'numbers') { targetBox.append(numbers, el('div', { className: 'row' }, importBtn(numbers))); }
-    else if (mode.value === 'contacts') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const cs = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>({jid:((x.id&&x.id.user)||'')+'@c.us',name:x.name||x.pushname||x.formattedName||''})).filter(x=>x.jid!=='@c.us')}catch(e){return[]}})()").catch(() => []); setList(cs, `${cs.length} contacts loaded`); } }, 'Load my contacts'), el('div', { id: 'tgtlist' })); }
+    else if (mode.value === 'contacts') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const cs = await waExec("(async()=>{try{${PH_RESOLVER};const c=await WPP.contact.list();var o=[];for(var i=0;i<c.length;i++){var x=c[i];if(!x.isMyContact)continue;var ph=await _ph(x.id);if(!ph)continue;o.push({jid:ph+'@c.us',name:x.name||x.pushname||x.formattedName||''});}return o}catch(e){return[]}})()").catch(() => []); setList(cs, `${cs.length} contacts loaded`); } }, 'Load my contacts'), el('div', { id: 'tgtlist' })); }
     else if (mode.value === 'groups') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []); setList(gs, `${gs.length} groups loaded`); } }, 'Load groups'), el('div', { id: 'tgtlist' })); }
-    else if (mode.value === 'groupmembers') { targetBox.append(el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel, el('div', { className: 'row', style: { marginTop: '8px' } }, el('button', { className: 'btn small', onclick: async () => { const gid = gsel.value; if (!gid) return toast('Pick a group', 'err'); const ps = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>({jid:m.id.user+'@c.us',name:''}))}catch(e){return[]}})()`).catch(() => []); setList(ps, `${ps.length} members`); } }, 'Load members')), el('div', { id: 'tgtlist' })); }
+    else if (mode.value === 'groupmembers') { targetBox.append(el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel, el('div', { className: 'row', style: { marginTop: '8px' } }, el('button', { className: 'btn small', onclick: async () => { const gid = gsel.value; if (!gid) return toast('Pick a group', 'err'); const ps = await waExec(`(async()=>{try{${PH_RESOLVER};const p=await WPP.group.getParticipants(${JSON.stringify(gid)});var o=[];for(var i=0;i<p.length;i++){var ph=await _ph(p[i].id);if(ph)o.push({jid:ph+'@c.us',name:''});}return o}catch(e){return[]}})()`).catch(() => []); setList(ps, `${ps.length} members`); } }, 'Load members')), el('div', { id: 'tgtlist' })); }
   }
   mode.onchange = renderTarget;
 
@@ -991,11 +991,12 @@ RENDER.autopost = (b) => {
 function applyLeadButton(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const js = `(function(){
+    ${PH_RESOLVER}
     if(!window.__ott_lead_init){window.__ott_lead_init=true;window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];
       try{WPP.on('chat.new_message',function(m){try{if(!m)return;var body=(m.body||'');if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});return;}var u=m.from&&m.from.user;if(u)window.__ott_inq.push(u);}catch(e){}});}catch(e){}
       setInterval(place,4000);
     }
-    function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){var u=(c.id&&c.id.user)||'';var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;window.__ott_leadq.push({number:u,name:nm});var b=document.getElementById('ott-lead-btn');if(b){b.textContent='\\u2713 Lead saved';setTimeout(function(){b.textContent='\\uFF0B Lead';},1500);}}}catch(e){}}
+    async function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(!c)return;var u=await _ph(c.id);if(!u&&c.contact&&c.contact.id)u=await _ph(c.contact.id);var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;var b=document.getElementById('ott-lead-btn');if(!u){if(b){b.textContent='no number';setTimeout(function(){b.textContent='\uFF0B Lead';},1600);}return;}window.__ott_leadq.push({number:u,name:nm});if(b){b.textContent='\u2713 Lead saved';setTimeout(function(){b.textContent='\uFF0B Lead';},1500);}}catch(e){}}
     function place(){var header=document.querySelector('#main header');if(!header||document.getElementById('ott-lead-btn'))return;var b=document.createElement('button');b.id='ott-lead-btn';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:#12b866;color:#fff;border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
     place();
   })();`;
@@ -1012,6 +1013,7 @@ function applyChatWidget(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const js = `(function(){
     if(window.__ott_widget_init)return; window.__ott_widget_init=true;
+    ${PH_RESOLVER}
     window.__ott_actq=window.__ott_actq||[];
     var A=[['note','Chat note','M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15h6M9 11h6'],
            ['lead','Save as lead','M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6'],
@@ -1056,12 +1058,16 @@ function applyChatWidget(accId) {
       document.addEventListener('keydown',function(e){if(e.key==='Escape')w.classList.remove('open');});
       return w;
     }
-    function push(op){
+    async function push(op){
       try{
         var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();
         if(!c)return;
-        var u=(c.id&&c.id.user)||'';
+        // c.id.user is an internal LID on many chats now, not a phone number. Resolve it,
+        // and refuse rather than hand the CRM an id that can never be messaged.
+        var u=await _ph(c.id);
+        if(!u&&c.contact&&c.contact.id)u=await _ph(c.contact.id);
         var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;
+        if(!u){alert('WhatsApp does not expose a phone number for this chat, so it cannot be saved.');return;}
         window.__ott_actq.push({op:op,number:u,name:nm});
       }catch(e){}
     }
@@ -1928,7 +1934,7 @@ RENDER.grouputils = (b) => {
       const gid = sel.value; if (!gid) return toast('Load & pick a group', 'err');
       if (!confirm('Remove ALL members and leave this group? This cannot be undone.')) return;
       const me = await waExec("(async()=>{try{return WPP.conn.getMyUserId().user}catch(e){return ''}})()").catch(() => '');
-      const ids = await waExec(`(async()=>{try{const p=await WPP.group.getParticipants(${JSON.stringify(gid)});return p.map(m=>(m.id&&(m.id._serialized||(m.id.user+'@c.us')))||'')}catch(e){return[]}})()`).catch(() => []);
+      const ids = await waExec(`(async()=>{try{${PH_RESOLVER};const p=await WPP.group.getParticipants(${JSON.stringify(gid)});var o=[];for(var i=0;i<p.length;i++){var ph=await _ph(p[i].id);o.push(ph?ph+'@c.us':((p[i].id&&p[i].id._serialized)||''));}return o.filter(Boolean)}catch(e){return[]}})()`).catch(() => []);
       const targets = ids.filter(x => x && (!me || x.indexOf(me) === -1));
       out.innerHTML = ''; line(out, `Removing ${targets.length} members…`);
       for (let i = 0; i < targets.length; i += 5) {
@@ -2064,7 +2070,7 @@ function checkList(items, preselect) {
 }
 // Set of user-ids that are in the phone's contacts ("saved").
 async function savedSet() {
-  const arr = await waExec("(async()=>{try{const c=await WPP.contact.list();return c.filter(x=>x.isMyContact).map(x=>(x.id&&x.id.user)||'').filter(Boolean)}catch(e){return[]}})()").catch(() => []);
+  const arr = await waExec("(async()=>{try{${PH_RESOLVER};const c=await WPP.contact.list();var o=[];for(var i=0;i<c.length;i++){if(!c[i].isMyContact)continue;var ph=await _ph(c[i].id);if(ph)o.push(ph);}return o}catch(e){return[]}})()").catch(() => []);
   return new Set(arr);
 }
 // Injected resolver: WID -> real phone number, '' for privacy LIDs that can't be resolved.
