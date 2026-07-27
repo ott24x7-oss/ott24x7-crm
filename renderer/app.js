@@ -882,15 +882,21 @@ function applyQuickReplies(accId) {
       var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
       /* Render the bar even with nothing saved: an empty strip hides the feature, so the
          "add" chip is the only way a new user discovers quick replies exist. */
-      if(!footer){if(bar)bar.style.display='none';return;}
+      var hide=function(){if(bar)bar.style.display='none';window.__ottReserve('qr',0);};
+      if(!footer){hide();return;}
       var r=footer.getBoundingClientRect();
-      if(r.width<320){if(bar)bar.style.display='none';return;}
+      if(r.width<320){hide();return;}
       /* Same collision as the widget: the attach and emoji menus open right here. */
       var bh=(bar&&bar.offsetHeight)||34;
-      if(window.__ottMenuOpen({left:r.left+14,right:r.right-14,top:r.top-bh-6,bottom:r.top-6})){if(bar)bar.style.display='none';return;}
+      if(window.__ottMenuOpen({left:r.left+14,right:r.right-14,top:r.top-bh-6,bottom:r.top-6})){hide();return;}
       var s=sig(qs,r);
-      /* Nothing moved and no chip changed -> zero DOM writes this tick. */
-      if(bar&&bar.getAttribute('data-sig')===s){if(bar.style.display==='none')bar.style.display='flex';return;}
+      /* Nothing moved and no chip changed -> zero DOM writes this tick. Still re-assert the
+         reserved space: WhatsApp drops our padding whenever it re-renders the panel. */
+      if(bar&&bar.getAttribute('data-sig')===s){
+        if(bar.style.display==='none')bar.style.display='flex';
+        window.__ottReserve('qr',bh+6);
+        return;
+      }
       css();
       if(!bar){bar=document.createElement('div');bar.id='ott-qr-bar';bar.setAttribute('role','toolbar');bar.setAttribute('aria-label','Quick replies');document.body.appendChild(bar);}
       bar.setAttribute('data-sig',s);
@@ -906,7 +912,9 @@ function applyQuickReplies(accId) {
         bar.appendChild(chip('+','Manage quick replies','ott-qr-add',manage));
       }
       /* Sit flush above the composer, measured after layout so the height is real. */
-      bar.style.top=Math.round(r.top-bar.offsetHeight-6)+'px';
+      var hgt=bar.offsetHeight;
+      bar.style.top=Math.round(r.top-hgt-6)+'px';
+      window.__ottReserve('qr',hgt+6);
     }
     function manage(){(window.__ott_actq=window.__ott_actq||[]).push({op:'quick'});}
     render();if(!window.__ott_qr_init){window.__ott_qr_init=true;setInterval(render,3000);window.addEventListener('resize',render);window.__ottOnMenu(render);}
@@ -1131,12 +1139,29 @@ function applyChatWidget(accId) {
          Stand down while any of them is open. */
       var f=main.querySelector('footer'); var fr=f?f.getBoundingClientRect():null;
       var bottom=(fr&&fr.height>20)?fr.top:r.bottom;
+      /* The quick-reply strip occupies the same left edge just above the composer, and we
+         sit on a higher layer — so without this the handle covered the first chips and ate
+         their clicks. Stack above the strip whenever it is showing. */
+      var qb=document.getElementById('ott-qr-bar');
+      if(qb&&qb.style.display!=='none'){
+        var qr=qb.getBoundingClientRect();
+        if(qr.height>0)bottom=Math.min(bottom,qr.top-8);
+      }
       var h=w.offsetHeight||250;
       var left=Math.round(r.left+14), top=Math.round(Math.max(r.top+8,bottom-h-14));
-      if(window.__ottMenuOpen({left:left,top:top,right:left+(w.offsetWidth||220),bottom:top+h})){w.style.display='none';return;}
+      /* Collapsed, the action column is still laid out (opacity 0, no pointer events), so
+         w's own box is ~250px of mostly nothing. Test the handle instead, or a tall menu
+         overlapping only the invisible part would hide the widget for no reason. */
+      var hit=w.querySelector('.h'), hh=(hit&&hit.offsetHeight)||42, hw=(hit&&hit.offsetWidth)||42;
+      var open=w.className.indexOf('open')>-1;
+      var box=open?{left:left,top:top,right:left+(w.offsetWidth||220),bottom:top+h}
+                  :{left:left,top:top+h-hh,right:left+hw,bottom:top+h};
+      if(window.__ottMenuOpen(box)){w.style.display='none';window.__ottReserve('w',0);return;}
       w.style.display='flex';
       w.style.left=left+'px';
       w.style.top=top+'px';
+      /* Only the handle is ever visible when closed, so that is all we reserve. */
+      window.__ottReserve('w',hh+10);
     }
     place(); setInterval(place,1200); window.addEventListener('resize',place);
     /* A 1.2s poll would leave the menu blocked for up to a second, which reads as
@@ -2824,6 +2849,42 @@ const MENU_GUARD = `window.__ottMenuOpen=window.__ottMenuOpen||function(box){
     }
   }catch(e){}
   return false;
+};
+/* Our strip and widget are position:fixed over the bottom of the conversation, so they
+   cover the newest messages — the one place the user is actually reading. Padding the
+   message scroller reserves that space instead, so WhatsApp scrolls its own content clear
+   of us. Each caller registers its own height and the total is applied once. */
+/* Cached: this runs on every DOM mutation, and #main holds thousands of divs once a
+   conversation is loaded. Re-scanning each time made WhatsApp itself sluggish. */
+window.__ottScroller=window.__ottScroller||function(){
+  try{
+    var c=window.__ottSc;
+    if(c&&c.isConnected&&c.clientHeight>200)return c;
+    var main=document.querySelector('#main'); if(!main)return (window.__ottSc=null);
+    var ns=main.querySelectorAll('div');
+    for(var i=0;i<ns.length;i++){
+      var n=ns[i];
+      if(n.clientHeight<200)continue;
+      var oy=getComputedStyle(n).overflowY;
+      if(oy==='auto'||oy==='scroll')return (window.__ottSc=n);
+    }
+  }catch(e){/* reserving space is an enhancement, never a hard requirement */}
+  return (window.__ottSc=null);
+};
+window.__ottReserve=window.__ottReserve||function(key,px){
+  var pads=window.__ottPads=window.__ottPads||{};
+  pads[key]=px>0?px:0;
+  var total=0; for(var k in pads)total+=pads[k];
+  var s=window.__ottScroller(); if(!s)return;
+  try{
+    /* Re-apply after a re-render: the fresh node has no marker even though total is same. */
+    if(s.getAttribute('data-ott-pad')===String(total))return;
+    var atBottom=(s.scrollHeight-s.scrollTop-s.clientHeight)<40;
+    s.style.paddingBottom=total+'px';
+    s.setAttribute('data-ott-pad',String(total));
+    /* Growing the padding pushes the last message out of view unless we follow it down. */
+    if(atBottom)s.scrollTop=s.scrollHeight;
+  }catch(e){}
 };
 window.__ottOnMenu=window.__ottOnMenu||function(fn){
   var cbs=window.__ottMenuCbs=window.__ottMenuCbs||[];
