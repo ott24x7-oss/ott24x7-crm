@@ -581,6 +581,10 @@ RENDER.quick = (b) => {
   const category = el('input', { placeholder: 'Category (e.g. Ebooks, Courses)', maxLength: 30 });
   const mtype = el('select'); [['text', 'Text only'], ['image', 'Image / Video'], ['audio', 'Audio'], ['doc', 'Document']].forEach(([v, n]) => mtype.append(el('option', { value: v }, n)));
   const text = el('textarea', { placeholder: 'Caption / message (supports {a|b} spin)' });
+  // Rates live on the product so a deal can pull them in instead of being retyped, and so
+  // the margin reaches Sales & Expenses without the seller doing the arithmetic.
+  const sell = el('input', { type: 'number', min: '0', placeholder: 'What you sell it for' });
+  const cost = el('input', { type: 'number', min: '0', placeholder: 'What it costs you' });
   const att = attachControl('*'); att.node.style.display = 'none';
   const chipChk = chk(false);
   mtype.onchange = () => { att.node.style.display = mtype.value === 'text' ? 'none' : 'flex'; };
@@ -617,7 +621,10 @@ RENDER.quick = (b) => {
         el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
           el('b', {}, it.title || deriveTitle(it.text) || '(untitled)'),
           it.category ? el('span', { className: 'muted', style: { fontSize: '11px', border: '1px solid var(--line)', borderRadius: '10px', padding: '1px 8px' } }, it.category) : null,
-          it.pinned !== false ? el('span', { title: 'Shows as chip on chat bar', style: { fontSize: '11px' } }, '📌') : null),
+          it.pinned !== false ? el('span', { title: 'Shows as chip on chat bar', style: { fontSize: '11px' } }, '📌') : null,
+          Number(it.sell) > 0 ? el('span', { className: 'rate-tag', title: 'Selling rate' }, '₹' + Number(it.sell).toLocaleString('en-IN')) : null,
+          Number(it.cost) > 0 ? el('span', { className: 'rate-tag cost', title: 'Purchase rate' }, 'cost ₹' + Number(it.cost).toLocaleString('en-IN')) : null,
+          Number(it.sell) > 0 && Number(it.cost) > 0 ? marginChip(it.sell, it.cost, 'Profit per sale') : null),
         el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px', lineHeight: '1.45', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' } }, cleanPreview(it.text) || it.filename || ''),
         el('div', { className: 'row', style: { marginTop: '8px' } },
           el('button', { className: 'btn small', onclick: () => sendQuickToActiveChat(it) }, '➤ Send to chat'),
@@ -630,14 +637,17 @@ RENDER.quick = (b) => {
     el('div', { className: 'fp-note' }, 'Save your product offers (image + caption) once, then search and send them to the open chat in one click. Pin your most-used ones as chips above the message box.'),
     lbl('Product / offer name', title),
     el('div', { className: 'row' }, lbl('Category', category), lbl('Type', mtype)),
+    el('div', { className: 'row' }, lbl('Selling rate ₹', sell), lbl('Purchase rate ₹', cost)),
+    el('div', { className: 'fp-note', style: { margin: '-2px 0 0' } },
+      'Optional. Fill these in and “Deal done” will pick them up for you — the difference becomes your profit in Sales & Expenses.'),
     lbl('Caption / message', text), att.node,
     chkRow(chipChk, 'Also show as a quick chip on the chat bar'),
     el('button', { className: 'btn primary', onclick: () => {
       const f = att.get();
       if (!title.value.trim() && !text.value.trim() && !f) return toast('Add a name, caption, or file', 'err');
       const qs = store.get('ott_quick', []);
-      qs.push({ title: title.value.trim() || deriveTitle(text.value), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked });
-      if (store.set('ott_quick', qs)) { title.value = text.value = category.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
+      qs.push({ title: title.value.trim() || deriveTitle(text.value), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked, sell: Number(sell.value) || 0, cost: Number(cost.value) || 0 });
+      if (store.set('ott_quick', qs)) { title.value = text.value = category.value = sell.value = cost.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
     } }, '＋ Save product / offer'),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
     el('div', { className: 'row' }, lbl('Search', search), lbl('Category', catF)),
@@ -2556,6 +2566,36 @@ function dealModal(number, name, existing) {
   const d = existing || {};
   const item = el('input', { placeholder: 'What did they buy?', value: d.item || '' });
   const amount = el('input', { type: 'number', placeholder: 'Amount ₹ (optional)', value: d.amount || '' });
+  const cost = el('input', { type: 'number', min: '0', placeholder: 'What it cost you', value: d.cost || '' });
+
+  // Pick a saved product to fill the rates in, rather than retyping them on every sale.
+  // Both stay editable afterwards — a deal is often closed at a negotiated price.
+  const products = store.get('ott_quick', []).filter((q) => q.title || q.text);
+  const pick = el('select');
+  pick.append(el('option', { value: '' }, products.length ? 'Choose a saved product…' : 'No products saved yet'));
+  products.forEach((q, i) => pick.append(el('option', { value: String(i) },
+    (q.title || deriveTitle(q.text) || 'Untitled') + (Number(q.sell) > 0 ? ` — ₹${q.sell}` : ''))));
+  pick.onchange = () => {
+    // Number('') is 0, so without this the placeholder resolves to the first product —
+    // backing out of the picker would overwrite the rates you just typed.
+    if (pick.value === '') return;
+    const q = products[Number(pick.value)];
+    if (!q) return;
+    item.value = q.title || deriveTitle(q.text) || '';
+    if (Number(q.sell) > 0) amount.value = String(q.sell);
+    if (Number(q.cost) > 0) cost.value = String(q.cost);
+    margin();
+  };
+
+  const marginNote = el('div', { className: 'fp-note', style: { margin: '2px 0 0' } });
+  const margin = () => {
+    const a = Number(amount.value) || 0, c = Number(cost.value) || 0;
+    if (!a) { marginNote.textContent = ''; return; }
+    marginNote.textContent = c > 0
+      ? `Profit on this sale: ₹${(a - c).toLocaleString('en-IN')}${a - c < 0 ? ' — you are selling below cost' : ''}`
+      : 'Add what it cost you and the profit shows up in Sales & Expenses.';
+  };
+  amount.oninput = cost.oninput = margin;
   const days = el('input', { type: 'number', min: '1', value: String(d.days || 30) });
   const start = el('input', { type: 'date', value: new Date(d.start || Date.now()).toISOString().slice(0, 10) });
   const note = el('textarea', { placeholder: 'Note (optional)', value: d.note || '' });
@@ -2578,8 +2618,11 @@ function dealModal(number, name, existing) {
     el('div', { className: 'modal-box', style: { width: '440px', textAlign: 'left' } },
       el('h3', {}, existing ? 'Edit deal' : 'Deal done'),
       el('div', { className: 'fp-note' }, `${name || number} · ${number}`),
+      existing ? null : lbl('Fill from a saved product', pick),
       lbl('Item / plan', item),
-      el('div', { className: 'row' }, lbl('Amount', amount), lbl('Validity (days)', days)),
+      el('div', { className: 'row' }, lbl('Selling rate ₹', amount), lbl('Purchase rate ₹', cost)),
+      marginNote,
+      lbl('Validity (days)', days),
       lbl('Purchased on', start),
       expiryNote,
       lbl('Note', note),
@@ -2594,7 +2637,7 @@ function dealModal(number, name, existing) {
           if (existing) {
             const D = ds.find((x) => x.id === existing.id);
             if (D) {
-              Object.assign(D, { item: item.value.trim(), amount: Number(amount.value) || 0, days: dv, start: st, expires: st + dv * DAY, note: note.value.trim() });
+              Object.assign(D, { item: item.value.trim(), amount: Number(amount.value) || 0, cost: Number(cost.value) || 0, days: dv, start: st, expires: st + dv * DAY, note: note.value.trim() });
               // Re-arm anything that has not fired yet against the new dates.
               dealSchedule(D, cfg);
               store.set('ott_deals', ds);
@@ -2602,7 +2645,7 @@ function dealModal(number, name, existing) {
           } else {
             const nd = dealSchedule({
               id: Date.now(), number: digits(String(number)), name: name || '', accId: activeId,
-              item: item.value.trim(), amount: Number(amount.value) || 0, days: dv,
+              item: item.value.trim(), amount: Number(amount.value) || 0, cost: Number(cost.value) || 0, days: dv,
               start: st, expires: st + dv * DAY, note: note.value.trim(),
               fbSent: false, rnSent: false, status: 'active', logs: [],
             }, cfg);
@@ -2610,8 +2653,10 @@ function dealModal(number, name, existing) {
             store.set('ott_deals', ds);
             if (toBooks.checked && nd.amount > 0) {
               const bk = store.get('ott_books', []);
+              // Carrying the cost across is what makes the books show profit rather than
+              // just turnover — a sale with cost 0 reads as 100% margin.
               bk.push({ id: Date.now() + 1, ts: Date.now(), date: new Date(st).toISOString().slice(0, 10), kind: 'sale',
-                party: name || number, item: nd.item, category: '', qty: 1, amount: nd.amount, cost: 0,
+                party: name || number, item: nd.item, category: '', qty: 1, amount: nd.amount, cost: nd.cost,
                 method: 'Cash', note: 'From deal' });
               store.set('ott_books', bk);
             }
@@ -2639,12 +2684,14 @@ RENDER.deals = (b) => {
     const expired = ds.filter((d) => d.status === 'active' && d.expires <= now);
     const soon = active.filter((d) => d.expires - now <= 7 * DAY);
     const revenue = ds.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+    const profit = ds.reduce((s, d) => s + ((Number(d.amount) || 0) - (Number(d.cost) || 0)), 0);
 
     wrap.append(el('div', { className: 'bk-kpis', style: { gridTemplateColumns: 'repeat(4, 1fr)' } },
       dKpi('Active deals', String(active.length), 'Running right now', 'good'),
       dKpi('Expiring in 7 days', String(soon.length), soon.length ? 'Reach out before they lapse' : 'Nothing due', soon.length ? 'warn' : ''),
       dKpi('Expired', String(expired.length), 'Awaiting renewal', expired.length ? 'bad' : ''),
-      dKpi('Total value', '₹' + revenue.toLocaleString('en-IN'), 'All deals recorded')));
+      dKpi('Total value', '₹' + revenue.toLocaleString('en-IN'),
+        profit !== revenue ? `₹${profit.toLocaleString('en-IN')} profit` : 'All deals recorded')));
 
     const tabs = el('div', { className: 'row', style: { marginTop: '10px' } });
     [['active', `Active (${active.length})`], ['soon', `Expiring (${soon.length})`], ['expired', `Expired (${expired.length})`], ['all', `All (${ds.length})`]]
@@ -2672,6 +2719,14 @@ RENDER.deals = (b) => {
   draw();
 };
 
+// A margin chip. Selling below cost is a real case — swapped rate fields, or a genuine
+// loss-leader — and it must not read as a gain: "+₹-100" in green is worse than useless.
+function marginChip(sell, cost, title) {
+  const p = (Number(sell) || 0) - (Number(cost) || 0);
+  return el('span', { className: 'rate-tag ' + (p < 0 ? 'loss' : 'margin'), title: p < 0 ? 'Selling below cost' : title },
+    (p < 0 ? '−₹' : '+₹') + Math.abs(p).toLocaleString('en-IN'));
+}
+
 function dKpi(label, value, sub, tone) {
   return el('div', { className: 'bk-kpi' + (tone ? ' ' + tone : '') },
     el('span', { className: 'k-lab' }, label),
@@ -2691,6 +2746,7 @@ function dealCard(d, cfg, redraw) {
     el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
       el('b', {}, d.item || '(no item)'),
       d.amount ? el('span', { className: 'muted', style: { fontSize: '12px' } }, '₹' + Number(d.amount).toLocaleString('en-IN')) : null,
+      Number(d.cost) > 0 ? marginChip(d.amount, d.cost, 'Profit on this sale') : null,
       el('span', { className: 'deal-when ' + tone }, state)),
     el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } },
       `${d.name || d.number} · ${d.number} · ${dealDate(d.start)} → ${dealDate(d.expires)}`),
@@ -2762,14 +2818,15 @@ function exportDealsCsv(ds) {
   if (!ds.length) return toast('No deals to export', 'err');
   const rows = ds.map((d) => ({
     name: d.name || '', number: d.number, item: d.item || '', amount: d.amount || 0,
+    cost: d.cost || 0, profit: (Number(d.amount) || 0) - (Number(d.cost) || 0),
     validity_days: d.days, purchased: new Date(d.start).toISOString().slice(0, 10),
     expires: new Date(d.expires).toISOString().slice(0, 10),
     days_left: Math.ceil((d.expires - Date.now()) / DAY),
     feedback_sent: d.fbSent ? 'yes' : 'no', renewal_sent: d.rnSent ? 'yes' : 'no',
     status: d.expires <= Date.now() ? 'expired' : d.status, note: d.note || '',
   }));
-  downloadCsv('wa-crm-deals.csv', rows, ['name', 'number', 'item', 'amount', 'validity_days',
-    'purchased', 'expires', 'days_left', 'feedback_sent', 'renewal_sent', 'status', 'note']);
+  downloadCsv('wa-crm-deals.csv', rows, ['name', 'number', 'item', 'amount', 'cost', 'profit',
+    'validity_days', 'purchased', 'expires', 'days_left', 'feedback_sent', 'renewal_sent', 'status', 'note']);
 }
 
 

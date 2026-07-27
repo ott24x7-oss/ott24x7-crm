@@ -549,3 +549,14 @@ input[type="range"]:active::-webkit-slider-thumb { filter: brightness(1.1); }
 @media (prefers-reduced-motion: reduce) {
   .deal-set > summary::before { transition: none; }
 }
+
+/* Rate chips on a catalog product and on a deal card. Selling rate, purchase rate and
+   the profit between them, so the numbers are scannable without opening anything. */
+.rate-tag {
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+  border-radius: 10px; padding: 1px 8px; white-space: nowrap;
+  color: var(--green-soft); background: rgba(18, 184, 102, .12);
+}
+.rate-tag.cost { color: var(--muted); background: rgba(255, 255, 255, .06); }
+.rate-tag.margin { color: #04240f; background: var(--green); }
+.rate-tag.loss { color: #2a0b0b; background: #ff8f8f; }
