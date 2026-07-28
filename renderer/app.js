@@ -907,7 +907,10 @@ function applyQuickReplies(accId) {
       var footer=document.querySelector('#main footer'); var bar=document.getElementById('ott-qr-bar'); var qs=window.__ott_quick||[];
       /* Render the bar even with nothing saved: an empty strip hides the feature, so the
          "add" chip is the only way a new user discovers quick replies exist. */
-      var hide=function(){if(bar)bar.style.display='none';window.__ottReserve('qr',0);};
+      /* Hide only. Releasing the reserved space here would resize WhatsApp's message pane
+         the instant a menu opened, and that churn is what made the attach menu flicker
+         shut. The space stays put so nothing reflows underneath an open menu. */
+      var hide=function(){if(bar)bar.style.display='none';};
       if(!footer){hide();return;}
       var r=footer.getBoundingClientRect();
       if(r.width<320){hide();return;}
@@ -1183,7 +1186,7 @@ function applyChatWidget(accId) {
       var open=w.className.indexOf('open')>-1;
       var box=open?{left:left,top:top,right:left+(w.offsetWidth||220),bottom:top+h}
                   :{left:left,top:top+h-hh,right:left+hw,bottom:top+h};
-      if(window.__ottMenuOpen(box)){w.style.display='none';window.__ottReserve('w',0);return;}
+      if(window.__ottMenuOpen(box)){w.style.display='none';return;}
       w.style.display='flex';
       w.style.left=left+'px';
       w.style.top=top+'px';
@@ -2953,11 +2956,12 @@ window.__ottReserve=window.__ottReserve||function(key,px){
   try{
     /* Re-apply after a re-render: the fresh node has no marker even though total is same. */
     if(s.getAttribute('data-ott-pad')===String(total))return;
-    var atBottom=(s.scrollHeight-s.scrollTop-s.clientHeight)<40;
     s.style.paddingBottom=total+'px';
     s.setAttribute('data-ott-pad',String(total));
-    /* Growing the padding pushes the last message out of view unless we follow it down. */
-    if(atBottom)s.scrollTop=s.scrollHeight;
+    /* Deliberately NOT scrolling the list to follow the padding. Writing scrollTop fires a
+       scroll event on WhatsApp's message pane, and WhatsApp dismisses an open popup on
+       scroll — so pressing the attach button opened the menu and closed it again a frame
+       later. Losing a few pixels of scroll position is worth a working attach button. */
   }catch(e){}
 };
 window.__ottOnMenu=window.__ottOnMenu||function(fn){
