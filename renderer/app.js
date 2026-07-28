@@ -601,6 +601,51 @@ RENDER.quick = (b) => {
   const list = el('div', { className: 'rules' });
   const search = el('input', { placeholder: 'Search products…' });
   const catF = el('select');
+
+  // Bulk selection holds indices into the full ott_quick array, and deliberately survives
+  // search and category changes: narrow, select, narrow again, then delete once. Because
+  // that means a selection can include rows you cannot currently see, every count shown —
+  // and the confirm — is the true total, never just the visible ones.
+  let selected = new Set();
+  let visible = []; // indices matching the current filter, for "select all"
+  const selAll = chk(false);
+  const selCount = el('b', {});
+  const bulkBar = el('div', {
+    className: 'row',
+    style: {
+      display: 'none', alignItems: 'center', gap: '10px', margin: '0 0 8px',
+      padding: '8px 12px', border: '1px solid var(--line)', borderRadius: '10px',
+      background: 'rgba(18,184,102,.06)',
+    },
+  });
+  const bulkDelete = () => {
+    const qs = store.get('ott_quick', []);
+    // A stale index can only mean the list changed under us; dropping them keeps the count
+    // honest rather than deleting the wrong row.
+    const hit = [...selected].filter((i) => i >= 0 && i < qs.length);
+    if (!hit.length) return;
+    if (!confirm(`Delete ${hit.length} saved product${hit.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    const kill = new Set(hit);
+    if (store.set('ott_quick', qs.filter((_, idx) => !kill.has(idx)))) {
+      selected = new Set();
+      drawFilters(); draw(); refreshChips();
+      toast(`Deleted ${hit.length} product${hit.length === 1 ? '' : 's'}`);
+    }
+  };
+  selAll.onchange = () => {
+    // Scoped to what the filter is showing — "select all" while searching must never reach
+    // products the search excluded.
+    if (selAll.checked) visible.forEach((i) => selected.add(i));
+    else visible.forEach((i) => selected.delete(i));
+    draw();
+  };
+  bulkBar.append(
+    chkRow(selAll, 'Select all shown'),
+    el('span', { style: { flex: '1' } }),
+    selCount,
+    el('button', { className: 'btn small ghost', onclick: () => { selected = new Set(); draw(); } }, 'Clear'),
+    el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: bulkDelete }, 'Delete selected'));
+
   const drawFilters = () => {
     const cur = catF.value;
     const cats = [...new Set(store.get('ott_quick', []).map(q => (q.category || '').trim()).filter(Boolean))].sort();
@@ -615,8 +660,17 @@ RENDER.quick = (b) => {
     const items = qs.map((it, i) => ({ it, i })).filter(({ it }) =>
       (cf === 'all' || (it.category || '') === cf) &&
       (!q || (it.title || '').toLowerCase().includes(q) || (it.text || '').toLowerCase().includes(q) || (it.category || '').toLowerCase().includes(q)));
+    visible = items.map(({ i }) => i);
+    // Drop indices that no longer exist so the count can never overstate what will be deleted.
+    selected = new Set([...selected].filter((i) => i >= 0 && i < qs.length));
+    const n = selected.size;
+    bulkBar.style.display = qs.length ? 'flex' : 'none';
+    selAll.checked = visible.length > 0 && visible.every((i) => selected.has(i));
+    selCount.textContent = n ? `${n} selected` : '';
+    selCount.style.color = n ? 'var(--danger)' : 'var(--muted)';
     if (!items.length) { list.append(el('div', { className: 'muted' }, qs.length ? 'No products match your search.' : 'No products saved yet — add one above.')); return; }
-    list.append(el('div', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' } }, items.length + ' item(s)'));
+    list.append(el('div', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' } },
+      items.length + ' item(s)' + (n && n > items.length ? ` · ${n} selected in total` : '')));
     items.forEach(({ it, i }) => list.append(catalogItem(it, i)));
   };
   function catalogItem(it, i) {
@@ -624,7 +678,11 @@ RENDER.quick = (b) => {
     const thumb = isImg
       ? el('img', { src: it.data, style: { width: '46px', height: '46px', objectFit: 'cover', borderRadius: '8px', flex: 'none' } })
       : el('div', { style: { width: '46px', height: '46px', borderRadius: '8px', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(18,184,102,.12)', fontSize: '20px' } }, it.data ? '📎' : '💬');
-    return el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start' } },
+    const box = chk(selected.has(i));
+    box.style.marginTop = '15px';
+    box.onchange = () => { if (box.checked) selected.add(i); else selected.delete(i); draw(); };
+    return el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px', display: 'flex', gap: '10px', alignItems: 'flex-start', ...(selected.has(i) ? { borderColor: 'var(--danger)' } : {}) } },
+      box,
       thumb,
       el('div', { style: { flex: '1', minWidth: '0' } },
         el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
@@ -660,6 +718,7 @@ RENDER.quick = (b) => {
     } }, '＋ Save product / offer'),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
     el('div', { className: 'row' }, lbl('Search', search), lbl('Category', catF)),
+    bulkBar,
     list);
   drawFilters(); draw();
 };
