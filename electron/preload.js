@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('ott', {
     saveKnowledgeRow: (acc, row) => ipcRenderer.invoke('ai:saveKnowledgeRow', acc, row),
     deleteKnowledge: (acc, id) => ipcRenderer.invoke('ai:deleteKnowledge', acc, id),
     embedAll: (acc) => ipcRenderer.invoke('ai:embedAll', acc),
+    dedupeKnowledge: (acc) => ipcRenderer.invoke('ai:dedupeKnowledge', acc),
     getExamples: (acc) => ipcRenderer.invoke('ai:getExamples', acc),
     saveExample: (acc, row) => ipcRenderer.invoke('ai:saveExample', acc, row),
     deleteExample: (acc, id) => ipcRenderer.invoke('ai:deleteExample', acc, id),

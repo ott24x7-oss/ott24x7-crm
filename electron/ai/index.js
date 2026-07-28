@@ -90,7 +90,15 @@ async function generate(ctx) {
   // times the poller hands it to us.
   if (ctx.msgId && (cstate.seen || []).includes(ctx.msgId)) return deny('Message already processed');
 
-  if (cstate.takenOver) return deny('Owner has taken over this conversation');
+  if (cstate.takenOver) {
+    const mins = Math.max(0, Number(s.takeoverMinutes) || 0);
+    const since = Date.now() - (cstate.lastOwnerAt || 0);
+    if (!mins || since < mins * 60000) {
+      return deny('You are handling this chat', { takenOver: true, sinceMin: Math.round(since / 60000) });
+    }
+    // Long enough since the owner last touched it — hand it back.
+    store.setConvo(accId, number, { takenOver: false });
+  }
   if (cstate.replies >= (s.maxRepliesPerConversation || 5)) return deny('Reply limit reached for this conversation');
 
   const avail = ownerAvailability(s, { lastActivityAt: ctx.lastActivityAt });
@@ -221,7 +229,11 @@ function register(ipc, dataDir) {
   H('ai:getKnowledge', (accId) => ({ ok: true, rows: store.getKnowledge(accId).map(stripVec) }));
   H('ai:saveKnowledgeRow', async (accId, row) => {
     const rows = store.getKnowledge(accId);
-    const i = rows.findIndex((r) => r.id === row.id);
+    // Match on id, or failing that on kind+title — an import has no id to offer, and
+    // without this every re-import added a second copy of everything.
+    const key = (r) => `${r.kind || 'note'}::${String(r.title || '').trim().toLowerCase()}`;
+    let i = row.id ? rows.findIndex((r) => r.id === row.id) : -1;
+    if (i < 0 && row.title) i = rows.findIndex((r) => key(r) === key(row));
     const next = { active: true, approved: true, updatedAt: Date.now(), ...row };
     // Content changed -> the old vector is wrong, drop it so it is re-embedded.
     if (i > -1) { if (rows[i].title !== next.title || rows[i].body !== next.body) next.vec = []; rows[i] = { ...rows[i], ...next }; }
@@ -233,6 +245,26 @@ function register(ipc, dataDir) {
     store.saveKnowledge(accId, store.getKnowledge(accId).filter((r) => r.id !== id));
     return { ok: true };
   });
+  // One-shot cleanup for knowledge bases that already accumulated copies. Keeps the
+  // newest of each kind+title, and prefers a row that is already embedded so the cleanup
+  // does not force a full re-embed.
+  H('ai:dedupeKnowledge', (accId) => {
+    const rows = store.getKnowledge(accId);
+    const best = new Map();
+    for (const r of rows) {
+      const k = `${r.kind || 'note'}::${String(r.title || '').trim().toLowerCase()}`;
+      const cur = best.get(k);
+      if (!cur) { best.set(k, r); continue; }
+      const better = (Array.isArray(r.vec) && r.vec.length ? 1 : 0) - (Array.isArray(cur.vec) && cur.vec.length ? 1 : 0)
+        || (r.updatedAt || 0) - (cur.updatedAt || 0);
+      if (better > 0) best.set(k, r);
+    }
+    const kept = [...best.values()];
+    const removed = rows.length - kept.length;
+    if (removed > 0) store.saveKnowledge(accId, kept);
+    return { ok: true, removed, kept: kept.length };
+  });
+
   H('ai:embedAll', async (accId) => {
     const k = store.getKnowledge(accId);
     const rk = await embedRows(accId, k, 'knowledge');

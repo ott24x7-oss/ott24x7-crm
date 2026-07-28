@@ -3417,16 +3417,34 @@ async function aiViewKnowledge() {
   // ---- summary ----
   const pending = rows.filter((r) => !r.embedded).length;
   const off = rows.filter((r) => r.active === false).length;
+  const seenKey = new Set();
+  let dupes = 0;
+  for (const r of rows) {
+    const k = `${r.kind || 'note'}::${String(r.title || '').trim().toLowerCase()}`;
+    if (seenKey.has(k)) dupes++; else seenKey.add(k);
+  }
 
-  box.append(
+  // Raw .append() renders a null child as the literal text "null"; el() filters them.
+  // Build the list, drop the empties, then append.
+  [
     el('div', { className: 'fp-note' },
       'The assistant answers only from these entries plus your live catalog. Prices and stock are always read from the catalog, never from here, so they can never go stale.'),
     el('div', { className: 'bk-kpis' },
-      dKpi('Entries', String(rows.length), off ? `${off} turned off` : 'All active', rows.length ? 'good' : ''),
+      dKpi('Entries', String(rows.length), dupes ? `${dupes} duplicated` : (off ? `${off} turned off` : 'All active'), dupes ? 'bad' : (rows.length ? 'good' : '')),
       dKpi('Searchable', String(rows.length - pending), pending ? `${pending} waiting` : 'All embedded', pending ? 'warn' : 'good'),
       dKpi('Products', String(rows.filter((r) => (r.kind || '') === 'product').length), 'From your catalog')),
     pending ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
       pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' not searchable yet — press Re-embed.') : null,
+    dupes ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      `${dupes} duplicate entr${dupes === 1 ? 'y' : 'ies'} — the same title saved more than once. `
+      + 'Older imports stacked copies; clearing them makes retrieval sharper.') : null,
+    dupes ? el('button', { className: 'btn small', style: { marginBottom: '8px' }, onclick: async () => {
+      if (!(await aiConfirm(`Remove ${dupes} duplicate entr${dupes === 1 ? 'y' : 'ies'}?`,
+        'The newest copy of each is kept, preferring one that is already embedded.'))) return;
+      const r = await ott.ai.dedupeKnowledge(activeId);
+      toast(r.ok ? `${r.removed} removed, ${r.kept} kept` : 'Could not clean up', r.ok ? 'ok' : 'err');
+      refreshPanel('ai');
+    } }, 'Remove duplicates') : null,
     el('div', { className: 'row' },
       el('button', { className: 'btn small', onclick: async () => {
         const prods = aiProducts();
@@ -3457,7 +3475,8 @@ async function aiViewKnowledge() {
       } }, 'Re-embed')),
     addForm,
     rows.length > 8 ? search : null,
-    listBox);
+    listBox,
+  ].filter(Boolean).forEach((n) => box.append(n));
   draw();
   return box;
 }
