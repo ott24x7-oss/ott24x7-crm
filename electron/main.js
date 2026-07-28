@@ -4,6 +4,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const config = require('../config.js');
 const license = require('./license.js');
+const ai = require('./ai/index.js');
 
 let win;
 
@@ -178,6 +179,10 @@ ipcMain.handle('backup:open', async () => {
     return { ok: true, json: raw, path: filePaths[0] };
   } catch (e) { return { ok: false, err: String(e.message || e) }; }
 });
+
+// The AI assistant runs entirely in this process: model calls, embeddings and the vector
+// index all stay on the owner's machine, and nothing customer-related leaves it.
+ai.register(ipcMain, dataDir());
 
 ipcMain.handle('persist:load', (_e, key) => {
   try { const p = path.join(dataDir(), key.replace(/[^\w-]/g, '') + '.json'); if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}

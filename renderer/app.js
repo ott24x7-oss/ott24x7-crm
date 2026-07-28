@@ -1074,7 +1074,18 @@ function applyLeadButton(accId) {
   const js = `(function(){
     ${PH_RESOLVER}
     if(!window.__ott_lead_init){window.__ott_lead_init=true;window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];
-      try{WPP.on('chat.new_message',function(m){try{if(!m)return;var body=(m.body||'');if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});return;}var u=m.from&&m.from.user;if(u)window.__ott_inq.push(u);}catch(e){}});}catch(e){}
+      try{WPP.on('chat.new_message',async function(m){try{if(!m)return;var body=(m.body||'');
+        if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});
+          /* An owner reply is the strongest possible signal that they are present. */
+          window.__ott_ownerq=window.__ott_ownerq||[];window.__ott_ownerq.push({to:(m.to&&(m.to._serialized||m.to))||'',ts:Date.now()});return;}
+        var u=m.from&&m.from.user;
+        /* Carry the body and message id too: the AI assistant needs what was said and a
+           stable id to stay idempotent. Lead follow-up only ever reads .number. */
+        var isG=!!(m.from&&(m.from.server==='g.us'||/@g\\.us$/.test(String(m.from._serialized||''))));
+        var num=await _ph(m.from)||u||'';
+        if(u)window.__ott_inq.push({number:num,raw:u,body:body,
+          msgId:(m.id&&(m.id._serialized||m.id))||'',isGroup:isG,
+          name:(m.sender&&(m.sender.pushname||m.sender.name))||m.notifyName||'',ts:Date.now()});}catch(e){}});}catch(e){}
       setInterval(place,4000);
     }
     async function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(!c)return;var u=await _ph(c.id);if(!u&&c.contact&&c.contact.id)u=await _ph(c.contact.id);var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;var b=document.getElementById('ott-lead-btn');if(!u){if(b){b.textContent='no number';setTimeout(function(){b.textContent='\uFF0B Lead';},1600);}return;}window.__ott_leadq.push({number:u,name:nm});if(b){b.textContent='\u2713 Lead saved';setTimeout(function(){b.textContent='\uFF0B Lead';},1500);}}catch(e){}}
@@ -1275,7 +1286,9 @@ function saveLead(it) {
   if (openFeatureId === 'leads') refreshPanel('leads');
 }
 function markRepliedLeads(nums) {
-  const set = new Set(nums.map(n => digits(String(n)))); const leads = store.get('ott_leads', []); const seqs = store.get('ott_lead_seqs', []); let ch = false;
+  // The queue used to carry bare user ids and now carries message objects; accept both so
+  // an older injected script still stops follow-ups correctly.
+  const set = new Set(nums.map(n => digits(String((n && n.number) || (n && n.raw) || n)))); const leads = store.get('ott_leads', []); const seqs = store.get('ott_lead_seqs', []); let ch = false;
   for (const L of leads) if (L.seqActive && set.has(L.number)) { const seq = seqs.find(s => s.id === L.seqId); if (!seq || seq.stopOnReply !== false) { L.seqActive = false; L.logs = [{ ts: Date.now(), text: 'Follow-up stopped (lead replied)', ok: true }, ...(L.logs || [])].slice(0, 30); ch = true; } }
   if (ch) { store.set('ott_leads', leads); if (openFeatureId === 'leads') refreshPanel('leads'); }
 }
