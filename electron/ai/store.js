@@ -79,7 +79,7 @@ const DEFAULT_SETTINGS = {
   excludeContacts: [],
   paused: false,                   // temporary global pause
   ownerManualStatus: 'auto',       // auto | online | offline
-  takeoverMinutes: 60,             // hand a chat back this long after the owner last touched it (0 = never)
+  takeoverMinutes: 15,             // hand a chat back this long after the owner last touched it (0 = never)
   consentAccepted: false,
 };
 

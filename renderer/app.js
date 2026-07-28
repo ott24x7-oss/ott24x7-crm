@@ -1245,8 +1245,10 @@ async function handleChatAction(a) {
 
   if (a.op === 'note') { noteModal(num, name); return; }
 
-  // The owner acting on a chat means they are present: stand down there.
-  try { aiTakeOver(num, true); } catch (e) {}
+  // Deliberately NOT taking the conversation over here. Saving a lead or sending an
+  // invoice is routine CRM work, not "I am handling this chat" — treating it as takeover
+  // silenced the assistant for an hour with nothing on screen explaining the silence.
+  // Explicit takeover lives on the "I will handle it" button in the AI inbox.
 
   if (a.op === 'deal') { dealModal(num, name); return; }
 
@@ -3108,11 +3110,37 @@ async function aiViewInbox() {
       aiSuggestions = []; store.set('ott_ai_suggestions', aiSuggestions); refreshPanel('ai'); aiBadge();
     } }, 'Clear all') : null));
 
+  // Paused conversations, shown before the empty state. "Nothing waiting" while the
+  // assistant is deliberately silent on a chat reads as broken — this is why it is quiet,
+  // and the button to undo it.
+  const paused = ((await ott.ai.pausedConvos(activeId)) || {}).rows || [];
+  if (paused.length) {
+    const list = el('div', { className: 'rules', style: { marginTop: '12px' } });
+    paused.forEach((p) => list.append(el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+      el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+        el('b', {}, p.number),
+        el('span', { className: 'deal-when soon' }, 'You are handling this')),
+      el('div', { className: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } },
+        `Paused ${p.sinceMin} min ago`
+        + (p.resumesInMin === null ? ' · will not resume on its own'
+          : p.resumesInMin ? ` · resumes in ${p.resumesInMin} min` : ' · resuming now')),
+      el('div', { className: 'row', style: { marginTop: '8px' } },
+        el('button', { className: 'btn small primary', onclick: async () => {
+          await ott.ai.setConvoState(activeId, p.number, { takenOver: false });
+          toast('Assistant resumed for ' + p.number);
+          refreshPanel('ai');
+        } }, 'Let the assistant reply again')))));
+    box.append(el('div', { className: 'fp-note', style: { marginTop: '10px' } },
+      `The assistant is standing down on ${paused.length} chat${paused.length === 1 ? '' : 's'} because you stepped in.`), list);
+  }
+
   if (!aiSuggestions.length) {
     box.append(el('div', { className: 'muted', style: { marginTop: '12px' } },
       s.mode === 'off'
         ? 'The assistant is switched off. Turn it on in Settings.'
-        : 'Nothing waiting. Replies the assistant is unsure about will appear here to approve, edit or reject.'));
+        : paused.length
+          ? 'Nothing else waiting for you.'
+          : 'Nothing waiting. Replies the assistant is unsure about will appear here to approve, edit or reject.'));
     return box;
   }
 

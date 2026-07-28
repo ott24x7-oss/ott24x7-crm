@@ -302,6 +302,23 @@ function register(ipc, dataDir) {
   H('ai:availability', (accId, lastActivityAt) => ({ ok: true, ...ownerAvailability(store.getSettings(accId), { lastActivityAt }) }));
 
   // per-conversation control
+  H('ai:pausedConvos', (accId) => {
+    const s = store.getSettings(accId);
+    const mins = Math.max(0, Number(s.takeoverMinutes) || 0);
+    const out = [];
+    for (const [number, v] of Object.entries(store.getState(accId))) {
+      if (!v || !v.takenOver) continue;
+      const since = Date.now() - (v.lastOwnerAt || 0);
+      out.push({
+        number,
+        sinceMin: Math.round(since / 60000),
+        resumesInMin: mins ? Math.max(0, Math.ceil((mins * 60000 - since) / 60000)) : null,
+        replies: v.replies || 0,
+      });
+    }
+    return { ok: true, rows: out };
+  });
+
   H('ai:convoState', (accId, number) => ({ ok: true, state: store.convo(accId, String(number || '').replace(/\D/g, '')) }));
   H('ai:setConvoState', (accId, number, patch) => ({ ok: true, state: store.setConvo(accId, String(number || '').replace(/\D/g, ''), patch) }));
 

@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('ott', {
     markSent: (acc, number, logId, text) => ipcRenderer.invoke('ai:markSent', acc, number, logId, text),
     availability: (acc, lastActivityAt) => ipcRenderer.invoke('ai:availability', acc, lastActivityAt),
     convoState: (acc, number) => ipcRenderer.invoke('ai:convoState', acc, number),
+    pausedConvos: (acc) => ipcRenderer.invoke('ai:pausedConvos', acc),
     setConvoState: (acc, number, patch) => ipcRenderer.invoke('ai:setConvoState', acc, number, patch),
     getLogs: (acc, limit) => ipcRenderer.invoke('ai:getLogs', acc, limit),
     updateLog: (acc, id, patch) => ipcRenderer.invoke('ai:updateLog', acc, id, patch),
