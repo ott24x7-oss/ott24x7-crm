@@ -11,7 +11,7 @@
 //
 // Nothing here knows what a lead, a price or a customer is.
 
-const DEFAULT_TIMEOUT = 60000;
+const DEFAULT_TIMEOUT = 150000;
 
 // fetch with a hard deadline. Ollama on a cold model can sit for a long time, and a
 // blocked reply is worse than a fast failure the owner can see and act on.
@@ -101,6 +101,11 @@ function ollama(cfg) {
       const body = {
         model: model || chatModel,
         stream: false,
+        // Reasoning models (qwen3, qwen3.5, deepseek-r1) burn the whole token budget inside
+        // a <think> block and never reach an answer, which arrives here as an empty reply
+        // after stripping. Measured on qwen3.5: 58s and nothing; with thinking off, a
+        // correct reply. Ollama ignores this field on models that do not reason.
+        think: false,
         messages: [
           ...(system ? [{ role: 'system', content: system }] : []),
           ...(messages || []),
@@ -119,10 +124,15 @@ function ollama(cfg) {
         2
       );
       if (!r.ok) return { ok: false, err: r.err, ms: r.ms };
-      let text = String((r.json && r.json.message && r.json.message.content) || '').trim();
-      // Reasoning models (Qwen3 among them) emit a <think> block before the answer. It is
-      // internal monologue and must never reach a customer.
-      text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?think>/gi, '').trim();
+      const raw = String((r.json && r.json.message && r.json.message.content) || '').trim();
+      // A <think> block is internal monologue and must never reach a customer.
+      const text = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?think>/gi, '').trim();
+      // Raw content that strips to nothing means the model reasoned until it ran out of
+      // budget. Say so plainly — "empty reply" would send the owner hunting in the wrong place.
+      if (!text && raw) {
+        return { ok: false, ms: r.ms, model: body.model,
+          err: `${body.model} spent its whole budget thinking and never answered. Raise "Max reply length" in AI settings, or use a model that does not reason (for example qwen2.5:3b).` };
+      }
       return { ok: true, text, ms: r.ms, model: body.model };
     },
 

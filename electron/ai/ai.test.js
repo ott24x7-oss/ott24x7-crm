@@ -202,6 +202,19 @@ t('ships in suggestions-only mode, never auto-replying out of the box', () => {
   assert.strictEqual(store.DEFAULT_SETTINGS.consentAccepted, false);
 });
 
+
+// Measured against qwen3.5 on a real machine: a correct out-of-stock answer nearly always
+// contains the word "available" ("I'll tell you when it becomes available"), and matching
+// that alone rejected correct replies — pushing every stock question to manual review.
+t('a correct out-of-stock answer is not rejected', () => {
+  const v = rag.validate('Prime 1 Year abhi stock mein nahi hai, out of stock hai. Main batata hoon jab available ho jaye.', { settings: S, products: PRODUCTS });
+  assert.ok(v.ok, 'correct answer was refused: ' + v.problems.join('; '));
+});
+t('but falsely promising an out-of-stock item is still rejected', () => {
+  const v = rag.validate('Prime 1 Year available hai, main abhi bhej deta hoon.', { settings: S, products: PRODUCTS });
+  assert.ok(!v.ok);
+});
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
 console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);
 process.exit(fail ? 1 : 0);

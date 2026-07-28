@@ -57,7 +57,7 @@ const DEFAULT_SETTINGS = {
   baseUrl: 'http://127.0.0.1:11434',
   chatModel: 'qwen3:4b',
   embedModel: 'nomic-embed-text',
-  timeoutMs: 60000,
+  timeoutMs: 150000,
 
   minConfidence: 0.62,             // at or above -> may send automatically
   suggestConfidence: 0.35,         // between the two -> save as a suggestion

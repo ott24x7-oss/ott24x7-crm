@@ -175,10 +175,18 @@ function validate(text, { settings, products, language }) {
   if (/\b(\d+\s*%\s*(off|discount)|special discount|extra discount)\b/i.test(t)) problems.push('offered a discount');
   if (/\b(guarantee[d]? (delivery|refund)|100% (safe|guaranteed))\b/i.test(t)) problems.push('made an absolute promise');
 
-  // An out-of-stock product must not be promised.
-  for (const p of (products || [])) {
-    if (p.stock === false && p.title && t.toLowerCase().includes(String(p.title).toLowerCase())) {
-      if (/\b(available|in stock|milega|bhej|ship|deliver)\b/i.test(t)) problems.push(`promised "${p.title}" which is out of stock`);
+  // An out-of-stock product must not be promised — but a reply that correctly SAYS it is
+  // out of stock usually also contains "available" ("I'll tell you when it becomes
+  // available"). Matching the word alone rejected correct answers, which pushed nearly
+  // every stock question to manual review. An explicit denial is taken at face value.
+  const deniesStock = /\b(out of stock|not available|not in stock|unavailable|sold out|nahi hai|nahi milega|stock mein nahi|khatam|abhi nahi)\b/i.test(t);
+  if (!deniesStock) {
+    for (const p of (products || [])) {
+      if (p.stock === false && p.title && t.toLowerCase().includes(String(p.title).toLowerCase())) {
+        if (/\b(available|in stock|milega|mil jayega|bhej|ship|deliver)\b/i.test(t)) {
+          problems.push(`promised "${p.title}" which is out of stock`);
+        }
+      }
     }
   }
 
