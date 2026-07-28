@@ -16,6 +16,8 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "build/afterPack.js",
+    "compression": "maximum",
     "files": [
       "electron/**",
       "renderer/**",
