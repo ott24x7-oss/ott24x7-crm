@@ -3043,7 +3043,7 @@ RENDER.ai = (b) => {
 
   const draw = async () => {
     [...tabs.children].forEach((btn, i) => {
-      btn.className = 'btn small' + (['inbox', 'settings', 'knowledge', 'logs'][i] === tab ? ' primary' : '');
+      btn.className = 'btn small' + (['inbox', 'settings', 'knowledge', 'training', 'logs'][i] === tab ? ' primary' : '');
     });
     wrap.innerHTML = '';
     wrap.append(el('div', { className: 'muted' }, 'Loading…'));
@@ -3052,6 +3052,7 @@ RENDER.ai = (b) => {
       body = tab === 'inbox' ? await aiViewInbox()
         : tab === 'settings' ? await aiViewSettings()
         : tab === 'knowledge' ? await aiViewKnowledge()
+        : tab === 'training' ? await aiViewTraining()
         : await aiViewLogs();
     } catch (e) {
       body = el('div', { className: 'muted' }, 'Could not load: ' + String((e && e.message) || e));
@@ -3060,7 +3061,7 @@ RENDER.ai = (b) => {
     wrap.append(body);
   };
 
-  [['inbox', 'Inbox'], ['settings', 'Settings'], ['knowledge', 'Knowledge'], ['logs', 'Logs']]
+  [['inbox', 'Inbox'], ['settings', 'Settings'], ['knowledge', 'Knowledge'], ['training', 'Learn from chats'], ['logs', 'Logs']]
     .forEach(([k, lab]) => tabs.append(el('button', { className: 'btn small', onclick: () => { tab = k; draw(); } }, lab)));
 
   b.append(el('div', { className: 'fp-note' },
@@ -3341,6 +3342,243 @@ async function aiViewKnowledge() {
       } }, 'Re-embed')),
     list);
   return box;
+}
+
+// ---------- Learn from real sales chats ----------
+// The model is never fine-tuned. A conversation that closed well is read out of WhatsApp,
+// split into question -> reply pairs, stripped of personal data, and put in front of the
+// owner to approve. Only approved pairs are embedded, and only as *style* examples — the
+// prompt tells the model to copy the phrasing, never the facts, because a price quoted in
+// a chat from three months ago is exactly the kind of stale number that must not resurface.
+
+// Pull the recent turns of one conversation straight from WhatsApp. There is no message
+// archive in the CRM, so this is the only source.
+async function aiFetchChat(number, count) {
+  const jid = JSON.stringify(digits(number) + '@c.us');
+  const expr = `(async()=>{try{
+    var ms=await WPP.chat.getMessages({chatId:${jid},count:${Math.max(10, Math.min(200, count || 60))}});
+    return (ms||[]).map(function(m){return {
+      fromMe: !!m.fromMe,
+      body: String((m.body||m.caption||'')).slice(0,1500),
+      ts: (m.t||0)*1000,
+      type: m.type||'chat'
+    };}).filter(function(x){return x.body;});
+  }catch(e){return {err:String(e&&e.message||e)}}})()`;
+  try {
+    const r = await waExecOn(activeId, expr);
+    return Array.isArray(r) ? r : { err: (r && r.err) || 'Could not read this conversation' };
+  } catch (e) { return { err: String((e && e.message) || e) }; }
+}
+
+// Turn a transcript into teachable pairs: what the customer asked, and what the owner
+// actually replied. Consecutive messages from the same side are joined — people send three
+// short lines where one would do, and the reply belongs to the whole question.
+function aiPairs(msgs) {
+  const turns = [];
+  for (const m of msgs) {
+    const last = turns[turns.length - 1];
+    if (last && last.fromMe === m.fromMe) { last.body += '\n' + m.body; last.ts = m.ts; }
+    else turns.push({ fromMe: m.fromMe, body: m.body, ts: m.ts });
+  }
+  const pairs = [];
+  for (let i = 0; i < turns.length - 1; i++) {
+    if (turns[i].fromMe || !turns[i + 1].fromMe) continue;   // want customer -> owner
+    const q = turns[i].body.trim(), a = turns[i + 1].body.trim();
+    // Skip the noise that teaches nothing: bare greetings, "ok", "thanks".
+    if (q.length < 4 || a.length < 8) continue;
+    if (/^(ok|okay|thik|theek|thanks|thank you|ty|👍|🙏)\.?$/i.test(q)) continue;
+    pairs.push({ question: q, reply: a, ts: turns[i + 1].ts });
+  }
+  return pairs;
+}
+
+const AI_OBJECTIONS = [
+  ['price', /\b(costly|expensive|mehnga|zyada hai|too much|budget|kam karo|discount)\b/i],
+  ['trust', /\b(genuine|real|fake|scam|trust|bharosa|guarantee|safe)\b/i],
+  ['timing', /\b(later|baad me|next month|abhi nahi|think|soch)\b/i],
+  ['comparison', /\b(other|dusra|cheaper|elsewhere|competitor)\b/i],
+];
+
+// Everything below is a first guess the owner can correct on the review screen. Getting it
+// roughly right saves them typing; getting it wrong costs them one edit.
+function aiClassifyPair(p, products) {
+  const t = p.question + ' ' + p.reply;
+  const product = (products || []).find((x) => x.title && t.toLowerCase().includes(x.title.toLowerCase()));
+  const objection = (AI_OBJECTIONS.find(([, re]) => re.test(p.question)) || [])[0] || '';
+  const closing = /\b(payment|paid|order confirm|send.*(qr|upi)|activate|done|welcome)\b/i.test(p.reply);
+  return {
+    ...p,
+    product: product ? product.title : '',
+    objection,
+    closing,
+    language: aiDetectLangLocal(p.question),
+    tags: [objection, product ? 'product' : '', closing ? 'closing' : ''].filter(Boolean),
+  };
+}
+
+// Same rules as the main process uses, kept local so the review screen works without a
+// round trip per pair.
+function aiDetectLangLocal(text) {
+  const t = String(text || '');
+  if (/[ऀ-ॿ]/.test(t)) return 'hi';
+  if (/\b(kya|kaise|kitna|hai|nahi|haan|bhai|chahiye|milega|karo|paisa|batao|ji)\b/i.test(t)) return 'hinglish';
+  return 'en';
+}
+
+// Redaction mirrors the main process, applied here too so nothing personal is ever shown
+// on screen or held in renderer memory before the owner approves it.
+function aiRedactLocal(text) {
+  return String(text || '')
+    .replace(/\b(?:\+?91[-\s]?)?[6-9]\d{9}\b/g, '[phone]')
+    .replace(/\b[\w.+-]+@[\w-]+\.[\w.]+\b/g, '[email]')
+    .replace(/\b[\w.-]{2,}@(?:ok\w+|paytm|ybl|upi|axl|apl)\b/gi, '[upi]')
+    .replace(/\b\d{4}[-\s]?\d{4}[-\s]?\d{4}(?:[-\s]?\d{4})?\b/g, '[card]')
+    .replace(/\b(?:order|txn|ref|utr)[\s#:]*[A-Z0-9-]{6,}\b/gi, '[reference]');
+}
+
+async function aiViewTraining() {
+  const box = el('div', {});
+  const saved = (await ott.ai.getExamples(activeId)).rows || [];
+
+  const num = el('input', { placeholder: 'Customer number, e.g. 919812345678' });
+  const outcome = el('select');
+  [['sale', 'Successful sale'], ['good', 'Good example, no sale yet'], ['exclude', 'Do not use for AI']]
+    .forEach(([v, n]) => outcome.append(el('option', { value: v }, n)));
+  const count = el('input', { type: 'number', min: '10', max: '200', value: '60' });
+  const review = el('div', {});
+
+  // Offer the people already in the CRM rather than making the owner type a number.
+  const pick = el('select');
+  pick.append(el('option', { value: '' }, 'Pick from your leads and deals…'));
+  const known = new Map();
+  store.get('ott_deals', []).forEach((d) => known.set(d.number, (d.name || d.number) + ' · bought ' + d.item));
+  store.get('ott_leads', []).forEach((l) => { const n = digits(String(l.number)); if (!known.has(n)) known.set(n, l.name || n); });
+  [...known].forEach(([n, label]) => pick.append(el('option', { value: n }, label)));
+  pick.onchange = () => { if (pick.value) num.value = pick.value; };
+
+  const load = async () => {
+    const n = digits(num.value);
+    if (!n) return toast('Enter or pick a number first', 'err');
+    if (outcome.value === 'exclude') {
+      // An explicit "never learn from this person" is itself a privacy control.
+      const s = (await ott.ai.getSettings(activeId)).settings;
+      const ex = [...new Set([...(s.excludeContacts || []), n])];
+      await ott.ai.saveSettings(activeId, { excludeContacts: ex });
+      toast('This contact is now excluded from AI replies and learning');
+      return;
+    }
+
+    review.innerHTML = '';
+    review.append(el('div', { className: 'muted' }, 'Reading the conversation…'));
+    const msgs = await aiFetchChat(n, Number(count.value));
+    if (!Array.isArray(msgs)) {
+      review.innerHTML = '';
+      review.append(el('div', { className: 'muted' },
+        (msgs && msgs.err) || 'Could not read that chat. Open it in WhatsApp once, then try again.'));
+      return;
+    }
+
+    const products = aiProducts();
+    const pairs = aiPairs(msgs).map((p) => aiClassifyPair(p, products))
+      .map((p) => ({ ...p, question: aiRedactLocal(p.question), reply: aiRedactLocal(p.reply) }));
+
+    review.innerHTML = '';
+    if (!pairs.length) {
+      review.append(el('div', { className: 'muted' },
+        'No usable question-and-answer pairs in the last ' + msgs.length + ' messages. Try a longer range.'));
+      return;
+    }
+
+    const head = el('div', { className: 'fp-note' },
+      pairs.length + ' pair(s) found in ' + msgs.length + ' messages. Phone numbers, emails, UPI ids and '
+      + 'order references have already been removed. Approve the ones that show how you want the assistant to sound.');
+    const list = el('div', { className: 'rules' });
+    pairs.forEach((p, i) => list.append(aiPairCard(p, i, outcome.value)));
+    review.append(head,
+      el('div', { className: 'row' },
+        el('button', { className: 'btn small', onclick: async () => {
+          let n2 = 0;
+          for (const card of [...list.children]) { if (card._approve) { await card._approve(); n2++; } }
+          toast(n2 ? n2 + ' example(s) saved — press Re-embed in Knowledge' : 'Nothing selected', n2 ? 'ok' : 'err');
+          refreshPanel('ai');
+        } }, 'Approve all shown')),
+      list);
+  };
+
+  box.append(
+    el('div', { className: 'fp-note' },
+      'The model is never retrained. A conversation that went well is turned into examples of how you talk, '
+      + 'so the assistant copies your phrasing. It never copies prices from an old chat — those always come from your catalog.'),
+    lbl('Pick a customer', pick),
+    el('div', { className: 'row' }, lbl('Or type a number', num), lbl('Messages to read', count)),
+    lbl('What was this conversation?', outcome),
+    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: load }, 'Read conversation')),
+    review,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '14px 0 8px' } }),
+    el('b', {}, 'Saved examples (' + saved.length + ')'),
+    saved.length
+      ? el('div', { className: 'rules', style: { marginTop: '8px' } },
+          ...saved.map((r) => el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+            el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              el('b', {}, (r.question || '').slice(0, 70)),
+              r.product ? el('span', { className: 'rate-tag cost' }, r.product) : null,
+              r.objection ? el('span', { className: 'rate-tag cost' }, r.objection) : null,
+              el('span', { className: 'deal-when ' + (r.approved ? 'ok' : 'soon') }, r.approved ? 'Approved' : 'Awaiting review'),
+              r.embedded ? null : el('span', { className: 'rate-tag loss' }, 'needs re-embed')),
+            el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } }, (r.reply || '').slice(0, 180)),
+            el('div', { className: 'row', style: { marginTop: '8px' } },
+              r.approved ? null : el('button', { className: 'btn small', onclick: async () => {
+                await ott.ai.saveExample(activeId, { id: r.id, approved: true }); refreshPanel('ai');
+              } }, 'Approve'),
+              el('button', { className: 'btn small ghost', onclick: async () => {
+                await ott.ai.saveExample(activeId, { id: r.id, active: r.active === false }); refreshPanel('ai');
+              } }, r.active === false ? 'Turn on' : 'Turn off'),
+              el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: async () => {
+                if (!(await aiConfirm('Delete this example?', (r.question || '').slice(0, 80)))) return;
+                await ott.ai.deleteExample(activeId, r.id); refreshPanel('ai');
+              } }, 'Delete')))))
+      : el('div', { className: 'muted' }, 'None yet.'));
+  return box;
+}
+
+function aiPairCard(p, i, outcomeKind) {
+  const q = el('textarea', { value: p.question, style: { minHeight: '52px' } });
+  const a = el('textarea', { value: p.reply, style: { minHeight: '72px' } });
+  const product = el('input', { value: p.product || '', placeholder: 'Product (optional)' });
+  const objection = el('input', { value: p.objection || '', placeholder: 'Objection (optional)' });
+  const use = chk(false);
+
+  const card = el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+    el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+      el('b', {}, 'Pair ' + (i + 1)),
+      el('span', { className: 'rate-tag cost' }, p.language),
+      p.closing ? el('span', { className: 'rate-tag margin' }, 'closing message') : null,
+      p.product ? el('span', { className: 'rate-tag cost' }, p.product) : null),
+    lbl('Customer asked', q),
+    lbl('You replied', a),
+    el('div', { className: 'row' }, lbl('Product', product), lbl('Objection', objection)),
+    chkRow(use, 'Use this as an example'),
+    el('div', { className: 'row', style: { marginTop: '6px' } },
+      el('button', { className: 'btn small primary', onclick: async () => {
+        use.checked = true;
+        await card._approve();
+        toast('Saved');
+      } }, 'Save this one')));
+
+  // Exposed so "Approve all shown" can reuse exactly the same save path.
+  card._approve = async () => {
+    if (!use.checked) return;
+    if (!q.value.trim() || !a.value.trim()) return;
+    await ott.ai.saveExample(activeId, {
+      question: q.value.trim(), reply: a.value.trim(),
+      product: product.value.trim(), objection: objection.value.trim(),
+      outcome: outcomeKind === 'sale' ? 'sale' : 'example',
+      language: p.language, closing: !!p.closing,
+      tags: p.tags || [], approved: true, active: true,
+    });
+    use.checked = false;
+  };
+  return card;
 }
 
 async function aiViewLogs() {

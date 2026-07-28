@@ -215,3 +215,38 @@ Covers price and stock validation, refund/payment/discount refusal, prompt-leak 
 forced handover, language detection, PII redaction, confidence behaviour, vector search
 filtering, all five availability paths, tenant isolation, unscoped-write refusal,
 conversation state, purge, and the suggestions-only default.
+
+## Learning from real sales chats
+
+The model is **never fine-tuned**. A conversation that closed well is read out of WhatsApp,
+split into question → reply pairs, stripped of personal data and put in front of the owner
+to approve. Approved pairs are embedded as *style* examples only — the system prompt tells
+the model to copy the phrasing, never the facts, because a price quoted in a chat from
+three months ago is exactly the kind of stale number that must not resurface.
+
+**AI Assistant → Learn from chats:**
+
+1. Pick a customer from your leads and deals, or type a number.
+2. Mark it *Successful sale*, *Good example*, or *Do not use for AI*.
+   Choosing "do not use" adds that contact to the exclusion list, so the assistant will
+   neither learn from them nor reply to them.
+3. Press **Read conversation**. The last 60 messages (configurable, 10–200) are read.
+4. Each pair is shown with an auto-detected language, product, objection and whether it
+   looks like a closing message. All of it is editable.
+5. Tick the pairs worth keeping and press **Save this one** or **Approve all shown**.
+6. Press **Re-embed** in Knowledge to make them searchable.
+
+Consecutive messages from the same side are joined — people send three short lines where
+one would do, and the reply belongs to the whole question. Bare greetings and "ok" are
+dropped.
+
+### Redaction
+
+Applied twice: once in the renderer before anything appears on screen, and again in the
+main process before it is written to disk. Phone numbers, emails, UPI handles, card-like
+digit runs and order references are replaced with placeholders. Prices are deliberately
+left intact — they make the example readable and can never become a quotable fact, because
+validation rejects any figure not in the live catalog.
+
+Examples start as **Awaiting review** and are only used once approved. Each can be turned
+off or deleted from the same screen.
