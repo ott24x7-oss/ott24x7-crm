@@ -25,7 +25,8 @@ jobs:
   build:
     runs-on: macos-14 # Apple Silicon runner; builds both arm64 and x64
     permissions:
-      contents: read
+      # write, so the job can stage the DMGs as a release asset in this repo
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +72,23 @@ jobs:
           path: release/*.dmg
           retention-days: 30
           if-no-files-found: error
+
+      # Staging release in THIS repo, using the built-in GITHUB_TOKEN — no PAT needed.
+      #
+      # Downloading a 400-600MB workflow artifact fails reliably from some networks (it is
+      # one large zip, no resume). Release assets are served separately and download fine.
+      # So the DMGs are published here first and fetched from this release instead, which
+      # is the difference between a Mac build shipping and not shipping.
+      - name: Stage the DMGs as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete mac-latest --repo ${{ github.repository }} --yes --cleanup-tag 2>/dev/null || true
+          gh release create mac-latest release/*.dmg \
+            --repo ${{ github.repository }} \
+            --title "macOS build staging (not for customers)" \
+            --notes "Automated. DMGs from ${{ github.sha }}, staged so they can be fetched as release assets rather than as one oversized workflow artifact." \
+            --prerelease
 
       # Cross-repo upload needs a PAT with `contents: write` on ott24x7-crm-releases,
       # stored as the RELEASES_TOKEN secret. Without it this step is skipped, and the
