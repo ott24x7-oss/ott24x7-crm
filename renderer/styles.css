@@ -560,3 +560,11 @@ input[type="range"]:active::-webkit-slider-thumb { filter: brightness(1.1); }
 .rate-tag.cost { color: var(--muted); background: rgba(255, 255, 255, .06); }
 .rate-tag.margin { color: #04240f; background: var(--green); }
 .rate-tag.loss { color: #2a0b0b; background: #ff8f8f; }
+
+/* Count of AI replies waiting for the owner, on the rail item. */
+.ai-badge {
+  margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px; display: grid; place-items: center;
+  font: 800 10.5px Inter, sans-serif; font-variant-numeric: tabular-nums;
+  color: #04240f; background: var(--green);
+}
