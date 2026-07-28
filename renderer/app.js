@@ -1126,7 +1126,12 @@ function applyChatWidget(accId) {
       var s=document.createElement('style'); s.id='ott-w-css';
       /* See the note on #ott-qr-bar: a modest z-index keeps WhatsApp's own menus clickable. */
       s.textContent='#ott-w{position:fixed;z-index:101;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
-      +'#ott-w .a,#ott-w .h{pointer-events:auto}'
+      /* Only the handle opts back in while closed. A child re-enables pointer-events even
+         when its parent is none, so listing .a here made the whole invisible action column
+         clickable: it sat over the messages, swallowed text-selection drags, and turned a
+         click on a message into "Save as lead". */
+      +'#ott-w .h{pointer-events:auto}'
+      +'#ott-w.open .a{pointer-events:auto}'
       +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1)}'
       +'#ott-w.open .acts{opacity:1;pointer-events:auto;transform:none}'
       +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'
