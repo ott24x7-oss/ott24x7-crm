@@ -57,13 +57,18 @@ jobs:
         run: ls -lh release/ | grep -Ei 'dmg|zip' || ls -lh release/
 
       # Always available, even if the release upload below is skipped or fails.
+      #
+      # DMGs only. electron-builder also produces .zip archives, but those exist purely to
+      # feed electron-updater on macOS — and that path is dead here: the builds are
+      # unsigned, macOS refuses to auto-update an unsigned app, and main.js routes darwin to
+      # initManualUpdate() for exactly that reason. No latest-mac.yml is ever generated, so
+      # nothing can consume them. Carrying them made the artifact ~600MB instead of ~400MB,
+      # and downloads of it repeatedly timed out.
       - name: Keep as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wa-crm-macos
-          path: |
-            release/*.dmg
-            release/*.zip
+          path: release/*.dmg
           retention-days: 30
           if-no-files-found: error
 
@@ -75,5 +80,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
-          gh release upload "${{ inputs.tag }}" release/*.dmg release/*.zip \
+          gh release upload "${{ inputs.tag }}" release/*.dmg \
             --repo ott24x7-oss/ott24x7-crm-releases --clobber
