@@ -568,3 +568,52 @@ input[type="range"]:active::-webkit-slider-thumb { filter: brightness(1.1); }
   font: 800 10.5px Inter, sans-serif; font-variant-numeric: tabular-nums;
   color: #04240f; background: var(--green);
 }
+
+/* ===== Knowledge base: grouped, dense list =====
+   A knowledge base reaches hundreds of rows the moment a catalog is imported. Cards at
+   that count are a wall — same height, same shape, nothing scannable. These are rows:
+   title first, the unique part of the body second, actions out of the reading path. */
+.kb-group {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  margin: 12px 0 4px; padding: 7px 10px; cursor: pointer; text-align: left;
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); font: 700 12.5px Inter, sans-serif;
+}
+.kb-group:hover { border-color: var(--green-soft); }
+.kb-group:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.kb-caret {
+  width: 6px; height: 6px; flex: none;
+  border-right: 2px solid var(--muted-2); border-bottom: 2px solid var(--muted-2);
+  transform: rotate(-45deg); transition: transform .16s cubic-bezier(.2, 0, 0, 1);
+}
+.kb-group.open .kb-caret { transform: rotate(45deg); }
+.kb-count {
+  margin-left: auto; font-variant-numeric: tabular-nums;
+  font-size: 11px; font-weight: 700; color: var(--muted-2);
+  background: rgba(255, 255, 255, .06); border-radius: 9px; padding: 1px 8px;
+}
+
+.kb-rows { display: flex; flex-direction: column; gap: 2px; }
+.kb-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border-radius: 8px; border: 1px solid transparent;
+}
+.kb-row:hover { background: var(--sunken); border-color: var(--line); }
+.kb-row.off { opacity: .5; }
+.kb-main { flex: 1; min-width: 0; }
+.kb-title {
+  font-size: 12.5px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-sub {
+  font-size: 11px; color: var(--muted-2); margin-top: 1px; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* Actions stay quiet until the row is under the cursor, but remain reachable by keyboard. */
+.kb-acts { display: flex; gap: 4px; flex: none; opacity: 0; transition: opacity .14s; }
+.kb-row:hover .kb-acts, .kb-acts:focus-within { opacity: 1; }
+.kb-more { margin: 6px 0 2px; width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kb-caret, .kb-acts { transition: none; }
+}

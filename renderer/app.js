@@ -3285,6 +3285,16 @@ async function aiViewSettings() {
 async function aiViewKnowledge() {
   const box = el('div', {});
   const rows = (await ott.ai.getKnowledge(activeId)).rows || [];
+
+  // ---- state ----
+  let query = '';
+  const open = {};                       // which type groups are expanded
+  const shown = {};                      // how many rows revealed per group
+  const PAGE = 12;
+
+  // ---- add form, collapsed ----
+  // With a real knowledge base the list is what you came for; the form is not. Keeping it
+  // open pushed 219 entries below the fold on every visit.
   const title = el('input', { placeholder: 'e.g. How long does delivery take?' });
   const kind = el('select');
   [['faq', 'FAQ'], ['policy', 'Policy'], ['product', 'Product note'], ['script', 'Sales script'],
@@ -3292,36 +3302,10 @@ async function aiViewKnowledge() {
   const body = el('textarea', { placeholder: 'The exact answer you want the assistant to give.' });
   const tags = el('input', { placeholder: 'tags, comma separated' });
 
-  const pending = rows.filter((r) => !r.embedded).length;
-  const list = el('div', { className: 'rules', style: { marginTop: '10px' } });
-  if (!rows.length) {
-    list.append(el('div', { className: 'muted' },
-      'Nothing saved yet. The assistant can only answer from what you put here plus your catalog.'));
-  }
-  rows.forEach((r) => list.append(el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
-    el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-      el('b', {}, r.title),
-      el('span', { className: 'rate-tag cost' }, r.kind || 'note'),
-      r.embedded ? null : el('span', { className: 'rate-tag loss' }, 'needs re-embed'),
-      el('span', { className: 'deal-when ' + (r.active === false ? 'gone' : 'ok') }, r.active === false ? 'Off' : 'On')),
-    el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } }, (r.body || '').slice(0, 180)),
-    el('div', { className: 'row', style: { marginTop: '8px' } },
-      el('button', { className: 'btn small ghost', onclick: async () => {
-        await ott.ai.saveKnowledgeRow(activeId, { id: r.id, active: r.active === false });
-        refreshPanel('ai');
-      } }, r.active === false ? 'Turn on' : 'Turn off'),
-      el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: async () => {
-        if (!(await aiConfirm('Delete this entry?', r.title))) return;
-        await ott.ai.deleteKnowledge(activeId, r.id); refreshPanel('ai');
-      } }, 'Delete')))));
-
-  box.append(
-    el('div', { className: 'fp-note' },
-      'The assistant answers only from these entries plus your live catalog. Prices and stock are always read from the catalog, never from here, so they can never go stale.'),
-    pending ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
-      pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' not searchable yet — press Re-embed.') : null,
-    lbl('Title', title), lbl('Type', kind), lbl('Answer', body), lbl('Tags', tags),
-    el('div', { className: 'row' },
+  const addForm = el('details', { className: 'deal-set' },
+    el('summary', {}, 'Add an entry'),
+    el('div', { className: 'deal-set-body' },
+      lbl('Title', title), lbl('Type', kind), lbl('Answer', body), lbl('Tags', tags),
       el('button', { className: 'btn primary', onclick: async () => {
         if (!title.value.trim() || !body.value.trim()) return toast('Title and answer are both needed', 'err');
         await ott.ai.saveKnowledgeRow(activeId, {
@@ -3330,31 +3314,153 @@ async function aiViewKnowledge() {
         });
         toast('Saved — press Re-embed to make it searchable');
         refreshPanel('ai');
-      } }, '＋ Add entry'),
+      } }, 'Save entry')));
+
+  // ---- rendering ----
+  const KIND_LABEL = { faq: 'FAQs', policy: 'Policies', product: 'Products', script: 'Sales scripts',
+    objection: 'Objection handling', note: 'Other' };
+  const listBox = el('div', {});
+  const search = el('input', { placeholder: 'Search knowledge…', type: 'search' });
+
+  // Products imported in bulk all carry the same explanatory sentence. Repeating it 219
+  // times is noise; the useful part is whatever is unique to the entry.
+  const BOILERPLATE = /\.?\s*(the )?current price and stock (come|comes) from the catalog at reply time\.?/i;
+  const gist = (r) => {
+    const t = String(r.body || '').replace(BOILERPLATE, '').trim();
+    // What is left is often just the title repeated back, which tells the owner nothing.
+    if (!t || t.toLowerCase().startsWith(String(r.title || '').toLowerCase().slice(0, 20))) {
+      const rest = t.slice(String(r.title || '').length).replace(/^[\s(),.–-]+/, '').trim();
+      return rest || '';
+    }
+    return t;
+  };
+
+  const draw = () => {
+    listBox.innerHTML = '';
+    const q = query.trim().toLowerCase();
+    const matched = q
+      ? rows.filter((r) => (r.title + ' ' + (r.body || '') + ' ' + (r.tags || []).join(' ')).toLowerCase().includes(q))
+      : rows;
+
+    if (!rows.length) {
+      listBox.append(el('div', { className: 'muted' },
+        'Nothing saved yet. The assistant can only answer from what you put here plus your catalog.'));
+      return;
+    }
+    if (!matched.length) {
+      listBox.append(el('div', { className: 'muted' }, `Nothing matches “${query}”.`));
+      return;
+    }
+
+    // Group by type. Searching flattens the grouping — when you are looking for one thing,
+    // headings are in the way.
+    const groups = {};
+    for (const r of matched) (groups[r.kind || 'note'] = groups[r.kind || 'note'] || []).push(r);
+    const order = ['faq', 'policy', 'script', 'objection', 'product', 'note']
+      .filter((k) => groups[k]);
+
+    for (const k of order) {
+      const g = groups[k];
+      // Expanded by default when small or when searching; a 219-row group stays shut.
+      const isOpen = q ? true : (open[k] !== undefined ? open[k] : g.length <= 15);
+      const pending = g.filter((r) => !r.embedded).length;
+
+      const head = el('button', {
+        className: 'kb-group' + (isOpen ? ' open' : ''), type: 'button',
+        onclick: () => { open[k] = !isOpen; draw(); },
+      },
+        el('span', { className: 'kb-caret' }),
+        el('b', {}, KIND_LABEL[k] || k),
+        el('span', { className: 'kb-count' }, String(g.length)),
+        pending ? el('span', { className: 'rate-tag loss' }, pending + ' to embed') : null);
+      listBox.append(head);
+      if (!isOpen) continue;
+
+      const limit = shown[k] || PAGE;
+      const wrap = el('div', { className: 'kb-rows' });
+      g.slice(0, limit).forEach((r) => wrap.append(kbRow(r)));
+      listBox.append(wrap);
+
+      if (g.length > limit) {
+        listBox.append(el('button', {
+          className: 'btn small ghost kb-more', onclick: () => { shown[k] = limit + 40; draw(); },
+        }, `Show ${Math.min(40, g.length - limit)} more of ${g.length}`));
+      }
+    }
+  };
+
+  function kbRow(r) {
+    const sub = gist(r);
+    return el('div', { className: 'kb-row' + (r.active === false ? ' off' : '') },
+      el('div', { className: 'kb-main' },
+        el('div', { className: 'kb-title' }, r.title),
+        sub ? el('div', { className: 'kb-sub' }, sub) : null),
+      // Actions stay compact and out of the reading path — 219 rows of full-size buttons
+      // is 438 targets competing with the content.
+      el('div', { className: 'kb-acts' },
+        el('button', {
+          className: 'btn small ghost', title: r.active === false ? 'Turn on' : 'Turn off',
+          onclick: async () => { await ott.ai.saveKnowledgeRow(activeId, { id: r.id, active: r.active === false }); refreshPanel('ai'); },
+        }, r.active === false ? 'On' : 'Off'),
+        el('button', {
+          className: 'btn small ghost', style: { color: 'var(--danger)' }, title: 'Delete',
+          onclick: async () => {
+            if (!(await aiConfirm('Delete this entry?', r.title))) return;
+            await ott.ai.deleteKnowledge(activeId, r.id); refreshPanel('ai');
+          },
+        }, '×')));
+  }
+
+  let searchTimer = 0;
+  search.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = search.value; draw(); }, 150); };
+
+  // ---- summary ----
+  const pending = rows.filter((r) => !r.embedded).length;
+  const off = rows.filter((r) => r.active === false).length;
+
+  box.append(
+    el('div', { className: 'fp-note' },
+      'The assistant answers only from these entries plus your live catalog. Prices and stock are always read from the catalog, never from here, so they can never go stale.'),
+    el('div', { className: 'bk-kpis' },
+      dKpi('Entries', String(rows.length), off ? `${off} turned off` : 'All active', rows.length ? 'good' : ''),
+      dKpi('Searchable', String(rows.length - pending), pending ? `${pending} waiting` : 'All embedded', pending ? 'warn' : 'good'),
+      dKpi('Products', String(rows.filter((r) => (r.kind || '') === 'product').length), 'From your catalog')),
+    pending ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' not searchable yet — press Re-embed.') : null,
+    el('div', { className: 'row' },
       el('button', { className: 'btn small', onclick: async () => {
         const prods = aiProducts();
         if (!prods.length) return toast('No products in your catalog yet', 'err');
+        // Skip products that already have an entry. Re-running this used to add a second
+        // boilerplate row for every product already imported from the website.
+        const have = new Set(rows.map((r) => (r.title || '').toLowerCase()));
+        let n = 0;
         for (const p of prods) {
+          if (have.has(p.title.toLowerCase())) continue;
           await ott.ai.saveKnowledgeRow(activeId, {
             kind: 'product', title: p.title,
-            body: p.title + (p.category ? ' (' + p.category + ')' : '')
-              + '. The current price and stock come from the catalog at reply time.',
+            body: p.text ? String(p.text).slice(0, 800)
+              : `${p.title}${p.category ? ' (' + p.category + ')' : ''}`,
             tags: ['catalog'],
           });
+          n++;
         }
-        toast(prods.length + ' product(s) imported'); refreshPanel('ai');
+        toast(n ? `${n} product(s) added` : 'Every product is already here');
+        refreshPanel('ai');
       } }, 'Import from catalog'),
       el('button', { className: 'btn small', onclick: aiImportWebsite }, 'Import from website'),
-      el('button', { className: 'btn small', onclick: async () => {
+      el('button', { className: 'btn small' + (pending ? ' primary' : ''), onclick: async () => {
         toast('Embedding…');
         const r = await ott.ai.embedAll(activeId);
         toast(r.ok ? r.embedded + ' entries embedded' : r.err, r.ok ? 'ok' : 'err');
         refreshPanel('ai');
       } }, 'Re-embed')),
-    list);
+    addForm,
+    rows.length > 8 ? search : null,
+    listBox);
+  draw();
   return box;
 }
-
 // ---------- Learn from real sales chats ----------
 // The model is never fine-tuned. A conversation that closed well is read out of WhatsApp,
 // split into question -> reply pairs, stripped of personal data, and put in front of the
