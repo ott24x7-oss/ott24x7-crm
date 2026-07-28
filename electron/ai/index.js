@@ -218,10 +218,22 @@ function register(ipc, dataDir) {
     if (!h.ok) return { ok: false, err: h.err };
     const m = await p.models();
     const names = (m.models || []).map((x) => x.name);
+    // Ollama treats a bare name as ":latest"; compare on the same footing.
+    const tag = (n) => (String(n || '').includes(':') ? String(n) : String(n) + ':latest');
+    const have = new Set(names.map(tag));
     return {
       ok: true, version: h.version, ms: h.ms, models: m.models || [],
-      chatReady: names.some((n) => n === s.chatModel || n.startsWith(s.chatModel.split(':')[0])),
-      embedReady: names.some((n) => n === s.embedModel || n.startsWith(s.embedModel.split(':')[0])),
+      // Exact tag match, with :latest filled in the way Ollama does. A prefix match said
+      // "qwen3:4b ready" because "qwen3.5:latest" starts with "qwen3" — the panel showed
+      // Ready and every reply then failed with "model not installed".
+      chatReady: have.has(tag(s.chatModel)),
+      embedReady: have.has(tag(s.embedModel)),
+      // When the configured model is missing, name one that is actually here so the owner
+      // can fix it in a click instead of guessing.
+      chatSuggestion: have.has(tag(s.chatModel)) ? null
+        : (names.find((n) => !/embed|bge|minilm|e5|gte/i.test(n)) || null),
+      embedSuggestion: have.has(tag(s.embedModel)) ? null
+        : (names.find((n) => /embed|bge|minilm|e5|gte/i.test(n)) || null),
     };
   });
 

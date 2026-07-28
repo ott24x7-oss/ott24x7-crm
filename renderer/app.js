@@ -3093,9 +3093,28 @@ async function aiViewInbox() {
     dKpi('Assistant', MODE_LABEL[s.mode] || s.mode, s.paused ? 'Paused' : 'Active',
       s.mode === 'off' || s.paused ? '' : 'good'),
     dKpi('You are', av.online ? 'Available' : 'Away', av.reason, av.online ? 'good' : 'warn'),
-    dKpi('Model', h.ok ? (h.chatReady ? 'Ready' : 'Not installed') : 'Offline',
-      h.ok ? s.chatModel : String(h.err || '').slice(0, 42),
+    dKpi('Model', h.ok ? (h.chatReady ? 'Ready' : 'Missing') : 'Offline',
+      h.ok ? (h.chatReady ? s.chatModel : `${s.chatModel} is not installed`) : String(h.err || '').slice(0, 42),
       h.ok && h.chatReady ? 'good' : 'bad')));
+
+  // A missing model is the difference between working and silently failing on every
+  // message, so it gets a fix-it row rather than a colour on a tile.
+  if (h.ok && !h.chatReady) {
+    box.append(el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      `The assistant cannot reply: "${s.chatModel}" is not installed. `
+      + (h.chatSuggestion ? `You do have "${h.chatSuggestion}".` : `Run: ollama pull ${s.chatModel}`)));
+    if (h.chatSuggestion) {
+      box.append(el('button', { className: 'btn small primary', style: { marginBottom: '8px' }, onclick: async () => {
+        await ott.ai.saveSettings(activeId, { chatModel: h.chatSuggestion });
+        aiInit(); toast('Now using ' + h.chatSuggestion); refreshPanel('ai');
+      } }, `Use ${h.chatSuggestion} instead`));
+    }
+  }
+  if (h.ok && !h.embedReady) {
+    box.append(el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      `Search will not work: "${s.embedModel}" is not installed. `
+      + (h.embedSuggestion ? `You do have "${h.embedSuggestion}".` : `Run: ollama pull ${s.embedModel}`)));
+  }
 
   box.append(el('div', { className: 'row' },
     el('button', { className: 'btn small' + (s.paused ? ' primary' : ''), onclick: async () => {
