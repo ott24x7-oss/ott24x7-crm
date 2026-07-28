@@ -3601,7 +3601,7 @@ function aiPairCard(p, i, outcomeKind) {
 async function aiImportWebsite() {
   const url = el('input', { placeholder: 'https://yourshop.com/plans' });
   const token = el('input', { placeholder: 'Only if your site needs one' });
-  const limit = el('input', { type: 'number', min: '1', max: '300', value: '100' });
+  const limit = el('input', { type: 'number', min: '1', max: '300', value: '300' });
   const status = el('div', { className: 'fp-note' });
   const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
   let found = [];
@@ -3615,7 +3615,9 @@ async function aiImportWebsite() {
     });
     if (!r || !r.ok) { status.textContent = (r && r.err) || 'Import failed'; return; }
     found = r.products || [];
-    status.textContent = `${found.length} product(s) found`
+    status.textContent = (r.total && r.total > found.length
+      ? `${found.length} of ${r.total} product(s) imported — raise "Max products" to get them all`
+      : `${found.length} product(s) found`)
       + (r.via && r.via.startsWith('json') && !r.via.startsWith('jsonld') ? ' from your product feed.' : ' by reading your product pages.')
       + ' Check the prices below before importing — these become the only prices the assistant may quote.';
     preview.innerHTML = '';
@@ -3628,7 +3630,12 @@ async function aiImportWebsite() {
   };
 
   const save = async () => {
-    if (!found.length) return toast('Read your site first', 'err');
+    // Telling the owner to press the other button first is a dead end. Read the site for
+    // them — the preview still appears, and nothing is written until this finishes.
+    if (!found.length) {
+      await run();
+      if (!found.length) return;   // run() has already explained why
+    }
     const qs = store.get('ott_quick', []);
     let added = 0, updated = 0;
     for (const p of found) {

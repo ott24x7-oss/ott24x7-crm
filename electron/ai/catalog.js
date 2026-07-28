@@ -15,7 +15,7 @@
 // never touches the WhatsApp tab.
 
 const MAX_PRODUCTS = 300;
-const CONCURRENCY = 4;
+const CONCURRENCY = 6;
 const UA = 'WA-CRM catalog import';
 
 async function get(url, timeoutMs = 20000) {
@@ -29,6 +29,10 @@ async function get(url, timeoutMs = 20000) {
     return { ok: true, body, json: /json/i.test(ct) };
   } catch (e) {
     if (e && e.name === 'AbortError') return { ok: false, err: `Timed out fetching ${url}` };
+    // A DNS miss is usually a typo or a lookalike character, not a dead site. Say so.
+    if (/ENOTFOUND|getaddrinfo|EAI_AGAIN|fetch failed/i.test(String((e && e.message) || e))) {
+      return { ok: false, err: `Could not reach ${url}. Check the address for a typo — characters like x and × look identical but are not the same.` };
+    }
     return { ok: false, err: String((e && e.message) || e) };
   } finally { clearTimeout(t); }
 }
@@ -191,8 +195,22 @@ async function tryJsonEndpoint(entry, token) {
 }
 
 // ---------- the importer ----------
+// Addresses arrive via copy-paste, phone keyboards and autocorrect, all of which quietly
+// substitute lookalikes. A real case: "ott24×7.com" with U+00D7 MULTIPLICATION SIGN where
+// the letter x belongs — visually identical in the field, and it resolves to nothing.
+// Fixing it silently beats a DNS error the owner cannot see the cause of.
+function normaliseUrl(raw) {
+  return String(raw || '')
+    .replace(/[​-‍﻿]/g, '')      // zero-width characters
+    .replace(/[×✕✖⨯]/g, 'x') // × ✕ ✖ ⨯ -> x
+    .replace(/[‐-―]/g, '-')            // typographic dashes -> hyphen
+    .replace(/[‘’“”]/g, '')  // smart quotes
+    .trim();
+}
+
 async function importCatalog({ url, token, limit, onProgress }) {
-  const entry = /^https?:\/\//i.test(url || '') ? url : 'https://' + String(url || '').replace(/^\/+/, '');
+  const clean = normaliseUrl(url);
+  const entry = /^https?:\/\//i.test(clean) ? clean : 'https://' + clean.replace(/^\/+/, '');
   let origin, path;
   try { const u = new URL(entry); origin = u.origin; path = u.pathname; }
   catch (e) { return { ok: false, err: 'That does not look like a web address.' }; }
@@ -212,13 +230,15 @@ async function importCatalog({ url, token, limit, onProgress }) {
 
   const blocks = ldBlocks(first.body);
   const direct = blocks.filter((b) => typeOf(b).includes('Product')).map((b) => fromProductLd(b, entry));
-  let urls = productUrlsFromLd(blocks, entry).filter(Boolean);
+  const listed = productUrlsFromLd(blocks, entry).filter(Boolean);
 
-  // 3. No listing on the page — ask the sitemap what exists.
-  if (!urls.length && !direct.length) {
-    note('No product list on that page — checking the sitemap…');
-    urls = await urlsFromSitemap(origin, path);
-  }
+  // 3. Always consult the sitemap as well, not only when the page yields nothing.
+  //    A listing page is usually paginated: the owner's shop shows 50 per page while the
+  //    sitemap lists all 219. Using the page alone silently imported less than a quarter of
+  //    the catalog, and a product the assistant has never heard of is one it cannot sell.
+  note(listed.length ? `${listed.length} on this page — checking the sitemap for the rest…` : 'Checking the sitemap…');
+  const mapped = await urlsFromSitemap(origin, path);
+  let urls = [...new Set([...listed, ...mapped])];
 
   if (!urls.length) {
     // A single product page, or a site with only OpenGraph.
@@ -230,8 +250,11 @@ async function importCatalog({ url, token, limit, onProgress }) {
 
   // 4. Fetch each product page. Bounded concurrency: a shop is not a load test, and the
   //    owner's own Railway instance is usually a small box.
-  urls = [...new Set(urls)].slice(0, cap);
-  note(`Found ${urls.length} product page(s). Reading them…`);
+  const total = urls.length;
+  urls = urls.slice(0, cap);
+  note(total > urls.length
+    ? `Found ${total} products — reading the first ${urls.length}. Raise "Max products" to import them all.`
+    : `Found ${urls.length} product page(s). Reading them…`);
   const products = [...direct];
   let done = 0;
 
@@ -261,7 +284,7 @@ async function importCatalog({ url, token, limit, onProgress }) {
   });
 
   if (!unique.length) return { ok: false, err: 'Product pages were found but none carried readable product data.' };
-  return { ok: true, via: 'jsonld:crawl', products: unique.slice(0, cap), scanned: urls.length };
+  return { ok: true, via: 'jsonld:crawl', products: unique.slice(0, cap), scanned: urls.length, total };
 }
 
-module.exports = { importCatalog, ldBlocks, fromProductLd, fromOg, filterProductish, availToStock };
+module.exports = { importCatalog, normaliseUrl, ldBlocks, fromProductLd, fromOg, filterProductish, availToStock };

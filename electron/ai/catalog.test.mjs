@@ -4,7 +4,7 @@
 // or a product silently dropped is a real business error. The fixtures below are the shapes
 // actually seen on the owner's live shop plus the common storefront variations.
 import assert from 'node:assert';
-import { ldBlocks, fromProductLd, fromOg, filterProductish, availToStock } from './catalog.js';
+import { normaliseUrl, ldBlocks, fromProductLd, fromOg, filterProductish, availToStock } from './catalog.js';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -111,6 +111,20 @@ t('strips HTML out of a description rather than passing markup through', () => {
   const html = `<meta property="og:title" content="X"><meta property="og:price:amount" content="5">
                 <meta property="og:description" content="Line one   with  spaces">`;
   assert.strictEqual(fromOg(html, 'u').description, 'Line one   with  spaces'.replace(/\s+/g, ' ').trim());
+});
+
+
+// A real paste from the owner's screen: ott24×7.com with U+00D7 MULTIPLICATION SIGN where
+// the letter x belongs. Visually identical in the field; resolves to nothing.
+t('repairs lookalike characters in a pasted address', () => {
+  assert.strictEqual(normaliseUrl('https://ott24×7.com/plans'), 'https://ott24x7.com/plans');
+  assert.strictEqual(normaliseUrl('https://ott24✕7.com'), 'https://ott24x7.com');
+});
+t('strips zero-width characters and trims', () => {
+  assert.strictEqual(normaliseUrl('  https://a.com​/x  '), 'https://a.com/x');
+});
+t('leaves a correct address untouched', () => {
+  assert.strictEqual(normaliseUrl('https://ott24x7.com/plans'), 'https://ott24x7.com/plans');
 });
 
 console.log(fail ? `\n  ${fail} failing` : `\n  all ${pass} passing`);
