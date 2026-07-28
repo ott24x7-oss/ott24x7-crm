@@ -15,7 +15,7 @@ const DEFAULT_TIMEOUT = 60000;
 
 // fetch with a hard deadline. Ollama on a cold model can sit for a long time, and a
 // blocked reply is worse than a fast failure the owner can see and act on.
-async function req(url, opts, timeoutMs, label) {
+async function req(url, opts, timeoutMs, label, model) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs || DEFAULT_TIMEOUT);
   const started = Date.now();
@@ -24,7 +24,7 @@ async function req(url, opts, timeoutMs, label) {
     const ms = Date.now() - started;
     if (!r.ok) {
       const body = await r.text().catch(() => '');
-      return { ok: false, ms, err: friendly(r.status, body, label) };
+      return { ok: false, ms, err: friendly(r.status, body, label, model) };
     }
     return { ok: true, ms, json: await r.json() };
   } catch (e) {
@@ -42,10 +42,13 @@ async function req(url, opts, timeoutMs, label) {
 }
 
 // Turn an HTTP status into something an owner can act on, not a stack trace.
-function friendly(status, body, label) {
+function friendly(status, body, label, model) {
   if (status === 404 && /model/i.test(body)) {
+    // /api/chat names the model in its error; /api/embed does not. Fall back to the model
+    // we asked for, so the message is always a command the owner can paste and run.
     const m = /model '([^']+)'/.exec(body);
-    return `The model ${m ? `"${m[1]}" ` : ''}is not installed. Pull it first: ollama pull ${m ? m[1] : '<model>'}`;
+    const name = (m && m[1]) || model;
+    return `The model ${name ? `"${name}" ` : ''}is not installed. Pull it first: ollama pull ${name || '<model>'}`;
   }
   if (status === 404) return `${label}: endpoint not found. Check the Ollama base URL.`;
   if (status === 500 && /memory|oom/i.test(body)) return 'The model ran out of memory. Try a smaller model (for example qwen3:4b instead of qwen3:8b).';
@@ -112,7 +115,7 @@ function ollama(cfg) {
       const r = await withRetry(
         () => req(`${base}/api/chat`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        }, timeout, 'Chat'),
+        }, timeout, 'Chat', body.model),
         2
       );
       if (!r.ok) return { ok: false, err: r.err, ms: r.ms };
@@ -130,7 +133,7 @@ function ollama(cfg) {
         () => req(`${base}/api/embed`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: embedModel, input: texts }),
-        }, timeout, 'Embedding'),
+        }, timeout, 'Embedding', embedModel),
         2
       );
       if (!r.ok) return { ok: false, err: r.err, vectors: [] };

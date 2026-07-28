@@ -17,7 +17,7 @@ function cosine(a, b) {
 // Brute force is the right call here: a knowledge base is hundreds of rows, not millions,
 // and an exact scan of 2k x 768 floats is ~1ms. An ANN index would add failure modes for
 // no measurable gain at this size.
-function search(queryVec, rows, { topK = 6, minScore = 0.25 } = {}) {
+function search(queryVec, rows, { topK = 6, minScore = 0.45 } = {}) {
   if (!queryVec || !queryVec.length) return [];
   return rows
     .filter((r) => r.active !== false && r.approved !== false && Array.isArray(r.vec) && r.vec.length)
@@ -38,10 +38,13 @@ function detectLanguage(text) {
   return 'en';
 }
 
+// Order matters — first match wins. Delivery is checked before price because "kitne din"
+// (how many days) would otherwise be caught by the bare "kitne" in the price pattern, and
+// a delivery question answered as a price question is a confidently wrong reply.
 const INTENTS = [
+  ['delivery', /\b(deliver|delivery|shipping|courier|kab tak|kitne din|kitna time|how long|dispatch)\b/i],
   ['price', /\b(price|cost|rate|kitna|kitne|how much|charges?|fees?)\b/i],
   ['stock', /\b(stock|available|availability|in stock|milega|hai kya)\b/i],
-  ['delivery', /\b(deliver|delivery|shipping|courier|kab tak|how long|dispatch)\b/i],
   ['payment', /\b(pay|payment|upi|gpay|paytm|phonepe|bank|account|qr|transfer)\b/i],
   ['warranty', /\b(warranty|guarantee|replace|replacement|garanti)\b/i],
   ['refund', /\b(refund|return|money back|paisa wapas|cancel)\b/i],
@@ -185,17 +188,28 @@ function validate(text, { settings, products, language }) {
 // ---------- confidence ----------
 // Deliberately blended: a high similarity score alone is not enough to message a paying
 // customer, and a model that "sounds sure" tells us nothing.
+// Measured against nomic-embed-text on real sales questions: unrelated text still scores
+// about 0.40 cosine, and a genuinely good match lands around 0.75. Normalising from zero
+// therefore treated pure noise as half a match, and a mediocre 0.57 hit sailed past the
+// auto-send bar. Subtract the noise floor so the score reflects real signal.
+const SIM_FLOOR = 0.40;
+const SIM_GOOD = 0.75;
+const simScore = (s) => Math.max(0, Math.min(1, (s - SIM_FLOOR) / (SIM_GOOD - SIM_FLOOR)));
+
 function confidence({ hits, exampleHits, intent, validation, historyTurns, hasProducts }) {
+  // Validation is a gate, not a contributor: the caller refuses to auto-send when it fails,
+  // and paying 0.20 simply for "said nothing forbidden" gave every empty reply a free floor.
+  if (validation && !validation.ok) return 0;
+
   const top = hits && hits.length ? hits[0].score : 0;
   const breadth = Math.min(1, ((hits || []).length + (exampleHits || []).length) / 4);
 
   let score = 0;
-  score += Math.min(1, top / 0.75) * 0.40;              // how well knowledge matched
+  score += simScore(top) * 0.50;                        // how well knowledge actually matched
   score += breadth * 0.15;                              // corroboration across sources
   score += (intent && intent.confidence ? intent.confidence : 0.4) * 0.15;
-  score += (validation && validation.ok ? 1 : 0) * 0.20;
-  score += Math.min(1, (historyTurns || 0) / 4) * 0.05; // context we actually have
-  score += (hasProducts ? 1 : 0) * 0.05;
+  score += Math.min(1, (historyTurns || 0) / 4) * 0.10; // context we actually have
+  score += (hasProducts ? 1 : 0) * 0.10;
 
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }

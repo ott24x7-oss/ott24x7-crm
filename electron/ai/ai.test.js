@@ -96,6 +96,37 @@ t('redacts phone, email, UPI and card from an example', () => {
 });
 
 // ---- confidence ----
+// Calibrated against real nomic-embed-text output, measured on this machine: unrelated
+// sales text still scores ~0.40 cosine and a genuinely good match lands ~0.75. Normalising
+// from zero made noise look like half a match, and a mediocre 0.57 hit auto-sent.
+t('a noise-level match does not clear the auto-send bar', () => {
+  const c = rag.confidence({ hits: [{ score: 0.41 }], exampleHits: [], intent: { confidence: 0.8 },
+    validation: { ok: true }, historyTurns: 2, hasProducts: true });
+  assert.ok(c < S.minConfidence, `noise scored ${c}, must stay below ${S.minConfidence}`);
+});
+t('a strong match does clear it', () => {
+  const c = rag.confidence({ hits: [{ score: 0.75 }, { score: 0.6 }], exampleHits: [{ score: 0.6 }],
+    intent: { confidence: 0.8 }, validation: { ok: true }, historyTurns: 4, hasProducts: true });
+  assert.ok(c >= S.minConfidence, `strong match scored ${c}, must reach ${S.minConfidence}`);
+});
+t('failed validation zeroes the score outright', () => {
+  const c = rag.confidence({ hits: [{ score: 0.9 }], exampleHits: [], intent: { confidence: 0.9 },
+    validation: { ok: false }, historyTurns: 4, hasProducts: true });
+  assert.strictEqual(c, 0, 'a reply that failed validation must never carry confidence');
+});
+t('retrieval floor sits above the measured noise level', () => {
+  const rows = [{ id: 'n', active: true, approved: true, vec: [1, 0] }];
+  // 0.42 cosine — the kind of score unrelated text produces. Must not be retrieved.
+  const q = [Math.cos(1.137), Math.sin(1.137)];   // ~0.42 against [1,0]
+  assert.strictEqual(rag.search(q, rows).length, 0, 'noise-level matches must not be retrieved');
+});
+t('delivery questions are not misread as price questions', () => {
+  // "kitne din" (how many days) was caught by the bare "kitne" in the price pattern.
+  assert.strictEqual(rag.detectIntent('delivery kitne din me hoga?').intent, 'delivery');
+  assert.strictEqual(rag.detectIntent('kab tak milega').intent, 'delivery');
+  assert.strictEqual(rag.detectIntent('price kitna hai').intent, 'price');
+});
+
 t('confidence rises with a good match and falls when validation fails', () => {
   const good = rag.confidence({ hits: [{ score: 0.8 }], exampleHits: [{ score: 0.7 }], intent: { confidence: 0.8 }, validation: { ok: true }, historyTurns: 4, hasProducts: true });
   const bad = rag.confidence({ hits: [], exampleHits: [], intent: { confidence: 0.4 }, validation: { ok: false }, historyTurns: 0, hasProducts: false });
