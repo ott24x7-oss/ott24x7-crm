@@ -250,3 +250,55 @@ validation rejects any figure not in the live catalog.
 
 Examples start as **Awaiting review** and are only used once approved. Each can be turned
 off or deleted from the same screen.
+
+## Importing a catalog from your website
+
+**AI Assistant → Knowledge → Import from website.** Point it at your shop or
+product-listing page.
+
+No API is required. Most storefronts already publish their catalog in machine-readable
+form because Google requires it for rich results — schema.org JSON-LD. Verified against
+ott24x7.com: the listing page carries an ItemList and each product page carries a full
+Product block with price, availability, category and description. Shopify, WooCommerce and
+most modern carts emit the same.
+
+Three routes are tried in order:
+
+1. **A JSON product feed**, if the site has one — one request, exact data, includes stock.
+   Tried at `/api/catalog`, `/api/products` and `/products.json` (Shopify's default).
+2. **JSON-LD crawl** — the listing page, or `sitemap.xml` if there is no listing, then each
+   product page. Four at a time, capped.
+3. **OpenGraph meta tags**, for sites with neither.
+
+### Where imported products land
+
+Into the **catalog** (`ott_quick`), not only the knowledge base. That is deliberate: the
+reply validator checks every rupee figure against the catalog, so a price becomes quotable
+only once it is a live CRM fact. Product descriptions are saved to knowledge separately —
+**without prices** — so the assistant can describe an item while the number is always read
+live at reply time.
+
+Re-importing updates prices on products already present rather than duplicating them.
+Imported products are not pinned as chat-bar chips; a 50-item catalog would otherwise
+bury the composer.
+
+Press **Re-embed** afterwards to make the new descriptions searchable.
+
+### Adding a feed to your own site
+
+If you run the shop yourself, a read-only JSON endpoint is faster and carries stock. For a
+Flask site such as `railway_final`:
+
+```python
+@bp.get("/api/catalog")
+def api_catalog():
+    return jsonify([
+        {"name": p["name"], "price": p["price"], "category": p.get("category"),
+         "description": p.get("description"), "activation_guide": p.get("activation_guide"),
+         "active": p.get("active", 1)}
+        for p in db.get_products() if p.get("active")
+    ])
+```
+
+The importer finds it automatically. Add a bearer token if you would rather it were not
+public — the import dialog has a field for it.

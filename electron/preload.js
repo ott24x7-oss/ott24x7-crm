@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('ott', {
     getLogs: (acc, limit) => ipcRenderer.invoke('ai:getLogs', acc, limit),
     updateLog: (acc, id, patch) => ipcRenderer.invoke('ai:updateLog', acc, id, patch),
     purge: (acc, what) => ipcRenderer.invoke('ai:purge', acc, what),
+    importCatalog: (opts) => ipcRenderer.invoke('ai:importCatalog', opts),
   },
   persistLoad: (key) => ipcRenderer.invoke('persist:load', key),
   persistSave: (key, value) => ipcRenderer.invoke('persist:save', key, value),

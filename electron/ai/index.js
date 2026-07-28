@@ -5,6 +5,7 @@
 // facts with each request — this module never reaches into CRM storage for a price.
 
 const rag = require('./rag');
+const { importCatalog } = require('./catalog');
 const store = require('./store');
 const { createProvider } = require('./provider');
 
@@ -271,6 +272,9 @@ function register(ipc, dataDir) {
   // per-conversation control
   H('ai:convoState', (accId, number) => ({ ok: true, state: store.convo(accId, String(number || '').replace(/\D/g, '')) }));
   H('ai:setConvoState', (accId, number, patch) => ({ ok: true, state: store.setConvo(accId, String(number || '').replace(/\D/g, ''), patch) }));
+
+  // catalog import from a website
+  H('ai:importCatalog', (opts) => importCatalog(opts || {}));
 
   // logs + privacy
   H('ai:getLogs', (accId, limit) => ({ ok: true, rows: store.getLogs(accId).slice(0, limit || 200) }));

@@ -3344,6 +3344,7 @@ async function aiViewKnowledge() {
         }
         toast(prods.length + ' product(s) imported'); refreshPanel('ai');
       } }, 'Import from catalog'),
+      el('button', { className: 'btn small', onclick: aiImportWebsite }, 'Import from website'),
       el('button', { className: 'btn small', onclick: async () => {
         toast('Embedding…');
         const r = await ott.ai.embedAll(activeId);
@@ -3590,6 +3591,93 @@ function aiPairCard(p, i, outcomeKind) {
   };
   return card;
 }
+
+// Import a product catalog from a website into the CRM.
+//
+// Imported products land in the CATALOG (ott_quick), not just the knowledge base — that is
+// deliberate. The reply validator checks every rupee figure against the catalog, so a
+// price only becomes quotable once it is a live CRM fact. Descriptions go to knowledge so
+// the assistant can talk about a product; prices are never read from there.
+async function aiImportWebsite() {
+  const url = el('input', { placeholder: 'https://yourshop.com/plans' });
+  const token = el('input', { placeholder: 'Only if your site needs one' });
+  const limit = el('input', { type: 'number', min: '1', max: '300', value: '100' });
+  const status = el('div', { className: 'fp-note' });
+  const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
+  let found = [];
+
+  const run = async () => {
+    if (!url.value.trim()) return toast('Enter your shop address', 'err');
+    found = []; preview.innerHTML = '';
+    status.textContent = 'Reading your site…';
+    const r = await ott.ai.importCatalog({
+      url: url.value.trim(), token: token.value.trim(), limit: Number(limit.value) || 100,
+    });
+    if (!r || !r.ok) { status.textContent = (r && r.err) || 'Import failed'; return; }
+    found = r.products || [];
+    status.textContent = `${found.length} product(s) found`
+      + (r.via && r.via.startsWith('json') && !r.via.startsWith('jsonld') ? ' from your product feed.' : ' by reading your product pages.')
+      + ' Check the prices below before importing — these become the only prices the assistant may quote.';
+    preview.innerHTML = '';
+    found.slice(0, 40).forEach((p) => preview.append(el('div', { className: 'bk-row' },
+      el('div', { style: { flex: '1', minWidth: '0' } },
+        el('div', { style: { fontSize: '12.5px' } }, p.title),
+        el('div', { className: 'muted', style: { fontSize: '11px' } }, (p.category || '') + (p.stock ? '' : ' · OUT OF STOCK'))),
+      el('span', { className: 'rate-tag' }, '₹' + p.price))));
+    if (found.length > 40) preview.append(el('div', { className: 'muted' }, `…and ${found.length - 40} more`));
+  };
+
+  const save = async () => {
+    if (!found.length) return toast('Read your site first', 'err');
+    const qs = store.get('ott_quick', []);
+    let added = 0, updated = 0;
+    for (const p of found) {
+      if (!p.title || !p.price) continue;
+      const existing = qs.find((q) => (q.title || '').toLowerCase() === p.title.toLowerCase());
+      if (existing) { existing.sell = p.price; existing.category = p.category || existing.category; existing.stock = p.stock; updated++; }
+      else {
+        // pinned:false — an imported catalog of 50 items must not carpet the chat bar with chips.
+        qs.push({ title: p.title, category: p.category || '', text: p.description || '',
+          sell: p.price, cost: 0, stock: p.stock, pinned: false, source: 'website' });
+        added++;
+      }
+    }
+    store.set('ott_quick', qs);
+
+    // Descriptions become knowledge so the assistant can describe a product. The price is
+    // deliberately left out — it is read live from the catalog at reply time.
+    let notes = 0;
+    for (const p of found) {
+      if (!p.description || !p.title) continue;
+      await ott.ai.saveKnowledgeRow(activeId, {
+        kind: 'product', title: p.title,
+        body: `${p.title}${p.category ? ' (' + p.category + ')' : ''}. ${p.description}`,
+        tags: ['website'],
+      });
+      notes++;
+    }
+    closeAiModal();
+    toast(`${added} added, ${updated} updated, ${notes} description(s) saved — press Re-embed`);
+    refreshPanel('ai');
+  };
+
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) scrim.remove(); } },
+    el('div', { className: 'modal-box', style: { width: '540px', textAlign: 'left', maxHeight: '80vh', overflowY: 'auto' } },
+      el('h3', {}, 'Import products from your website'),
+      el('div', { className: 'fp-note' },
+        'Point this at your shop or product-listing page. Most storefronts publish their catalog in a form this can read, '
+        + 'so no API is needed. If your site does have a product feed it will be used instead, which is faster and includes stock.'),
+      lbl('Shop or listing page', url),
+      el('div', { className: 'row' }, lbl('Access token (optional)', token), lbl('Max products', limit)),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn', onclick: run }, 'Read my site'),
+        el('button', { className: 'btn primary', onclick: save }, 'Import into catalog')),
+      status, preview));
+  window.__aiModal = scrim;
+  document.body.append(scrim);
+  setTimeout(() => url.focus(), 0);
+}
+function closeAiModal() { if (window.__aiModal) { window.__aiModal.remove(); window.__aiModal = null; } }
 
 async function aiViewLogs() {
   const rows = (await ott.ai.getLogs(activeId, 100)).rows || [];
