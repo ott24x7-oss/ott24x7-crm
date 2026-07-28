@@ -196,6 +196,19 @@ t('purge removes learned data but keeps settings', () => {
 });
 
 // ---- defaults ----
+// The panel showed "Ready qwen3:4b" while every reply failed with "model not installed",
+// because "qwen3.5:latest".startsWith("qwen3") is true. The one screen meant to catch this
+// confirmed all was well. Readiness is an exact tag match.
+t('reports a model ready only on an exact tag', () => {
+  const tag = (n) => (String(n || '').includes(':') ? String(n) : String(n) + ':latest');
+  const have = new Set(['gemma2:2b', 'qwen3.5:latest', 'nomic-embed-text:latest'].map(tag));
+  assert.strictEqual(have.has(tag('qwen3:4b')), false, 'a prefix match must not count as installed');
+  assert.strictEqual(have.has(tag('qwen3.5')), true, 'a bare name resolves to :latest');
+  assert.strictEqual(have.has(tag('nomic-embed-text')), true);
+  assert.strictEqual(have.has(tag('gemma2:2b')), true);
+  assert.strictEqual(have.has(tag('llama3')), false);
+});
+
 t('ships in suggestions-only mode, never auto-replying out of the box', () => {
   assert.strictEqual(store.DEFAULT_SETTINGS.mode, 'suggest');
   assert.strictEqual(store.DEFAULT_SETTINGS.allowGroups, false);
