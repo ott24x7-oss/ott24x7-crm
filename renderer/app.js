@@ -1132,8 +1132,13 @@ function applyChatWidget(accId) {
          click on a message into "Save as lead". */
       +'#ott-w .h{pointer-events:auto}'
       +'#ott-w.open .a{pointer-events:auto}'
-      +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1)}'
-      +'#ott-w.open .acts{opacity:1;pointer-events:auto;transform:none}'
+      /* visibility:hidden as well as opacity:0 and pointer-events:none. opacity alone
+         leaves the column hit-testable, and pointer-events can be overridden by a child;
+         visibility cannot be resurrected without an explicit visibility:visible, so this
+         is the one that makes the collapsed column genuinely inert. It flips instantly on
+         open and only after the fade on close, so the animation is unchanged. */
+      +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1),visibility 0s linear .18s}'
+      +'#ott-w.open .acts{opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1),visibility 0s}'
       +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'
       +'font:600 12.5px Inter,-apple-system,"Segoe UI",sans-serif;color:#12a054;background:linear-gradient(180deg,#fff 0%,#f2f6f4 100%);'
       +'border:1px solid rgba(9,30,22,.12);box-shadow:inset 0 1px 0 #fff,0 1px 2px rgba(11,20,26,.18),0 6px 16px -6px rgba(11,20,26,.35);transition:all .16s cubic-bezier(.2,0,0,1)}'
