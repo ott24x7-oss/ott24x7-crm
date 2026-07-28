@@ -175,18 +175,27 @@ function validate(text, { settings, products, language }) {
   if (/\b(\d+\s*%\s*(off|discount)|special discount|extra discount)\b/i.test(t)) problems.push('offered a discount');
   if (/\b(guarantee[d]? (delivery|refund)|100% (safe|guaranteed))\b/i.test(t)) problems.push('made an absolute promise');
 
-  // An out-of-stock product must not be promised — but a reply that correctly SAYS it is
-  // out of stock usually also contains "available" ("I'll tell you when it becomes
-  // available"). Matching the word alone rejected correct answers, which pushed nearly
-  // every stock question to manual review. An explicit denial is taken at face value.
-  const deniesStock = /\b(out of stock|not available|not in stock|unavailable|sold out|nahi hai|nahi milega|stock mein nahi|khatam|abhi nahi)\b/i.test(t);
-  if (!deniesStock) {
-    for (const p of (products || [])) {
-      if (p.stock === false && p.title && t.toLowerCase().includes(String(p.title).toLowerCase())) {
-        if (/\b(available|in stock|milega|mil jayega|bhej|ship|deliver)\b/i.test(t)) {
-          problems.push(`promised "${p.title}" which is out of stock`);
-        }
-      }
+  // Out-of-stock products, and the one rule here that FAILS CLOSED.
+  //
+  // Looking for promise words ("available", "milega") only works in the languages those
+  // words are written in. A real qwen2.5:3b reply in Devanagari — "Prime 1 Year अब ही
+  // प्रदान किया जा सकता है, ₹999" ("can be provided right now") — matched none of them and
+  // passed, promising an item that was gone. Detecting a promise across three languages is
+  // not something a regex can be trusted to do.
+  //
+  // So the rule is inverted: mentioning an out-of-stock product requires a denial we can
+  // actually recognise. No recognisable denial means the reply is held back for the owner.
+  // A correct Hindi answer occasionally landing in review is a fair price for never
+  // promising stock that does not exist.
+  const deniesStock = new RegExp([
+    'out of stock', 'not available', 'not in stock', 'unavailable', 'sold out',
+    'nahi hai', 'nahi milega', 'stock mein nahi', 'khatam', 'abhi nahi',
+    'उपलब्ध नहीं', 'स्टॉक में नहीं', 'नहीं है', 'खत्म', 'अभी नहीं',
+  ].join('|'), 'i').test(t);
+
+  for (const p of (products || [])) {
+    if (p.stock === false && p.title && t.toLowerCase().includes(String(p.title).toLowerCase())) {
+      if (!deniesStock) problems.push(`mentioned "${p.title}" without saying it is out of stock`);
     }
   }
 

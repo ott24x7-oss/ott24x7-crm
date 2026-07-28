@@ -206,6 +206,17 @@ t('ships in suggestions-only mode, never auto-replying out of the box', () => {
 // Measured against qwen3.5 on a real machine: a correct out-of-stock answer nearly always
 // contains the word "available" ("I'll tell you when it becomes available"), and matching
 // that alone rejected correct replies — pushing every stock question to manual review.
+
+// A real qwen2.5:3b reply that promised an out-of-stock item in Devanagari passed every
+// English/Hinglish promise pattern. The rule now fails closed: mentioning an out-of-stock
+// product requires a denial we can recognise.
+t('a Hindi promise of an out-of-stock item is held back', () => {
+  const v = rag.validate('Prime 1 Year अब ही प्रदान किया जा सकता है, ₹999।', { settings: S, products: PRODUCTS });
+  assert.ok(!v.ok, 'a promise of unavailable stock must never pass, in any language');
+});
+t('a Hindi denial is recognised', () => {
+  assert.ok(rag.validate('Prime 1 Year अभी उपलब्ध नहीं है।', { settings: S, products: PRODUCTS }).ok);
+});
 t('a correct out-of-stock answer is not rejected', () => {
   const v = rag.validate('Prime 1 Year abhi stock mein nahi hai, out of stock hai. Main batata hoon jab available ho jaye.', { settings: S, products: PRODUCTS });
   assert.ok(v.ok, 'correct answer was refused: ' + v.problems.join('; '));
