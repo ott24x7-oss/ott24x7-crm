@@ -65,12 +65,20 @@ jobs:
       # initManualUpdate() for exactly that reason. No latest-mac.yml is ever generated, so
       # nothing can consume them. Carrying them made the artifact ~600MB instead of ~400MB,
       # and downloads of it repeatedly timed out.
+      # continue-on-error, because this step is the FALLBACK. Staging to a release below is
+      # the path the DMGs actually ship through. Without it a full artifact store fails the
+      # job and skips every later step, so a perfectly good build reaches nobody — which is
+      # exactly what happened on the v0.35.0 run.
+      #
+      # retention is short for the same reason: each run stores ~400 MB, and at 30 days that
+      # is what exhausted the quota in the first place.
       - name: Keep as workflow artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: wa-crm-macos
           path: release/*.dmg
-          retention-days: 30
+          retention-days: 5
           if-no-files-found: error
 
       # Staging release in THIS repo, using the built-in GITHUB_TOKEN — no PAT needed.
