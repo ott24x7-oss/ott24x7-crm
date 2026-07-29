@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('ott', {
   config: () => ipcRenderer.invoke('app:config'),
   translate: (text, tl) => ipcRenderer.invoke('app:translate', { text, tl }),
   importNumbers: (filePath) => ipcRenderer.invoke('app:importNumbers', filePath),
+  catalogFetch: (url) => ipcRenderer.invoke('catalog:fetch', url),
+  catalogImage: (url) => ipcRenderer.invoke('catalog:image', url),
   backupSave: (json) => ipcRenderer.invoke('backup:save', json),
   backupOpen: () => ipcRenderer.invoke('backup:open'),
   persistLoad: (key) => ipcRenderer.invoke('persist:load', key),
