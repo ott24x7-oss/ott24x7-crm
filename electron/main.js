@@ -147,6 +147,55 @@ ipcMain.handle('app:importNumbers', async (_e, filePath) => {
   }
 });
 
+// Fetch a page (or product image) for the catalogue importer. The renderer is a file://
+// document, so every cross-origin request has to come from here — and doing it in the main
+// process also keeps a hostile page's markup away from the WhatsApp session: we return raw
+// bytes, never anything that executes.
+const FETCH_TIMEOUT = 20000;
+const MAX_PAGE = 8 * 1024 * 1024;
+const MAX_IMAGE = 2 * 1024 * 1024;
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+async function grab(url, { asDataUri = false } = {}) {
+  let u;
+  try { u = new URL(String(url)); } catch { return { ok: false, err: 'That does not look like a web address.' }; }
+  // http/https only — file:, data: and app-internal schemes must never be reachable from
+  // a URL the page under import supplied.
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, err: 'Only http and https addresses can be opened.' };
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT);
+  try {
+    const res = await fetch(u.href, {
+      redirect: 'follow',
+      signal: ctl.signal,
+      headers: { 'User-Agent': UA, Accept: asDataUri ? 'image/*' : 'text/html,application/xhtml+xml' },
+    });
+    if (!res.ok) return { ok: false, err: `The site answered ${res.status}.` };
+
+    const cap = asDataUri ? MAX_IMAGE : MAX_PAGE;
+    const buf = Buffer.from(await res.arrayBuffer());
+    // Length is checked after the read rather than from content-length, which is absent on
+    // chunked responses and trivially wrong on a hostile one.
+    if (buf.length > cap) return { ok: false, err: 'That file is too large to import.' };
+
+    if (!asDataUri) return { ok: true, url: res.url, html: buf.toString('utf8') };
+    const type = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    if (!/^image\//.test(type)) return { ok: false, err: 'That address is not an image.' };
+    // SVG is refused on purpose. WhatsApp cannot send one as a photo, so it would arrive as
+    // an odd document — and an SVG can carry script, which is not something to hand on to
+    // the WhatsApp session. Shops that emit generated SVG tiles instead of photographs
+    // (ott24x7.com does) simply import without an image.
+    if (/svg/i.test(type)) return { ok: false, err: 'That image is a vector placeholder, not a photo.' };
+    return { ok: true, url: res.url, dataUri: `data:${type};base64,${buf.toString('base64')}` };
+  } catch (e) {
+    return { ok: false, err: e.name === 'AbortError' ? 'The site took too long to respond.' : String((e && e.message) || e) };
+  } finally { clearTimeout(timer); }
+}
+
+ipcMain.handle('catalog:fetch', (_e, url) => grab(url));
+ipcMain.handle('catalog:image', (_e, url) => grab(url, { asDataUri: true }));
+
 // Durable data store in userData (survives app updates — NSIS never touches userData).
 function dataDir() { const d = path.join(app.getPath('userData'), 'data'); fs.mkdirSync(d, { recursive: true }); return d; }
 // Backup to a real file the user chooses. A CRM's whole value is its history, and until

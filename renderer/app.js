@@ -570,6 +570,95 @@ function deriveTitle(t) {
 function cleanPreview(t) {
   return String(t || '').replace(/[*_~`]+/g, '').replace(/\s*\r?\n\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim();
 }
+// ---- Website catalogue import ----
+// Pull a shop page apart into products. Deliberately layered: the precise signals first,
+// the loose ones only as a fallback, because a page that carries data-price or JSON-LD is
+// telling us the answer and guessing from visible text would be strictly worse.
+//
+// JSON-LD is NOT tried first even though it looks authoritative. On a real catalogue it is
+// routinely partial — ott24x7.com's ItemList lists 50 of 62 products and carries no price
+// at all — so trusting it would silently drop products and every rate.
+const CURRENCY = /(?:₹|Rs\.?|INR|\$|€|£)\s*([\d][\d,]*(?:\.\d{1,2})?)/i;
+const stripEmoji = (s) => String(s || '').replace(/[\p{Extended_Pictographic}️‍]/gu, '').replace(/\s+/g, ' ').trim();
+const priceFrom = (s) => { const m = CURRENCY.exec(String(s || '')); return m ? Number(m[1].replace(/,/g, '')) || 0 : 0; };
+const txt = (n, sel) => { const x = n && n.querySelector(sel); return x ? x.textContent.replace(/\s+/g, ' ').trim() : ''; };
+
+function parseCatalog(html, baseUrl) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const abs = (u) => { try { return new URL(u, baseUrl).href; } catch { return ''; } };
+  const out = [];
+  const seen = new Set();
+  const push = (p) => {
+    const key = (p.title || '').toLowerCase();
+    if (!p.title || seen.has(key)) return;
+    seen.add(key); out.push(p);
+  };
+
+  // 1. Cards that state their own price. Cleanest signal a page can give.
+  for (const c of doc.querySelectorAll('[data-price]')) {
+    // Skip a nested button that repeats its card's price — take the outermost node only.
+    if (c.parentElement && c.parentElement.closest('[data-price]')) continue;
+    const name = txt(c, 'h1,h2,h3,h4') || c.getAttribute('data-name') || '';
+    const img = c.querySelector('img');
+    push({
+      title: stripEmoji(name).trim(),
+      price: Number(c.getAttribute('data-price')) || priceFrom(txt(c, '.price')),
+      desc: txt(c, '.desc,.description,p'),
+      category: stripEmoji(txt(c, '.cat,.category')),
+      image: img ? abs(img.getAttribute('src') || '') : '',
+      url: abs(c.getAttribute('href') || (c.querySelector('a') || {}).getAttribute?.('href') || ''),
+    });
+  }
+
+  // 2. JSON-LD Product entries — used to fill gaps, not as the source of truth.
+  if (!out.length) {
+    for (const s of doc.querySelectorAll('script[type="application/ld+json"]')) {
+      let j; try { j = JSON.parse(s.textContent.trim()); } catch { continue; }
+      const nodes = [];
+      const walk = (v) => {
+        if (Array.isArray(v)) return v.forEach(walk);
+        if (!v || typeof v !== 'object') return;
+        if (v['@type'] === 'Product') nodes.push(v);
+        Object.values(v).forEach(walk);
+      };
+      walk(j);
+      for (const p of nodes) {
+        const offer = [].concat(p.offers || [])[0] || {};
+        push({
+          title: stripEmoji(p.name), price: Number(offer.price) || priceFrom(offer.price),
+          desc: String(p.description || ''), category: stripEmoji(p.category || ''),
+          image: abs([].concat(p.image || [])[0] || ''), url: abs(p.url || ''),
+        });
+      }
+    }
+  }
+
+  // 3. Last resort: any link whose own text carries a heading and a currency amount.
+  if (!out.length) {
+    for (const a of doc.querySelectorAll('a')) {
+      const head = txt(a, 'h1,h2,h3,h4');
+      if (!head || !CURRENCY.test(a.textContent)) continue;
+      const img = a.querySelector('img');
+      push({
+        title: stripEmoji(head), price: priceFrom(a.textContent),
+        desc: txt(a, 'p'), category: stripEmoji(txt(a, '.cat,.category')),
+        image: img ? abs(img.getAttribute('src') || '') : '', url: abs(a.getAttribute('href') || ''),
+      });
+    }
+  }
+  return out;
+}
+
+// Build the message that actually gets sent. Name and rate belong in the text, not only in
+// the fields, or a product reaches the customer as a bare description.
+function catalogMessage(p) {
+  const bits = [];
+  if (p.title) bits.push('*' + p.title + '*');
+  if (p.price > 0) bits.push('₹' + Number(p.price).toLocaleString('en-IN'));
+  const head = bits.join('\n');
+  return p.desc ? (head ? head + '\n\n' + p.desc : p.desc) : head;
+}
+
 // Send a saved product/offer straight to the currently open WhatsApp chat.
 async function sendQuickToActiveChat(it) {
   const wv = document.querySelector(`webview[data-acc="${activeId}"]`);
@@ -700,6 +789,109 @@ RENDER.quick = (b) => {
   }
   search.oninput = draw; catF.onchange = draw;
 
+  // ---- Import a catalogue from a website ----
+  const impUrl = el('input', { placeholder: 'https://your-shop.com/products', spellcheck: false });
+  const impSkip = chk(true);
+  const impImgs = chk(false);
+  const impOut = el('div', { style: { display: 'none', marginTop: '8px' } });
+  const impList = el('div', { className: 'log', style: { maxHeight: '210px', marginTop: '6px' } });
+  const impBar = el('div', { className: 'row', style: { alignItems: 'center', gap: '10px', marginTop: '6px' } });
+  const impCount = el('span', { className: 'muted', style: { fontSize: '12px', flex: '1' } });
+  const impGo = el('button', { className: 'btn primary small', onclick: () => runImport() }, 'Import selected');
+  let found = [];
+  let picked = new Set();
+
+  const existingTitles = () => new Set(store.get('ott_quick', []).map((q) => String(q.title || '').trim().toLowerCase()));
+
+  const drawFound = () => {
+    const have = existingTitles();
+    impList.innerHTML = '';
+    found.forEach((p, i) => {
+      const dupe = have.has(String(p.title || '').trim().toLowerCase());
+      const box = chk(picked.has(i));
+      box.onchange = () => { if (box.checked) picked.add(i); else picked.delete(i); drawFound(); };
+      impList.append(el('label', {
+        style: { display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '4px 2px', opacity: dupe && impSkip.checked ? '.45' : '1' },
+      }, box,
+        el('span', { style: { flex: '1', minWidth: '0' } },
+          el('b', {}, p.title),
+          p.price > 0 ? el('span', { className: 'rate-tag', style: { marginLeft: '6px' } }, '₹' + p.price.toLocaleString('en-IN')) : null,
+          p.category ? el('span', { className: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, p.category) : null,
+          dupe ? el('span', { className: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, '· already saved') : null,
+          el('div', { className: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } }, (p.desc || '').slice(0, 90)))));
+    });
+    const n = [...picked].filter((i) => !(impSkip.checked && have.has(String(found[i]?.title || '').trim().toLowerCase()))).length;
+    impCount.textContent = `${n} of ${found.length} will be imported`;
+    impGo.disabled = !n;
+    impGo.style.opacity = n ? '1' : '.5';
+  };
+
+  impBar.append(
+    el('button', { className: 'btn small ghost', onclick: () => { picked = new Set(found.map((_, i) => i)); drawFound(); } }, 'Select all'),
+    el('button', { className: 'btn small ghost', onclick: () => { picked = new Set(); drawFound(); } }, 'None'),
+    impCount, impGo);
+  impSkip.onchange = drawFound;
+
+  async function runFetch(btn) {
+    const url = impUrl.value.trim();
+    if (!url) return toast('Paste a product page address', 'err');
+    if (!window.ott || !ott.catalogFetch) return toast('Update the app to use catalogue import', 'err');
+    btn.disabled = true; btn.textContent = 'Fetching…';
+    try {
+      const r = await ott.catalogFetch(url);
+      if (!r || !r.ok) return toast(r?.err || 'Could not open that page', 'err');
+      found = parseCatalog(r.html, r.url).filter((p) => p.title);
+      if (!found.length) { impOut.style.display = 'none'; return toast('No products found on that page', 'err'); }
+      // Default to importing what is genuinely new, so a re-run is safe to click.
+      const have = existingTitles();
+      picked = new Set(found.map((_, i) => i).filter((i) => !have.has(String(found[i].title).trim().toLowerCase())));
+      impOut.style.display = 'block';
+      drawFound();
+      toast(`Found ${found.length} product(s)`);
+    } finally { btn.disabled = false; btn.textContent = 'Fetch products'; }
+  }
+
+  async function runImport() {
+    const have = existingTitles();
+    const rows = [...picked].sort((a, c) => a - c).map((i) => found[i])
+      .filter((p) => p && !(impSkip.checked && have.has(String(p.title).trim().toLowerCase())));
+    if (!rows.length) return;
+    impGo.disabled = true;
+    let images = 0, skipped = 0;
+    try {
+      const qs = store.get('ott_quick', []);
+      for (const [n, p] of rows.entries()) {
+        const item = {
+          title: p.title, category: p.category || '', text: catalogMessage(p),
+          // Never pinned on import: sixty new chips would bury the chat bar. Pin the few
+          // you actually use from the list below.
+          pinned: false, sell: Number(p.price) || 0, cost: 0,
+        };
+        if (impImgs.checked && p.image) {
+          // Count the row, not the successes — a run where every image is refused would
+          // otherwise sit on "1/63" and look hung.
+          impCount.textContent = `Fetching image ${n + 1}/${rows.length}…`;
+          const img = await ott.catalogImage(p.image).catch(() => null);
+          if (img && img.ok) { item.data = img.dataUri; item.filename = (p.title || 'product') + '.jpg'; images++; }
+          else skipped++;
+        }
+        qs.push(item);
+      }
+      // localStorage is a hard ceiling and base64 images eat it fast, so a failed write has
+      // to say so rather than look like a silent no-op.
+      if (!store.set('ott_quick', qs)) {
+        return toast('Storage full — import without images, or delete some products first', 'err');
+      }
+      found = []; picked = new Set(); impOut.style.display = 'none';
+      drawFilters(); draw(); refreshChips();
+      toast(`Imported ${rows.length} product(s)`
+        + (images ? ` with ${images} image(s)` : '')
+        + (skipped ? ` · ${skipped} image(s) unusable` : ''));
+    } finally { impGo.disabled = false; }
+  }
+
+  impOut.append(impList, impBar);
+
   b.append(
     el('div', { className: 'fp-note' }, 'Save your product offers (image + caption) once, then search and send them to the open chat in one click. Pin your most-used ones as chips above the message box.'),
     lbl('Product / offer name', title),
@@ -716,6 +908,19 @@ RENDER.quick = (b) => {
       qs.push({ title: title.value.trim() || deriveTitle(text.value), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked, sell: Number(sell.value) || 0, cost: Number(cost.value) || 0 });
       if (store.set('ott_quick', qs)) { title.value = text.value = category.value = sell.value = cost.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
     } }, '＋ Save product / offer'),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
+    el('div', { className: 'fp-note' },
+      'Or pull a whole catalogue from your website — name, price, category and description '
+      + 'are read straight off the product page.'),
+    lbl('Product page address', impUrl),
+    el('div', { className: 'row', style: { alignItems: 'center' } },
+      el('button', { className: 'btn', onclick: (e) => runFetch(e.currentTarget) }, 'Fetch products'),
+      chkRow(impSkip, 'Skip ones already saved'),
+      chkRow(impImgs, 'Also fetch images')),
+    el('div', { className: 'fp-note', style: { margin: '-2px 0 0' } },
+      'Images are stored inside the app, so a large catalogue can fill its storage. '
+      + 'Leave them off unless you need them.'),
+    impOut,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
     el('div', { className: 'row' }, lbl('Search', search), lbl('Category', catF)),
     bulkBar,
