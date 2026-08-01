@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const config = require('../config.js');
+const brand = require('../brand.js');
 const license = require('./license.js');
 
 let win;
@@ -62,8 +63,8 @@ function createWindow() {
     minWidth: 940,
     minHeight: 640,
     backgroundColor: '#0a0f14',
-    icon: path.join(__dirname, '..', 'assets', 'wa-crm.ico'),
-    title: 'WA-CRM',
+    icon: path.join(__dirname, '..', 'assets', brand.icon),
+    title: brand.name,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -102,6 +103,13 @@ ipcMain.handle('app:config', () => ({
   server: config.LICENSE_SERVER,
   product: config.PRODUCT_SLUG,
   version: app.getVersion(),
+  // Branding travels to the renderer rather than being hardcoded there, so a
+  // white-label build needs no renderer edits.
+  brand: {
+    name: brand.name, company: brand.company, slug: brand.slug,
+    site: brand.site, buyUrl: brand.buyUrl, logoMark: brand.logoMark,
+    hasUpdates: !!brand.updateRepo,
+  },
 }));
 
 // Import numbers from a .csv / .txt / .xlsx / .xls file.
@@ -203,9 +211,9 @@ function dataDir() { const d = path.join(app.getPath('userData'), 'data'); fs.mk
 ipcMain.handle('backup:save', async (_e, json) => {
   const stamp = new Date().toISOString().slice(0, 10);
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: 'Save WA-CRM backup',
-    defaultPath: `wa-crm-backup-${stamp}.json`,
-    filters: [{ name: 'WA-CRM backup', extensions: ['json'] }],
+    title: `Save ${brand.name} backup`,
+    defaultPath: `${brand.slug}-backup-${stamp}.json`,
+    filters: [{ name: `${brand.name} backup`, extensions: ['json'] }],
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   try {
@@ -216,9 +224,9 @@ ipcMain.handle('backup:save', async (_e, json) => {
 
 ipcMain.handle('backup:open', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: 'Open WA-CRM backup',
+    title: `Open ${brand.name} backup`,
     properties: ['openFile'],
-    filters: [{ name: 'WA-CRM backup', extensions: ['json'] }],
+    filters: [{ name: `${brand.name} backup`, extensions: ['json'] }],
   });
   if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
   try {
@@ -269,8 +277,11 @@ ipcMain.handle('app:translate', async (_e, { text, tl }) => {
 
 // macOS refuses to auto-update an app that is not code-signed, so on darwin we check the
 // releases feed ourselves and send the user to the download page instead of failing.
-const RELEASES_API = 'https://api.github.com/repos/ott24x7-oss/ott24x7-crm-releases/releases/latest';
-const RELEASES_PAGE = 'https://github.com/ott24x7-oss/ott24x7-crm-releases/releases/latest';
+// Derived from the brand. A white-label build left without an updateRepo gets no feed
+// at all, which is deliberate: pointing a reseller's users at our releases would offer
+// them WA-CRM-branded installers.
+const RELEASES_API = brand.updateRepo ? `https://api.github.com/repos/${brand.updateRepo}/releases/latest` : '';
+const RELEASES_PAGE = brand.updateRepo ? `https://github.com/${brand.updateRepo}/releases/latest` : '';
 
 function newer(a, b) {
   const pa = String(a).replace(/^v/, '').split('.').map(Number);
@@ -301,9 +312,23 @@ function initManualUpdate() {
   setInterval(() => checkManualUpdate().catch(() => {}), 6 * 3600 * 1000);
 }
 
+// Registers the update IPC as no-ops. The preload bridge always exposes these, so the
+// handlers must exist even when a build has no feed, or every renderer call rejects.
+function initNoUpdate() {
+  ipcMain.handle('update:check', () => { win?.webContents.send('update:none'); });
+  ipcMain.handle('update:download', () => {});
+  ipcMain.handle('update:install', () => {});
+}
+
 function initAutoUpdate() {
   // Only in a packaged build; checks the public releases repo for a newer version.
   if (!app.isPackaged) return;
+  // A brand with no updateRepo gets no updater at all. Without this the packaged
+  // app-update.yml — written from the publish config at build time — would still point
+  // at our repo, and a reseller's customers would be auto-updated into WA-CRM-branded
+  // installers. Silently shipping someone else's brand to their users is the one
+  // failure mode a white-label build cannot have.
+  if (!brand.updateRepo) return initNoUpdate();
   if (process.platform === 'darwin') return initManualUpdate();
   try {
     const { autoUpdater } = require('electron-updater');
@@ -324,7 +349,7 @@ function initAutoUpdate() {
 }
 
 app.whenReady().then(() => {
-  try { app.setAppUserModelId('com.ott24x7.crm'); } catch (_) {}
+  try { app.setAppUserModelId(brand.appId); } catch (_) {}
   // Smoke mode: boot the main process and quit (CI/verification, no GUI needed).
   if (process.env.OTT_SMOKE) {
     console.log('OTT_SMOKE ok: main process booted, IPC handlers registered');

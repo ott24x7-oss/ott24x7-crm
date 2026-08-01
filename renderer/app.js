@@ -93,7 +93,10 @@ const FEATURES = [
 // ================= boot / license =================
 let engineSrc = '';
 let trialInfo = { isTrial: false, expiresAt: null };
-const BUY_URL = 'https://ott24x7.com/plans/dev-crm-pro-whatsapp-software-license';
+// Filled from ott.config() at boot; see brand.js. Defaults are only what shows in the
+// split second before config resolves.
+const BRAND = { name: 'WA-CRM', company: 'WA-CRM', slug: 'wa-crm', site: '', buyUrl: '', hasUpdates: true };
+let BUY_URL = '';
 window.addEventListener('DOMContentLoaded', async () => {
   $('#deviceId').textContent = (await ott.deviceId()).slice(0, 12) + '…';
   const saved = await ott.licenseLoad();
@@ -110,6 +113,20 @@ function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList
 // every later release and made a successful update look like it had not installed.
 try {
   ott.config().then((c) => {
+    if (c && c.brand) {
+      Object.assign(BRAND, c.brand);
+      BUY_URL = BRAND.buyUrl || '';
+      document.title = BRAND.name;
+      const bn = document.querySelector('.brand-name');
+      if (bn) bn.textContent = BRAND.name;
+      const gt = document.getElementById('gateTitle');
+      if (gt) gt.textContent = BRAND.name;
+      const gl = document.querySelector('.gate-logo');
+      if (gl && BRAND.logoMark) { gl.src = '../assets/' + BRAND.logoMark; gl.alt = BRAND.name; }
+      document.querySelectorAll('img[src*="logo-mark"]').forEach((i) => {
+        if (BRAND.logoMark) i.src = '../assets/' + BRAND.logoMark;
+      });
+    }
     const n = $('#verBadge');
     if (n && c && c.version) n.textContent = 'v' + c.version;
   }).catch(() => {});
@@ -167,7 +184,7 @@ function lockApp(reason) {
   $('#trialBanner')?.classList.add('hidden');
   const m = $('#gateMsg'); m.className = 'msg err';
   if (trialInfo.isTrial && (reason === 'expired' || reason === 'trial_expired')) {
-    m.textContent = 'Your 7-day free trial has ended — buy a license to keep using ott24x7 CRM.';
+    m.textContent = 'Your 7-day free trial has ended — buy a license to keep using ' + BRAND.name + '.';
   } else {
     m.textContent = 'License ' + String(reason || 'invalid').replace(/_/g, ' ') + ' — contact your provider.';
   }
@@ -188,7 +205,7 @@ function showUpdatePopup(version, manual) {
     el('h3', {}, 'Update available'),
     el('div', { className: 'muted', style: { margin: '4px 0 8px' } },
       'Version ' + (version || '') + (manual
-        ? ' is out. Download it and drag WA-CRM into Applications to replace this copy.'
+        ? ' is out. Download it and drag ' + BRAND.name + ' into Applications to replace this copy.'
         : ' is ready — get the latest features and fixes.')),
     bar, pct,
     el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '8px' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), updBtn));
@@ -543,7 +560,7 @@ RENDER.link = (b) => {
 RENDER.signature = (b) => {
   const sig = store.get('ott_sig', { on: false, text: '' });
   const on = el('input', { type: 'checkbox', checked: sig.on, style: { width: 'auto' } });
-  const txt = el('textarea', { value: sig.text, placeholder: '— Sent via ott24x7 CRM' });
+  const txt = el('textarea', { value: sig.text, placeholder: '— Sent via ' + BRAND.name });
   b.append(
     el('div', { className: 'fp-note' }, 'When enabled, this signature is appended to every Broadcast and Direct message.'),
     el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, on, 'Enable signature'),
@@ -1039,7 +1056,7 @@ RENDER.extractor = (b) => {
     lbl('Source', source), opts,
     el('div', { className: 'row' },
       el('button', { className: 'btn primary', onclick: run }, 'Extract'),
-      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv('ott24x7-numbers.csv', rows, ['number', 'name', 'saved']); else toast('Extract first', 'err'); } }, 'Export CSV'),
+      el('button', { className: 'btn ghost', onclick: () => { if (rows.length) downloadCsv(BRAND.slug + '-numbers.csv', rows, ['number', 'name', 'saved']); else toast('Extract first', 'err'); } }, 'Export CSV'),
       el('button', { className: 'btn ghost', onclick: exportGoogle }, 'Google Contacts')),
     out);
   renderOpts();
@@ -1420,7 +1437,7 @@ function applyChatWidget(accId) {
         b.onclick=function(e){e.preventDefault();e.stopPropagation();push(a[0]);w.classList.remove('open');};
         acts.appendChild(b);
       });
-      var h=document.createElement('button'); h.className='h'; h.type='button'; h.title='WA-CRM actions'; h.textContent='WA';
+      var h=document.createElement('button'); h.className='h'; h.type='button'; h.title=BRAND.name+' actions'; h.textContent='WA';
       h.onclick=function(e){e.preventDefault();e.stopPropagation();w.classList.toggle('open');};
       w.appendChild(acts); w.appendChild(h);
       document.body.appendChild(w);
@@ -1623,7 +1640,7 @@ function exportLeadsCsv(rows, from, to) {
     source: L.source || '', created: new Date(L.createdTs || Date.now()).toLocaleString(),
     notes: (L.notes || '').replace(/[\r\n]+/g, ' '), followup: L.seqActive ? 'active' : '', account: acctName(L.accId),
   }));
-  downloadCsv(`ott24x7-leads-${from || 'all'}_to_${to || 'all'}.csv`, out, ['name', 'number', 'type', 'status', 'source', 'created', 'notes', 'followup', 'account']);
+  downloadCsv(`${BRAND.slug}-leads-${from || 'all'}_to_${to || 'all'}.csv`, out, ['name', 'number', 'type', 'status', 'source', 'created', 'notes', 'followup', 'account']);
   toast(`Exported ${rows.length} lead(s)`);
 }
 
@@ -2013,7 +2030,7 @@ async function runSchedule(job) {
 async function fireReminder(r) {
   // Optional WhatsApp send is still supported, but a reminder is now primarily an alarm.
   if (r.number && await isConnectedOn(r.accId)) await sendTextOn(r.accId, r.number, r.text);
-  try { new Notification('WA-CRM . Reminder', { body: r.title || r.text }); } catch (_) {}
+  try { new Notification(BRAND.name + ' · Reminder', { body: r.title || r.text }); } catch (_) {}
   showAlarm(r);
   if (r.repeat === 'daily') {
     // Roll forward to the same clock time tomorrow rather than marking it done.
@@ -2191,7 +2208,7 @@ RENDER.reminder = (b) => {
   };
 
   b.append(
-    el('div', { className: 'fp-note' }, 'A task reminder rings inside WA-CRM at the set time and shows your note, like an alarm. It can optionally WhatsApp someone too. Reminders fire while the app is open.'),
+    el('div', { className: 'fp-note' }, 'A task reminder rings inside ' + BRAND.name + ' at the set time and shows your note, like an alarm. It can optionally WhatsApp someone too. Reminders fire while the app is open.'),
     lbl('Task', title), lbl('Note', text),
     el('div', { className: 'row' }, lbl('Remind at', when), lbl('Repeat', repeat)),
     lbl('WhatsApp number (optional)', number),
@@ -2695,7 +2712,7 @@ RENDER.books = (b) => {
         el('button', { className: 'btn primary', onclick: () => bEntryModal(all, draw) }, '＋ Add entry'),
         el('button', { className: 'btn ghost', onclick: () => {
           if (!s.inRange.length) return toast('Nothing in this range', 'err');
-          downloadCsv(`wa-crm-books-${from}-to-${to}.csv`, s.inRange.map(e => ({
+          downloadCsv(`${BRAND.slug}-books-${from}-to-${to}.csv`, s.inRange.map(e => ({
             date: e.date, kind: e.kind, party: e.party || '', item: e.item || '',
             category: e.category || '', qty: e.qty || '', amount: e.amount || 0,
             cost: e.cost || '', method: e.method || '', note: e.note || '',
@@ -3027,7 +3044,7 @@ RENDER.deals = (b) => {
   };
 
   b.append(el('div', { className: 'fp-note' },
-    'Log what each customer bought, and this checks in on them automatically: a feedback message once they have had time to use it, and a renewal reminder before their validity runs out. Both send only while WA-CRM is open.'), wrap);
+    'Log what each customer bought, and this checks in on them automatically: a feedback message once they have had time to use it, and a renewal reminder before their validity runs out. Both send only while ' + BRAND.name + ' is open.'), wrap);
   draw();
 };
 
@@ -3137,7 +3154,7 @@ function exportDealsCsv(ds) {
     feedback_sent: d.fbSent ? 'yes' : 'no', renewal_sent: d.rnSent ? 'yes' : 'no',
     status: d.expires <= Date.now() ? 'expired' : d.status, note: d.note || '',
   }));
-  downloadCsv('wa-crm-deals.csv', rows, ['name', 'number', 'item', 'amount', 'cost', 'profit',
+  downloadCsv(BRAND.slug + '-deals.csv', rows, ['name', 'number', 'item', 'amount', 'cost', 'profit',
     'validity_days', 'purchased', 'expires', 'days_left', 'feedback_sent', 'renewal_sent', 'status', 'note']);
 }
 
@@ -3371,9 +3388,9 @@ RENDER.backup = (b) => {
     if (!f || f.canceled) return;
     if (!f.ok) { msg.textContent = 'Could not read that file: ' + (f.err || ''); return; }
     let payload;
-    try { payload = JSON.parse(f.json); } catch (e) { msg.textContent = 'That file is not a WA-CRM backup.'; return; }
+    try { payload = JSON.parse(f.json); } catch (e) { msg.textContent = 'That file is not a ' + BRAND.name + ' backup.'; return; }
     const incoming = readBackup(payload);
-    if (!incoming) { msg.textContent = 'That file is not a WA-CRM backup.'; return; }
+    if (!incoming) { msg.textContent = 'That file is not a ' + BRAND.name + ' backup.'; return; }
 
     const summary = BACKUP_MAP.filter(([dk]) => dk in incoming)
       .map(([dk, , label]) => `${label}: ${bkCount(incoming[dk])}`).join('\n');
@@ -3393,8 +3410,8 @@ RENDER.backup = (b) => {
   b.append(
     el('div', { className: 'muted', style: { fontSize: '12.5px', marginBottom: '14px', lineHeight: '1.6' } },
       'Your leads, invoices and saved replies live on this computer. Export a backup before '
-      + 'changing machine, then import it on the new one. The same file works in the WA-CRM '
-      + 'Chrome extension, and a backup taken there restores here.'),
+      + 'changing machine, then import it on the new one. The same file works in the '
+      + 'companion Chrome extension, and a backup taken there restores here.'),
     lbl('What is stored right now', stats),
     el('div', { className: 'row' },
       el('button', { className: 'btn primary', onclick: doExport }, 'Save a backup file'),

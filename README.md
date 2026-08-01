@@ -68,6 +68,46 @@ When WhatsApp Web changes and sending breaks, drop a newer build over `assets/wa
 curl -L -o assets/wa-js.js https://cdn.jsdelivr.net/npm/@wppconnect/wa-js@latest/dist/wppconnect-wa.js
 ```
 
+## White-label builds (for resellers)
+
+All product identity lives in `brand.js`. Presets go in `brands/<name>.json`; pick one at
+build time and everything user-visible follows — window title, gate screen, dialogs,
+notifications, exported filenames, icons, installer name and the Windows Properties dialog.
+
+```bash
+BRAND=neutral npm run dist                          # unbranded build
+BRAND=acme BRAND_NAME="Acme Chat" npm run dist      # override any single field
+```
+
+A new reseller is one JSON file and no code:
+
+```json
+{
+  "name": "Acme Chat",
+  "appId": "com.acme.chat",
+  "company": "Acme Pvt Ltd",
+  "slug": "acme-chat",
+  "icon": "acme.ico",
+  "macIcon": "acme-icon.png",
+  "logoMark": "acme-mark.png",
+  "updateRepo": ""
+}
+```
+
+Drop the three image files in `assets/`. `appId` **must** be unique per brand or Windows
+treats two installs as the same app and their updater feeds cross over.
+
+`updateRepo` empty means no auto-updates: no `app-update.yml` is written and the in-app
+updater is disabled. Leave it empty unless the reseller has their own releases repo —
+pointing a white-label build at ours would update their customers into WA-CRM installers.
+
+What does **not** change per brand, on purpose:
+
+- `config.js` — `LICENSE_SERVER`, `PRODUCT_SLUG` and the signing secret. Branding changes;
+  the licensing authority does not.
+- The backup format key (`app: "WA-CRM"` inside the JSON). It identifies the file format,
+  not the product, so backups stay portable between every build and the Chrome extension.
+
 ## Notes / next steps
 
 - Respect WhatsApp's terms and anti-spam limits; the delay window is deliberate.

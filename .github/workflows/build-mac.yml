@@ -42,7 +42,11 @@ jobs:
       - name: Build macOS (dmg + zip, arm64 + x64)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false' # unsigned; see header for how to sign
-        run: npx electron-builder --mac --publish never
+        # --config is required: the static "build" block moved out of package.json into
+        # build/builder-config.js so branding resolves from brand.js. Without it
+        # electron-builder finds no config at all and the Mac build silently loses its
+        # product name, icon and targets.
+        run: npx electron-builder --mac --config build/builder-config.js --publish never
 
       # wa-crm.in links to fixed filenames so the download URLs survive a version bump,
       # the same way WA-CRM-Setup.exe does on Windows.

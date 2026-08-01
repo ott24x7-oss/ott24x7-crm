@@ -1,0 +1,12 @@
+{
+  "name": "Chat CRM",
+  "appId": "com.chatcrm.desktop",
+  "company": "Chat CRM",
+  "slug": "chat-crm",
+  "site": "",
+  "buyUrl": "",
+  "icon": "neutral.ico",
+  "macIcon": "neutral-icon.png",
+  "logoMark": "neutral-mark.png",
+  "updateRepo": ""
+}
