@@ -100,7 +100,11 @@ label { color: var(--muted); }
 .gate-card { width: 380px; max-width: 92vw; background: var(--panel); border: 1px solid var(--line);
   border-radius: 16px; padding: 32px 30px; display: flex; flex-direction: column; gap: 13px;
   box-shadow: var(--shadow-lg); text-align: center; }
-.gate-logo { width: 220px; max-width: 86%; align-self: center; }
+/* Square mark, not the old wide lockup — a lockup bakes the product name into the
+   pixels, which a white-label build cannot re-letter. The name is rendered as text
+   beside it instead, so it follows brand.js. */
+.gate-logo { width: 86px; height: 86px; border-radius: 22px; align-self: center; }
+.gate-title { font-size: 21px; font-weight: 600; letter-spacing: -.02em; margin: 12px 0 0; }
 .gate-card input { text-align: center; letter-spacing: 1px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .gate-foot { font-size: 11px; color: var(--muted-2); }
 .gate-or { display: flex; align-items: center; gap: 10px; color: var(--muted-2); font-size: 11.5px; margin: 1px 0; }
