@@ -27,6 +27,64 @@ function search(queryVec, rows, { topK = 6, minScore = 0.45 } = {}) {
     .slice(0, topK);
 }
 
+// ---------- lexical search ----------
+// The vector path above needs an embedding endpoint. Hosted routers frequently serve chat
+// only — HeyRoute publishes /v1/chat/completions, /v1/responses and /v1/messages and no
+// embeddings at any tier — and without this, search() returns nothing for every question,
+// every reply is generated with zero knowledge retrieved, and in "always" mode the
+// assistant confidently auto-sends untrained answers to paying customers.
+//
+// So retrieval degrades to term overlap rather than to nothing. Deliberately simple:
+// idf-weighted, title-boosted overlap, which on a few hundred rows of sales knowledge is
+// close enough to a real ranker and has no tuning surface to get wrong.
+const STOP = new Set(('a an the is are was were be been being do does did of to in on at for with and or but if then '
+  + 'this that these those it its as by from you your me my we our i he she they them so not no yes can could would '
+  + 'should will just how what when where which who why kya hai ka ki ke ko me mein hi bhi ye wo').split(/\s+/));
+
+function terms(text) {
+  return String(text || '').toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP.has(w));
+}
+
+const rowText = (r) => `${r.title || r.question || ''} ${r.body || r.reply || ''} ${(r.tags || []).join(' ')}`;
+
+// Raw overlap favours long rows simply for containing more words, so each score is divided by
+// the row's own length. idf stops "price" — in every row of a price list — from carrying
+// the same weight as the one term that actually distinguishes a row.
+function lexicalSearch(query, rows, { topK = 6, minScore = 0.12 } = {}) {
+  const qt = terms(query);
+  if (!qt.length) return [];
+  const live = rows.filter((r) => r.active !== false && r.approved !== false);
+  if (!live.length) return [];
+
+  const docs = live.map((r) => ({ row: r, t: terms(rowText(r)) }));
+  const df = new Map();
+  for (const d of docs) for (const w of new Set(d.t)) df.set(w, (df.get(w) || 0) + 1);
+  const idf = (w) => Math.log(1 + live.length / (1 + (df.get(w) || 0)));
+
+  return docs.map(({ row, t }) => {
+    const set = new Set(t);
+    const title = new Set(terms(row.title || row.question || ''));
+    let score = 0, matched = 0;
+    for (const w of new Set(qt)) {
+      if (!set.has(w)) continue;
+      matched++;
+      // A hit in the title is a hit on what the row is *about*, not merely text it contains.
+      score += idf(w) * (title.has(w) ? 2.2 : 1);
+    }
+    if (!matched) return { row, score: 0 };
+    // Normalised by the query's own idf mass, so the result is a 0..1 "how much of what
+    // was asked did this row actually cover" rather than an unbounded sum.
+    const mass = [...new Set(qt)].reduce((a, w) => a + idf(w), 0) || 1;
+    return { row, score: Math.min(1, score / mass), lexical: true };
+  })
+    .filter((x) => x.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+}
+
 // ---------- language + intent ----------
 // Cheap, deterministic and offline. Asking the model to classify first would double
 // latency and cost for something a few regexes get right often enough to gate on.
@@ -211,7 +269,16 @@ function validate(text, { settings, products, language }) {
 // auto-send bar. Subtract the noise floor so the score reflects real signal.
 const SIM_FLOOR = 0.40;
 const SIM_GOOD = 0.75;
-const simScore = (s) => Math.max(0, Math.min(1, (s - SIM_FLOOR) / (SIM_GOOD - SIM_FLOOR)));
+// Lexical scores are term coverage, not cosine, and their distribution is completely
+// different — noise sits near 0 rather than 0.40, so the cosine floor would flatter every
+// weak match. They are also weaker evidence: overlapping words is not the same as meaning
+// the same thing. Held to a higher bar for "good" so a lexical hit has to cover most of
+// the question before it can push a reply past the auto-send threshold.
+const LEX_FLOOR = 0.15;
+const LEX_GOOD = 0.60;
+const simScore = (s, lexical) => (lexical
+  ? Math.max(0, Math.min(1, (s - LEX_FLOOR) / (LEX_GOOD - LEX_FLOOR)))
+  : Math.max(0, Math.min(1, (s - SIM_FLOOR) / (SIM_GOOD - SIM_FLOOR))));
 
 function confidence({ hits, exampleHits, intent, validation, historyTurns, hasProducts }) {
   // Validation is a gate, not a contributor: the caller refuses to auto-send when it fails,
@@ -219,10 +286,13 @@ function confidence({ hits, exampleHits, intent, validation, historyTurns, hasPr
   if (validation && !validation.ok) return 0;
 
   const top = hits && hits.length ? hits[0].score : 0;
+  // Which retriever produced the hit decides how the score is read — the two scales are
+  // not comparable, and treating a lexical 0.5 as a cosine 0.5 would roughly double it.
+  const isLex = !!(hits && hits.length && hits[0].lexical);
   const breadth = Math.min(1, ((hits || []).length + (exampleHits || []).length) / 4);
 
   let score = 0;
-  score += simScore(top) * 0.50;                        // how well knowledge actually matched
+  score += simScore(top, isLex) * 0.50;                 // how well knowledge actually matched
   score += breadth * 0.15;                              // corroboration across sources
   score += (intent && intent.confidence ? intent.confidence : 0.4) * 0.15;
   score += Math.min(1, (historyTurns || 0) / 4) * 0.10; // context we actually have
@@ -245,7 +315,7 @@ function redact(text) {
 }
 
 module.exports = {
-  cosine, search,
+  cosine, search, lexicalSearch,
   detectLanguage, detectIntent, forcedHandover,
   buildSystemPrompt, validate, confidence, redact,
 };

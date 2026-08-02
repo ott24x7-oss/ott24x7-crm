@@ -126,11 +126,21 @@ async function generate(ctx) {
   // Retrieve. A failure here is not fatal — the model can still answer from live product
   // data — but it does cost confidence, which is the correct outcome.
   let hits = [], exampleHits = [];
+  const knowledge = store.getKnowledge(accId);
+  const examples = store.getExamples(accId);
   const q = await p.embed(ctx.text);
   if (q.ok && q.vectors[0]) {
-    hits = rag.search(q.vectors[0], store.getKnowledge(accId), { topK: 5 });
-    exampleHits = rag.search(q.vectors[0], store.getExamples(accId), { topK: 3 });
+    hits = rag.search(q.vectors[0], knowledge, { topK: 5 });
+    exampleHits = rag.search(q.vectors[0], examples, { topK: 3 });
   }
+  // Fall back to term matching when the vector path yields nothing — either the gateway
+  // serves no embeddings (HeyRoute and most chat-only routers) or the rows were never
+  // embedded. Without this the assistant answers every question with zero knowledge
+  // retrieved while still sounding certain, which in "always" mode means auto-sending
+  // untrained replies to paying customers. Confidence knows these hits are lexical and
+  // scores them on their own, stricter scale.
+  if (!hits.length) hits = rag.lexicalSearch(ctx.text, knowledge, { topK: 5 });
+  if (!exampleHits.length) exampleHits = rag.lexicalSearch(ctx.text, examples, { topK: 3 });
 
   const system = rag.buildSystemPrompt({
     settings: s, language, business: s.businessInstructions,

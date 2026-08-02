@@ -209,10 +209,45 @@ t('reports a model ready only on an exact tag', () => {
   assert.strictEqual(have.has(tag('llama3')), false);
 });
 
-t('ships in suggestions-only mode, never auto-replying out of the box', () => {
-  assert.strictEqual(store.DEFAULT_SETTINGS.mode, 'suggest');
+// The default is now 'always', at the owner's explicit request. The guarantee the previous
+// version of this test protected — that a fresh install cannot message customers before it
+// is trained — is unchanged, but it is now enforced where it actually belongs: an untrained
+// assistant retrieves nothing, so confidence collapses and the reply is never auto-sent
+// whatever the mode says. Asserting the mode string only ever protected it by accident.
+t('cannot auto-reply until it has been trained, even in always mode', () => {
+  assert.strictEqual(store.DEFAULT_SETTINGS.mode, 'always');
+  // Still gated: groups off, and consent must be accepted before anything sends.
   assert.strictEqual(store.DEFAULT_SETTINGS.allowGroups, false);
   assert.strictEqual(store.DEFAULT_SETTINGS.consentAccepted, false);
+
+  // An empty knowledge base against a real question must land far below the auto-send bar.
+  const question = 'how much is netflix';
+  const score = rag.confidence({
+    hits: rag.lexicalSearch(question, [], { topK: 5 }),
+    exampleHits: [],
+    intent: rag.detectIntent(question),
+    validation: { ok: true },
+    historyTurns: 0,
+    hasProducts: false,
+  });
+  assert.ok(score < store.DEFAULT_SETTINGS.minConfidence,
+    `untrained confidence ${score} must stay under the ${store.DEFAULT_SETTINGS.minConfidence} auto-send threshold`);
+});
+
+// Retrieval has to survive a gateway with no embeddings — HeyRoute serves chat only — or
+// every question is answered with nothing retrieved while still sounding certain.
+t('retrieves lexically when no embeddings are available', () => {
+  const kb = [
+    { id: 1, title: 'Netflix Premium 1 Month', body: 'Shared screen, 1 month. Rs 199.' },
+    { id: 2, title: 'Payment methods', body: 'UPI, GPay, PhonePe and Paytm accepted.' },
+  ];
+  const hits = rag.lexicalSearch('do you accept upi', kb, { topK: 3 });
+  assert.ok(hits.length > 0, 'lexical search found nothing');
+  assert.strictEqual(hits[0].row.id, 2);
+  assert.strictEqual(hits[0].lexical, true, 'hits must be flagged so confidence scores them on the lexical scale');
+
+  // Off-topic must retrieve nothing rather than the least-bad row.
+  assert.strictEqual(rag.lexicalSearch('what is the capital of france', kb, { topK: 3 }).length, 0);
 });
 
 

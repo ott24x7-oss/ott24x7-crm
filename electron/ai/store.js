@@ -52,12 +52,17 @@ function write(kind, accId, value) {
 // Suggestions-only by default, deliberately: the owner must switch on auto-reply after
 // testing, never as a side effect of installing an update.
 const DEFAULT_SETTINGS = {
-  mode: 'suggest',                 // off | suggest | offline | always
-  provider: 'ollama',
-  baseUrl: 'http://127.0.0.1:11434',
-  chatModel: 'qwen3:4b',
-  embedModel: 'nomic-embed-text',
-  timeoutMs: 150000,
+  mode: 'always',                  // off | suggest | offline | always
+  provider: 'heyroute',            // OpenAI-compatible; see ai/provider.js
+  baseUrl: 'https://heyroute.ai',
+  apiKey: '',                      // set per account in AI settings
+  chatModel: 'gpt-5.6-luna',
+  // Empty on purpose. HeyRoute publishes /v1/chat/completions, /v1/responses and
+  // /v1/messages and no embeddings at any tier, so retrieval runs on term matching
+  // (rag.lexicalSearch) and confidence scores those hits on a stricter scale. Set this
+  // only if the gateway actually serves /v1/embeddings.
+  embedModel: '',
+  timeoutMs: 60000,                // hosted, not a cold local model
 
   minConfidence: 0.62,             // at or above -> may send automatically
   suggestConfidence: 0.35,         // between the two -> save as a suggestion
