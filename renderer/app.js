@@ -84,6 +84,7 @@ const FEATURES = [
   { id: 'direct', name: 'Send Direct Message', icon: IC.send, impl: true },
   { id: 'translate', name: 'Message Translation', icon: IC.languages, impl: true },
   { id: 'signature', name: 'Message Signature', icon: IC.pen, impl: true },
+  { id: 'ai', name: 'AI Assistant', icon: IC.bot, impl: true },
   { id: 'deals', name: 'Deals & Renewals', icon: IC.deal, impl: true },
   { id: 'books', name: 'Sales & Expenses', icon: IC.rocket, impl: true },
   { id: 'notes', name: 'Chat Notes', icon: IC.pen, impl: true },
@@ -255,6 +256,7 @@ async function enterApp() {
   makeDraggable($('#featurePanel'), $('#featurePanel .fp-head'));
 
   accounts = store.get('ott_accounts', []);
+  try { aiInit(); } catch (e) {}
   accounts.forEach(createWebview);
   renderTabs();
   if (accounts.length) switchAccount(accounts[0].id);
@@ -356,7 +358,11 @@ async function pollTick() {
   if (prev !== info.s) renderTabs();                  // only redraw tabs on real change
 
   if (info.leads && info.leads.length) info.leads.forEach(saveLead);
-  if (info.incoming && info.incoming.length) markRepliedLeads(info.incoming);
+  if (info.incoming && info.incoming.length) {
+    markRepliedLeads(info.incoming);
+    // Queued, never awaited: the poll must return promptly whatever the model does.
+    info.incoming.forEach((m) => { try { aiOnIncoming(m); } catch (e) {} });
+  }
   if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
   if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
 }
@@ -3435,3 +3441,1321 @@ function quickInsert(target) {
 }
 async function safe(fn) { try { return await fn(); } catch { return null; } }
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h << 5) - h + s.charCodeAt(i); h |= 0; } return h; }
+
+// ================= AI Sales Assistant (renderer) =================
+// The model, the vector index and the knowledge base all live in the main process. This
+// side owns the three things the main process deliberately cannot see:
+//   1. the live CRM facts (products, prices, stock) every reply is validated against,
+//   2. sending through the existing WhatsApp path,
+//   3. the owner's presence, which is a property of this window.
+//
+// Nothing here blocks the poll: a message is queued and handled after the tick returns,
+// exactly like scheduled sends and lead follow-ups.
+
+let aiLastActivity = Date.now();
+let aiSuggestions = store.get('ott_ai_suggestions', []);
+let aiSettingsCache = null;
+const aiQueue = [];
+let aiWorking = false;
+
+['pointerdown', 'keydown', 'focus'].forEach((ev) =>
+  window.addEventListener(ev, () => { aiLastActivity = Date.now(); }, true));
+
+// The live facts a reply may quote. Read fresh every time — an embedded price is a stale
+// price, and a stale price is a real loss for the owner.
+function aiProducts() {
+  return store.get('ott_quick', [])
+    .filter((q) => q.title || q.text)
+    .map((q) => ({
+      title: q.title || deriveTitle(q.text) || '',
+      price: Number(q.sell) || 0,
+      category: q.category || '',
+      stock: q.stock !== false,
+    }))
+    .filter((p) => p.title);
+}
+
+function aiCustomer(number) {
+  const L = store.get('ott_leads', []).find((x) => digits(String(x.number)) === number);
+  const deals = store.get('ott_deals', []).filter((d) => d.number === number);
+  return {
+    name: (L && L.name) || '',
+    orders: deals.length
+      ? deals.map((d) => `${d.item} (₹${d.amount}, expires ${dealDate(d.expires)})`).join('; ')
+      : '',
+  };
+}
+
+// Called from pollTick for every incoming message. Returns immediately.
+function aiOnIncoming(msg) {
+  if (!msg || !msg.body || !window.ott || !ott.ai) return;
+  if (!aiSettingsCache || aiSettingsCache.mode === 'off') return;
+  aiQueue.push(msg);
+  aiDrain();
+}
+
+async function aiDrain() {
+  if (aiWorking) return;
+  aiWorking = true;
+  try {
+    while (aiQueue.length) {
+      const msg = aiQueue.shift();
+      try { await aiHandle(msg); } catch (e) { /* one bad message must not stall the queue */ }
+    }
+  } finally { aiWorking = false; }
+}
+
+async function aiHandle(msg) {
+  const number = digits(String(msg.number || ''));
+  if (!number) return;
+
+  const r = await ott.ai.generate({
+    accId: activeId, number, name: msg.name, text: msg.body, msgId: msg.msgId,
+    isGroup: !!msg.isGroup, history: [], products: aiProducts(),
+    customer: aiCustomer(number), lastActivityAt: aiLastActivity,
+  });
+  if (!r || !r.ok) { if (r && r.action === 'error') aiNotify('AI error: ' + r.err, 'err'); return; }
+  if (r.action === 'skip') return;
+
+  if (r.action === 'handover') {
+    aiAddSuggestion({ number, name: msg.name, incoming: msg.body, text: '', handover: true,
+      reason: r.reason, confidence: 0, sources: [], logId: r.logId });
+    aiNotify((msg.name || number) + ' needs you — ' + aiReasonLabel(r.reason), 'err');
+    return;
+  }
+
+  if (r.action === 'suggest') {
+    aiAddSuggestion({ number, name: msg.name, incoming: msg.body, text: r.text,
+      confidence: r.confidence, sources: r.sources, validation: r.validation, logId: r.logId });
+    return;
+  }
+
+  if (r.action === 'send') {
+    // The delay is the owner's window to take over, and it stops a reply landing so fast
+    // it reads as a bot.
+    await new Promise((res) => setTimeout(res, Math.max(0, r.delayMs || 0)));
+    const st = await ott.ai.convoState(activeId, number);
+    if (st && st.state && st.state.takenOver) return;
+
+    const sent = await sendTextOn(activeId, number, r.text);
+    if (sent && sent.ok) {
+      await ott.ai.markSent(activeId, number, r.logId, r.text);
+      aiNotify('AI replied to ' + (msg.name || number));
+    } else {
+      aiAddSuggestion({ number, name: msg.name, incoming: msg.body, text: r.text,
+        confidence: r.confidence, sources: r.sources, logId: r.logId,
+        reason: 'send failed — saved as a suggestion' });
+    }
+  }
+}
+
+const AI_REASONS = {
+  refund_dispute: 'refund or return', payment_mismatch: 'a payment problem',
+  discount_request: 'a discount request', angry: 'they sound unhappy', legal: 'a legal mention',
+};
+const aiReasonLabel = (r) => AI_REASONS[r]
+  || (String(r || '').startsWith('keyword:') ? 'they said "' + String(r).slice(8) + '"' : (r || 'low confidence'));
+
+function aiAddSuggestion(s) {
+  aiSuggestions.unshift({ id: Date.now() + '-' + Math.round(Math.random() * 1e5), ts: Date.now(), ...s });
+  if (aiSuggestions.length > 200) aiSuggestions.length = 200;
+  store.set('ott_ai_suggestions', aiSuggestions);
+  if (openFeatureId === 'ai') refreshPanel('ai');
+  aiBadge();
+}
+
+function aiNotify(text, kind) {
+  toast(text, kind);
+  if (kind === 'err') { try { new Notification('WA-CRM · AI', { body: text }); } catch (e) {} }
+}
+
+function aiBadge() {
+  const item = document.querySelector('.rail-item[data-fid="ai"]');
+  if (!item) return;
+  let dot = item.querySelector('.ai-badge');
+  if (!aiSuggestions.length) { if (dot) dot.remove(); return; }
+  if (!dot) { dot = el('span', { className: 'ai-badge' }); item.append(dot); }
+  dot.textContent = String(aiSuggestions.length);
+}
+
+async function aiTakeOver(number, on) {
+  await ott.ai.setConvoState(activeId, number, { takenOver: !!on, lastOwnerAt: Date.now() });
+  if (openFeatureId === 'ai') refreshPanel('ai');
+}
+
+async function aiInit() {
+  if (!window.ott || !ott.ai) return;
+  const r = await ott.ai.getSettings(activeId).catch(() => null);
+  aiSettingsCache = (r && r.settings) || null;
+  aiBadge();
+}
+
+// A yes/no on the app's own modal, rather than a blocking window.confirm.
+function aiConfirm(title, sub) {
+  return new Promise((resolve) => {
+    const done = (v) => { scrim.remove(); resolve(v); };
+    const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) done(false); } },
+      el('div', { className: 'modal-box', style: { width: '420px', textAlign: 'left' } },
+        el('h3', {}, title),
+        sub ? el('div', { className: 'fp-note' }, sub) : null,
+        el('div', { className: 'row', style: { marginTop: '10px' } },
+          el('button', { className: 'btn ghost', onclick: () => done(false) }, 'Cancel'),
+          el('button', { className: 'btn primary', style: { color: 'var(--danger)' }, onclick: () => done(true) }, 'Yes, continue'))));
+    document.body.append(scrim);
+  });
+}
+
+// ---------- panel ----------
+RENDER.ai = (b) => {
+  let tab = 'inbox';
+  const wrap = el('div', {});
+  const tabs = el('div', { className: 'row' });
+
+  const draw = async () => {
+    [...tabs.children].forEach((btn, i) => {
+      btn.className = 'btn small' + (['inbox', 'settings', 'knowledge', 'training', 'logs'][i] === tab ? ' primary' : '');
+    });
+    wrap.innerHTML = '';
+    wrap.append(el('div', { className: 'muted' }, 'Loading…'));
+    let body;
+    try {
+      body = tab === 'inbox' ? await aiViewInbox()
+        : tab === 'settings' ? await aiViewSettings()
+        : tab === 'knowledge' ? await aiViewKnowledge()
+        : tab === 'training' ? await aiViewTraining()
+        : await aiViewLogs();
+    } catch (e) {
+      body = el('div', { className: 'muted' }, 'Could not load: ' + String((e && e.message) || e));
+    }
+    wrap.innerHTML = '';
+    wrap.append(body);
+  };
+
+  [['inbox', 'Inbox'], ['settings', 'Settings'], ['knowledge', 'Knowledge'], ['training', 'Learn from chats'], ['logs', 'Logs']]
+    .forEach(([k, lab]) => tabs.append(el('button', { className: 'btn small', onclick: () => { tab = k; draw(); } }, lab)));
+
+  b.append(el('div', { className: 'fp-note' },
+    'A sales assistant that runs entirely on this computer. It reads your catalog and knowledge base, drafts replies in English, Hindi or Hinglish, and — once you switch it on — answers customers while you are away. It never invents a price and never confirms a payment.'),
+    tabs, wrap);
+  draw();
+};
+
+async function aiViewInbox() {
+  const box = el('div', {});
+  const s = (await ott.ai.getSettings(activeId)).settings;
+  const av = await ott.ai.availability(activeId, aiLastActivity);
+  const h = await ott.ai.health(activeId).catch(() => ({ ok: false, err: 'unreachable' }));
+
+  const MODE_LABEL = { off: 'Disabled', suggest: 'Suggestions only', offline: 'Auto when away', always: 'Auto 24×7' };
+  box.append(el('div', { className: 'bk-kpis' },
+    dKpi('Assistant', MODE_LABEL[s.mode] || s.mode, s.paused ? 'Paused' : 'Active',
+      s.mode === 'off' || s.paused ? '' : 'good'),
+    dKpi('You are', av.online ? 'Available' : 'Away', av.reason, av.online ? 'good' : 'warn'),
+    dKpi('Model', h.ok ? (h.chatReady ? 'Ready' : 'Missing') : 'Offline',
+      h.ok ? (h.chatReady ? s.chatModel : `${s.chatModel} is not installed`) : String(h.err || '').slice(0, 42),
+      h.ok && h.chatReady ? 'good' : 'bad')));
+
+  // A missing model is the difference between working and silently failing on every
+  // message, so it gets a fix-it row rather than a colour on a tile.
+  if (h.ok && !h.chatReady) {
+    box.append(el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      `The assistant cannot reply: "${s.chatModel}" is not installed. `
+      + (h.chatSuggestion ? `You do have "${h.chatSuggestion}".`
+        : (h.hosted ? 'Check the model name against the list your provider publishes.' : `Run: ollama pull ${s.chatModel}`))));
+    if (h.chatSuggestion) {
+      box.append(el('button', { className: 'btn small primary', style: { marginBottom: '8px' }, onclick: async () => {
+        await ott.ai.saveSettings(activeId, { chatModel: h.chatSuggestion });
+        aiInit(); toast('Now using ' + h.chatSuggestion); refreshPanel('ai');
+      } }, `Use ${h.chatSuggestion} instead`));
+    }
+  }
+  // Strictly false, never null. null means embeddings are switched off deliberately —
+  // HeyRoute serves none — and retrieval runs on keyword matching, which is a working
+  // configuration. Testing !embedReady treated that as a fault and showed a red
+  // "Search will not work: "" is not installed" banner with an empty model name.
+  if (h.ok && h.embedReady === false) {
+    box.append(el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      `Search quality is reduced: "${s.embedModel}" is not available. `
+      + (h.embedSuggestion ? `You do have "${h.embedSuggestion}".`
+        : (h.hosted ? 'Your provider may not serve embeddings; clear the field to use keyword search instead.' : `Run: ollama pull ${s.embedModel}`))));
+  }
+
+  box.append(el('div', { className: 'row' },
+    el('button', { className: 'btn small' + (s.paused ? ' primary' : ''), onclick: async () => {
+      await ott.ai.saveSettings(activeId, { paused: !s.paused }); aiInit(); refreshPanel('ai');
+    } }, s.paused ? 'Resume AI' : 'Pause AI'),
+    el('button', { className: 'btn small ghost', onclick: async () => {
+      await ott.ai.saveSettings(activeId, { ownerManualStatus: av.online ? 'offline' : 'auto' });
+      refreshPanel('ai');
+    } }, av.online ? 'Set me away' : 'Back to automatic'),
+    aiSuggestions.length ? el('button', { className: 'btn small ghost', onclick: async () => {
+      if (!(await aiConfirm('Clear all suggestions?', 'They are removed from this list. Nothing is sent.'))) return;
+      aiSuggestions = []; store.set('ott_ai_suggestions', aiSuggestions); refreshPanel('ai'); aiBadge();
+    } }, 'Clear all') : null));
+
+  // Paused conversations, shown before the empty state. "Nothing waiting" while the
+  // assistant is deliberately silent on a chat reads as broken — this is why it is quiet,
+  // and the button to undo it.
+  const paused = ((await ott.ai.pausedConvos(activeId)) || {}).rows || [];
+  if (paused.length) {
+    const list = el('div', { className: 'rules', style: { marginTop: '12px' } });
+    paused.forEach((p) => list.append(el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+      el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+        el('b', {}, p.number),
+        el('span', { className: 'deal-when soon' }, 'You are handling this')),
+      el('div', { className: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } },
+        `Paused ${p.sinceMin} min ago`
+        + (p.resumesInMin === null ? ' · will not resume on its own'
+          : p.resumesInMin ? ` · resumes in ${p.resumesInMin} min` : ' · resuming now')),
+      el('div', { className: 'row', style: { marginTop: '8px' } },
+        el('button', { className: 'btn small primary', onclick: async () => {
+          await ott.ai.setConvoState(activeId, p.number, { takenOver: false });
+          toast('Assistant resumed for ' + p.number);
+          refreshPanel('ai');
+        } }, 'Let the assistant reply again')))));
+    box.append(el('div', { className: 'fp-note', style: { marginTop: '10px' } },
+      `The assistant is standing down on ${paused.length} chat${paused.length === 1 ? '' : 's'} because you stepped in.`), list);
+  }
+
+  if (!aiSuggestions.length) {
+    box.append(el('div', { className: 'muted', style: { marginTop: '12px' } },
+      s.mode === 'off'
+        ? 'The assistant is switched off. Turn it on in Settings.'
+        : paused.length
+          ? 'Nothing else waiting for you.'
+          : 'Nothing waiting. Replies the assistant is unsure about will appear here to approve, edit or reject.'));
+    return box;
+  }
+
+  const list = el('div', { className: 'rules', style: { marginTop: '12px' } });
+  aiSuggestions.forEach((sg) => list.append(aiCard(sg)));
+  box.append(list);
+  return box;
+}
+
+function aiCard(sg) {
+  const ta = el('textarea', { value: sg.text || '' });
+  const conf = Math.round((sg.confidence || 0) * 100);
+  const tone = conf >= 62 ? 'ok' : conf >= 35 ? 'soon' : 'gone';
+
+  const drop = async (action) => {
+    aiSuggestions = aiSuggestions.filter((x) => x.id !== sg.id);
+    store.set('ott_ai_suggestions', aiSuggestions);
+    if (sg.logId) await ott.ai.updateLog(activeId, sg.logId, { ownerAction: action, ownerActionAt: Date.now() });
+    refreshPanel('ai'); aiBadge();
+  };
+
+  return el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+    el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+      el('b', {}, sg.name || sg.number),
+      el('span', { className: 'muted', style: { fontSize: '12px' } }, sg.number),
+      sg.handover ? el('span', { className: 'deal-when gone' }, 'Needs you')
+                  : el('span', { className: 'deal-when ' + tone }, conf + '% sure')),
+    el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, '“' + (sg.incoming || '') + '”'),
+    sg.reason ? el('div', { className: 'fp-note', style: { margin: '6px 0 0' } }, aiReasonLabel(sg.reason)) : null,
+    (sg.validation && sg.validation.length)
+      ? el('div', { className: 'fp-note', style: { margin: '6px 0 0', color: 'var(--danger)' } },
+          'Held back: ' + sg.validation.join('; ')) : null,
+    sg.handover ? null : lbl('Suggested reply', ta),
+    (sg.sources && sg.sources.length)
+      ? el('div', { className: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+          'Based on: ' + sg.sources.map((x) => x.title).join(', ')) : null,
+    el('div', { className: 'row', style: { marginTop: '8px' } },
+      sg.handover ? null : el('button', { className: 'btn small primary', onclick: async () => {
+        const t = ta.value.trim();
+        if (!t) return toast('Nothing to send', 'err');
+        const r = await sendTextOn(activeId, sg.number, t);
+        if (!r || !r.ok) return toast('Could not send — is this account linked?', 'err');
+        await ott.ai.markSent(activeId, sg.number, sg.logId, t);
+        drop(t === (sg.text || '') ? 'approved' : 'edited');
+        toast('Sent');
+      } }, 'Approve & send'),
+      el('button', { className: 'btn small ghost', onclick: () => drop('rejected') }, 'Reject'),
+      el('button', { className: 'btn small ghost', onclick: async () => {
+        await aiTakeOver(sg.number, true); drop('takeover'); toast('AI paused for this chat');
+      } }, 'I will handle it'),
+      sg.handover ? null : el('button', { className: 'btn small ghost', onclick: async () => {
+        const t = ta.value.trim();
+        if (!t) return toast('Write the reply first', 'err');
+        await ott.ai.saveKnowledgeRow(activeId, {
+          kind: 'faq', title: (sg.incoming || '').slice(0, 60), body: t, tags: ['from-chat'],
+        });
+        toast('Added to knowledge — press Re-embed');
+      } }, 'Save to knowledge')));
+}
+
+async function aiViewSettings() {
+  const s = (await ott.ai.getSettings(activeId)).settings;
+  const box = el('div', {});
+
+  const mode = el('select');
+  [['off', 'AI disabled'], ['suggest', 'Suggestions only (start here)'],
+   ['offline', 'Auto-reply when I am away'], ['always', 'Auto-reply 24×7']]
+    .forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
+  mode.value = s.mode;
+
+  const provider = el('select');
+  [['heyroute', 'HeyRoute / OpenAI-compatible API'], ['ollama', 'Ollama (local, on this PC)']]
+    .forEach(([v, n]) => provider.append(el('option', { value: v }, n)));
+  provider.value = s.provider === 'ollama' ? 'ollama' : 'heyroute';
+
+  const baseUrl = el('input', { value: s.baseUrl });
+  // type=password so a key is not readable over someone's shoulder or in a screen share —
+  // owners demo this app. Value still saves in full.
+  const apiKey = el('input', { type: 'password', value: s.apiKey || '', placeholder: 'sk-…', spellcheck: false });
+  const chatModel = el('input', { value: s.chatModel });
+  const embedModel = el('input', { value: s.embedModel, placeholder: 'leave empty if your provider has none' });
+
+  // Rows that only apply to one engine, so the panel never asks for something irrelevant.
+  const keyRow = lbl('API key', apiKey);
+  const privacy = el('div', { className: 'fp-note' });
+  const syncProvider = () => {
+    const local = provider.value === 'ollama';
+    keyRow.style.display = local ? 'none' : '';
+    // Accuracy matters more here than reassurance. On a hosted key the customer's message
+    // genuinely leaves this machine, and the old copy promised the opposite.
+    privacy.textContent = local
+      ? 'The assistant only runs while this app is open, and entirely on this computer. No customer data is sent anywhere.'
+      : 'The assistant only runs while this app is open. To write a reply it sends the customer’s message and the '
+        + 'matching notes from your knowledge base to your AI provider over the internet. Nothing else leaves this computer, '
+        + 'and no data is sent when the assistant is off.';
+  };
+  const business = el('textarea', { value: s.businessInstructions || '',
+    placeholder: 'How you want the assistant to talk about your business. Anything it must always say, or never say.' });
+  const minConf = el('input', { type: 'number', min: '0', max: '100', value: String(Math.round(s.minConfidence * 100)) });
+  const delay = el('input', { type: 'number', min: '0', value: String(Math.round(s.replyDelayMs / 1000)) });
+  const maxReplies = el('input', { type: 'number', min: '1', value: String(s.maxRepliesPerConversation) });
+  const idle = el('input', { type: 'number', min: '1', value: String(s.ownerIdleMinutes) });
+  const maxChars = el('input', { type: 'number', min: '100', value: String(s.maxResponseChars) });
+  const tone = el('select');
+  [['friendly', 'Friendly'], ['formal', 'Formal'], ['concise', 'Very short']]
+    .forEach(([v, n]) => tone.append(el('option', { value: v }, n)));
+  tone.value = s.tone;
+  const kw = el('textarea', { value: (s.handoverKeywords || []).join(', ') });
+  const excl = el('input', { value: (s.excludeContacts || []).join(', '), placeholder: '919812345678, 919800000000' });
+  const groups = chk(s.allowGroups);
+  const consent = chk(s.consentAccepted);
+  const status = el('div', { className: 'fp-note' });
+  const cmds = el('div', { className: 'fp-note' });
+
+  const isLocal = () => provider.value === 'ollama';
+
+  const showCmds = () => {
+    // Only a local engine has anything to install. Telling someone on a hosted key to run
+    // "ollama pull" sends them off to fix a machine that is not the problem.
+    cmds.textContent = isLocal()
+      ? ('Not installed yet? Run once in a terminal:  ollama pull '
+        + (chatModel.value.trim() || 'qwen3:4b')
+        + (embedModel.value.trim() ? '   then   ollama pull ' + embedModel.value.trim() : ''))
+      : 'Paste the API key from your provider. The base address is usually just the site, e.g. https://heyroute.ai';
+  };
+  chatModel.oninput = embedModel.oninput = showCmds;
+  provider.onchange = () => { syncProvider(); showCmds(); };
+  syncProvider(); showCmds();
+
+  const test = async () => {
+    status.textContent = 'Testing…';
+    await ott.ai.saveSettings(activeId, {
+      provider: provider.value,
+      baseUrl: baseUrl.value.trim(), apiKey: apiKey.value.trim(),
+      chatModel: chatModel.value.trim(), embedModel: embedModel.value.trim(),
+    });
+    const h = await ott.ai.health(activeId);
+    if (!h.ok) { status.textContent = h.err; return; }
+    // Worded per engine. "N model(s) installed" is meaningless against a gateway, and
+    // "embedding model NOT installed" when embeddings are switched off on purpose reads
+    // as a fault — that class of misleading status is what got this feature withdrawn.
+    const embedNote = h.embedReady === null
+      ? 'Embeddings off — search runs on keyword matching.'
+      : `Embedding model ${h.embedReady ? 'ready' : 'NOT available'}.`;
+    status.textContent = h.hosted
+      ? `Connected. ${h.version}. Chat model ${h.chatReady ? 'ready' : 'NOT in this account\'s model list'}. ${embedNote}`
+      : `Connected to Ollama ${h.version}. ${h.models.length} model(s) installed. `
+        + `Chat model ${h.chatReady ? 'ready' : 'NOT installed'}. ${embedNote}`;
+    // Offer what is actually installed rather than making the owner type a name exactly.
+    if (h.models.length) {
+      const pick = el('select');
+      h.models.forEach((m) => pick.append(el('option', { value: m.name }, m.name)));
+      pick.value = chatModel.value;
+      pick.onchange = () => { chatModel.value = pick.value; showCmds(); };
+      status.append(el('div', { style: { marginTop: '6px' } }, lbl('Use this chat model', pick)));
+    }
+  };
+
+  box.append(
+    privacy,
+    lbl('Mode', mode),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '10px 0' } }),
+    el('b', {}, 'Connection'),
+    lbl('AI engine', provider),
+    lbl('Address', baseUrl),
+    keyRow,
+    el('div', { className: 'row' }, lbl('Chat model', chatModel), lbl('Embedding model', embedModel)),
+    el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: test }, 'Test connection')),
+    status, cmds,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '10px 0' } }),
+    el('b', {}, 'How it behaves'),
+    lbl('Business instructions', business),
+    el('div', { className: 'row' }, lbl('Tone', tone), lbl('Max reply length', maxChars)),
+    el('div', { className: 'row' }, lbl('Send automatically above (%)', minConf), lbl('Wait before sending (sec)', delay)),
+    el('div', { className: 'row' }, lbl('Max AI replies per chat', maxReplies), lbl('Treat me as away after (min)', idle)),
+    lbl('Always hand to me if the customer says', kw),
+    lbl('Never reply to these numbers', excl),
+    chkRow(groups, 'Allow replies in group chats'),
+    chkRow(consent, 'I understand the assistant drafts replies from my own data and can be wrong'),
+    el('button', { className: 'btn primary', style: { marginTop: '10px' }, onclick: async () => {
+      if (mode.value !== 'off' && !consent.checked) return toast('Tick the consent box first', 'err');
+      if (mode.value === 'always') {
+        const go = await aiConfirm('Let the assistant reply 24×7?',
+          'It will answer customers even while you are at the keyboard. Most sellers run “when I am away” instead.');
+        if (!go) return;
+      }
+      await ott.ai.saveSettings(activeId, {
+        mode: mode.value, provider: provider.value, baseUrl: baseUrl.value.trim(),
+        apiKey: apiKey.value.trim(), chatModel: chatModel.value.trim(),
+        embedModel: embedModel.value.trim(), businessInstructions: business.value,
+        minConfidence: Math.max(0, Math.min(1, Number(minConf.value) / 100)),
+        replyDelayMs: Math.max(0, Number(delay.value) * 1000),
+        maxRepliesPerConversation: Math.max(1, Number(maxReplies.value) || 5),
+        ownerIdleMinutes: Math.max(1, Number(idle.value) || 10),
+        maxResponseChars: Math.max(100, Number(maxChars.value) || 600),
+        tone: tone.value,
+        handoverKeywords: kw.value.split(',').map((x) => x.trim()).filter(Boolean),
+        excludeContacts: excl.value.split(',').map((x) => digits(x)).filter(Boolean),
+        allowGroups: groups.checked, consentAccepted: consent.checked,
+      });
+      aiInit();
+      toast('AI settings saved');
+    } }, 'Save settings'),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '14px 0 8px' } }),
+    el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: async () => {
+      if (!(await aiConfirm('Delete everything the assistant has learned?',
+        'Knowledge entries, saved chat examples and reply logs for this account are removed. Your settings are kept.'))) return;
+      await ott.ai.purge(activeId);
+      toast('AI data deleted'); refreshPanel('ai');
+    } }, 'Delete all AI data'));
+  return box;
+}
+
+async function aiViewKnowledge() {
+  const box = el('div', {});
+  const rows = (await ott.ai.getKnowledge(activeId)).rows || [];
+
+  // ---- state ----
+  let query = '';
+  const open = {};                       // which type groups are expanded
+  const shown = {};                      // how many rows revealed per group
+  const PAGE = 12;
+
+  // ---- add form, collapsed ----
+  // With a real knowledge base the list is what you came for; the form is not. Keeping it
+  // open pushed 219 entries below the fold on every visit.
+  const title = el('input', { placeholder: 'e.g. How long does delivery take?' });
+  const kind = el('select');
+  [['faq', 'FAQ'], ['policy', 'Policy'], ['product', 'Product note'], ['script', 'Sales script'],
+   ['objection', 'Objection handling'], ['note', 'Other']].forEach(([v, n]) => kind.append(el('option', { value: v }, n)));
+  const body = el('textarea', { placeholder: 'The exact answer you want the assistant to give.' });
+  const tags = el('input', { placeholder: 'tags, comma separated' });
+
+  const addForm = el('details', { className: 'deal-set' },
+    el('summary', {}, 'Add an entry'),
+    el('div', { className: 'deal-set-body' },
+      lbl('Title', title), lbl('Type', kind), lbl('Answer', body), lbl('Tags', tags),
+      el('button', { className: 'btn primary', onclick: async () => {
+        if (!title.value.trim() || !body.value.trim()) return toast('Title and answer are both needed', 'err');
+        await ott.ai.saveKnowledgeRow(activeId, {
+          kind: kind.value, title: title.value.trim(), body: body.value.trim(),
+          tags: tags.value.split(',').map((x) => x.trim()).filter(Boolean),
+        });
+        toast('Saved — press Re-embed to make it searchable');
+        refreshPanel('ai');
+      } }, 'Save entry')));
+
+  // ---- rendering ----
+  const KIND_LABEL = { faq: 'FAQs', policy: 'Policies', product: 'Products', script: 'Sales scripts',
+    objection: 'Objection handling', note: 'Other' };
+  const listBox = el('div', {});
+  const search = el('input', { placeholder: 'Search knowledge…', type: 'search' });
+
+  // Products imported in bulk all carry the same explanatory sentence. Repeating it 219
+  // times is noise; the useful part is whatever is unique to the entry.
+  const BOILERPLATE = /\.?\s*(the )?current price and stock (come|comes) from the catalog at reply time\.?/i;
+  const gist = (r) => {
+    const t = String(r.body || '').replace(BOILERPLATE, '').trim();
+    // What is left is often just the title repeated back, which tells the owner nothing.
+    if (!t || t.toLowerCase().startsWith(String(r.title || '').toLowerCase().slice(0, 20))) {
+      const rest = t.slice(String(r.title || '').length).replace(/^[\s(),.–-]+/, '').trim();
+      return rest || '';
+    }
+    return t;
+  };
+
+  const draw = () => {
+    listBox.innerHTML = '';
+    const q = query.trim().toLowerCase();
+    const matched = q
+      ? rows.filter((r) => (r.title + ' ' + (r.body || '') + ' ' + (r.tags || []).join(' ')).toLowerCase().includes(q))
+      : rows;
+
+    if (!rows.length) {
+      listBox.append(el('div', { className: 'muted' },
+        'Nothing saved yet. The assistant can only answer from what you put here plus your catalog.'));
+      return;
+    }
+    if (!matched.length) {
+      listBox.append(el('div', { className: 'muted' }, `Nothing matches “${query}”.`));
+      return;
+    }
+
+    // Group by type. Searching flattens the grouping — when you are looking for one thing,
+    // headings are in the way.
+    const groups = {};
+    for (const r of matched) (groups[r.kind || 'note'] = groups[r.kind || 'note'] || []).push(r);
+    const order = ['faq', 'policy', 'script', 'objection', 'product', 'note']
+      .filter((k) => groups[k]);
+
+    for (const k of order) {
+      const g = groups[k];
+      // Expanded by default when small or when searching; a 219-row group stays shut.
+      const isOpen = q ? true : (open[k] !== undefined ? open[k] : g.length <= 15);
+      const pending = g.filter((r) => !r.embedded).length;
+
+      const head = el('button', {
+        className: 'kb-group' + (isOpen ? ' open' : ''), type: 'button',
+        onclick: () => { open[k] = !isOpen; draw(); },
+      },
+        el('span', { className: 'kb-caret' }),
+        el('b', {}, KIND_LABEL[k] || k),
+        el('span', { className: 'kb-count' }, String(g.length)),
+        pending ? el('span', { className: 'rate-tag loss' }, pending + ' to embed') : null);
+      listBox.append(head);
+      if (!isOpen) continue;
+
+      const limit = shown[k] || PAGE;
+      const wrap = el('div', { className: 'kb-rows' });
+      g.slice(0, limit).forEach((r) => wrap.append(kbRow(r)));
+      listBox.append(wrap);
+
+      if (g.length > limit) {
+        listBox.append(el('button', {
+          className: 'btn small ghost kb-more', onclick: () => { shown[k] = limit + 40; draw(); },
+        }, `Show ${Math.min(40, g.length - limit)} more of ${g.length}`));
+      }
+    }
+  };
+
+  function kbRow(r) {
+    const sub = gist(r);
+    return el('div', { className: 'kb-row' + (r.active === false ? ' off' : '') },
+      el('div', { className: 'kb-main' },
+        el('div', { className: 'kb-title' }, r.title),
+        sub ? el('div', { className: 'kb-sub' }, sub) : null),
+      // Actions stay compact and out of the reading path — 219 rows of full-size buttons
+      // is 438 targets competing with the content.
+      el('div', { className: 'kb-acts' },
+        el('button', {
+          className: 'btn small ghost', title: r.active === false ? 'Turn on' : 'Turn off',
+          onclick: async () => { await ott.ai.saveKnowledgeRow(activeId, { id: r.id, active: r.active === false }); refreshPanel('ai'); },
+        }, r.active === false ? 'On' : 'Off'),
+        el('button', {
+          className: 'btn small ghost', style: { color: 'var(--danger)' }, title: 'Delete',
+          onclick: async () => {
+            if (!(await aiConfirm('Delete this entry?', r.title))) return;
+            await ott.ai.deleteKnowledge(activeId, r.id); refreshPanel('ai');
+          },
+        }, '×')));
+  }
+
+  let searchTimer = 0;
+  search.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = search.value; draw(); }, 150); };
+
+  // ---- summary ----
+  const pending = rows.filter((r) => !r.embedded).length;
+  const off = rows.filter((r) => r.active === false).length;
+  const seenKey = new Set();
+  let dupes = 0;
+  for (const r of rows) {
+    const k = `${r.kind || 'note'}::${String(r.title || '').trim().toLowerCase()}`;
+    if (seenKey.has(k)) dupes++; else seenKey.add(k);
+  }
+
+  // Raw .append() renders a null child as the literal text "null"; el() filters them.
+  // Build the list, drop the empties, then append.
+  [
+    el('div', { className: 'fp-note' },
+      'The assistant answers only from these entries plus your live catalog. Prices and stock are always read from the catalog, never from here, so they can never go stale.'),
+    el('div', { className: 'bk-kpis' },
+      dKpi('Entries', String(rows.length), dupes ? `${dupes} duplicated` : (off ? `${off} turned off` : 'All active'), dupes ? 'bad' : (rows.length ? 'good' : '')),
+      dKpi('Searchable', String(rows.length - pending), pending ? `${pending} waiting` : 'All embedded', pending ? 'warn' : 'good'),
+      dKpi('Products', String(rows.filter((r) => (r.kind || '') === 'product').length), 'From your catalog')),
+    pending ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' not searchable yet — press Re-embed.') : null,
+    dupes ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+      `${dupes} duplicate entr${dupes === 1 ? 'y' : 'ies'} — the same title saved more than once. `
+      + 'Older imports stacked copies; clearing them makes retrieval sharper.') : null,
+    dupes ? el('button', { className: 'btn small', style: { marginBottom: '8px' }, onclick: async () => {
+      if (!(await aiConfirm(`Remove ${dupes} duplicate entr${dupes === 1 ? 'y' : 'ies'}?`,
+        'The newest copy of each is kept, preferring one that is already embedded.'))) return;
+      const r = await ott.ai.dedupeKnowledge(activeId);
+      toast(r.ok ? `${r.removed} removed, ${r.kept} kept` : 'Could not clean up', r.ok ? 'ok' : 'err');
+      refreshPanel('ai');
+    } }, 'Remove duplicates') : null,
+    el('div', { className: 'row' },
+      el('button', { className: 'btn small', onclick: async () => {
+        const prods = aiProducts();
+        if (!prods.length) return toast('No products in your catalog yet', 'err');
+        // Skip products that already have an entry. Re-running this used to add a second
+        // boilerplate row for every product already imported from the website.
+        const have = new Set(rows.map((r) => (r.title || '').toLowerCase()));
+        let n = 0;
+        for (const p of prods) {
+          if (have.has(p.title.toLowerCase())) continue;
+          await ott.ai.saveKnowledgeRow(activeId, {
+            kind: 'product', title: p.title,
+            body: p.text ? String(p.text).slice(0, 800)
+              : `${p.title}${p.category ? ' (' + p.category + ')' : ''}`,
+            tags: ['catalog'],
+          });
+          n++;
+        }
+        toast(n ? `${n} product(s) added` : 'Every product is already here');
+        refreshPanel('ai');
+      } }, 'Import from catalog'),
+      el('button', { className: 'btn small', onclick: aiImportWebsite }, 'Import from website'),
+      el('button', { className: 'btn small' + (pending ? ' primary' : ''), onclick: async () => {
+        toast('Embedding…');
+        const r = await ott.ai.embedAll(activeId);
+        toast(r.ok ? r.embedded + ' entries embedded' : r.err, r.ok ? 'ok' : 'err');
+        refreshPanel('ai');
+      } }, 'Re-embed')),
+    addForm,
+    rows.length > 8 ? search : null,
+    listBox,
+  ].filter(Boolean).forEach((n) => box.append(n));
+  draw();
+  return box;
+}
+// ---------- Learn from real sales chats ----------
+// The model is never fine-tuned. A conversation that closed well is read out of WhatsApp,
+// split into question -> reply pairs, stripped of personal data, and put in front of the
+// owner to approve. Only approved pairs are embedded, and only as *style* examples — the
+// prompt tells the model to copy the phrasing, never the facts, because a price quoted in
+// a chat from three months ago is exactly the kind of stale number that must not resurface.
+
+// Pull the recent turns of one conversation straight from WhatsApp. There is no message
+// archive in the CRM, so this is the only source.
+async function aiFetchChat(number, count) {
+  const jid = JSON.stringify(digits(number) + '@c.us');
+  const expr = `(async()=>{try{
+    var ms=await WPP.chat.getMessages({chatId:${jid},count:${Math.max(10, Math.min(200, count || 60))}});
+    return (ms||[]).map(function(m){return {
+      fromMe: !!m.fromMe,
+      body: String((m.body||m.caption||'')).slice(0,1500),
+      ts: (m.t||0)*1000,
+      type: m.type||'chat'
+    };}).filter(function(x){return x.body;});
+  }catch(e){return {err:String(e&&e.message||e)}}})()`;
+  try {
+    const r = await waExecOn(activeId, expr);
+    return Array.isArray(r) ? r : { err: (r && r.err) || 'Could not read this conversation' };
+  } catch (e) { return { err: String((e && e.message) || e) }; }
+}
+
+// Turn a transcript into teachable pairs: what the customer asked, and what the owner
+// actually replied. Consecutive messages from the same side are joined — people send three
+// short lines where one would do, and the reply belongs to the whole question.
+function aiPairs(msgs) {
+  const turns = [];
+  for (const m of msgs) {
+    const last = turns[turns.length - 1];
+    if (last && last.fromMe === m.fromMe) { last.body += '\n' + m.body; last.ts = m.ts; }
+    else turns.push({ fromMe: m.fromMe, body: m.body, ts: m.ts });
+  }
+  const pairs = [];
+  for (let i = 0; i < turns.length - 1; i++) {
+    if (turns[i].fromMe || !turns[i + 1].fromMe) continue;   // want customer -> owner
+    const q = turns[i].body.trim(), a = turns[i + 1].body.trim();
+    // Skip the noise that teaches nothing: bare greetings, "ok", "thanks".
+    if (q.length < 4 || a.length < 8) continue;
+    if (/^(ok|okay|thik|theek|thanks|thank you|ty|👍|🙏)\.?$/i.test(q)) continue;
+    pairs.push({ question: q, reply: a, ts: turns[i + 1].ts });
+  }
+  return pairs;
+}
+
+const AI_OBJECTIONS = [
+  ['price', /\b(costly|expensive|mehnga|zyada hai|too much|budget|kam karo|discount)\b/i],
+  ['trust', /\b(genuine|real|fake|scam|trust|bharosa|guarantee|safe)\b/i],
+  ['timing', /\b(later|baad me|next month|abhi nahi|think|soch)\b/i],
+  ['comparison', /\b(other|dusra|cheaper|elsewhere|competitor)\b/i],
+];
+
+// Everything below is a first guess the owner can correct on the review screen. Getting it
+// roughly right saves them typing; getting it wrong costs them one edit.
+function aiClassifyPair(p, products) {
+  const t = p.question + ' ' + p.reply;
+  const product = (products || []).find((x) => x.title && t.toLowerCase().includes(x.title.toLowerCase()));
+  const objection = (AI_OBJECTIONS.find(([, re]) => re.test(p.question)) || [])[0] || '';
+  const closing = /\b(payment|paid|order confirm|send.*(qr|upi)|activate|done|welcome)\b/i.test(p.reply);
+  return {
+    ...p,
+    product: product ? product.title : '',
+    objection,
+    closing,
+    language: aiDetectLangLocal(p.question),
+    tags: [objection, product ? 'product' : '', closing ? 'closing' : ''].filter(Boolean),
+  };
+}
+
+// Same rules as the main process uses, kept local so the review screen works without a
+// round trip per pair.
+function aiDetectLangLocal(text) {
+  const t = String(text || '');
+  if (/[ऀ-ॿ]/.test(t)) return 'hi';
+  if (/\b(kya|kaise|kitna|hai|nahi|haan|bhai|chahiye|milega|karo|paisa|batao|ji)\b/i.test(t)) return 'hinglish';
+  return 'en';
+}
+
+// Redaction mirrors the main process, applied here too so nothing personal is ever shown
+// on screen or held in renderer memory before the owner approves it.
+function aiRedactLocal(text) {
+  return String(text || '')
+    .replace(/\b(?:\+?91[-\s]?)?[6-9]\d{9}\b/g, '[phone]')
+    .replace(/\b[\w.+-]+@[\w-]+\.[\w.]+\b/g, '[email]')
+    .replace(/\b[\w.-]{2,}@(?:ok\w+|paytm|ybl|upi|axl|apl)\b/gi, '[upi]')
+    .replace(/\b\d{4}[-\s]?\d{4}[-\s]?\d{4}(?:[-\s]?\d{4})?\b/g, '[card]')
+    .replace(/\b(?:order|txn|ref|utr)[\s#:]*[A-Z0-9-]{6,}\b/gi, '[reference]');
+}
+
+async function aiViewTraining() {
+  const box = el('div', {});
+  const saved = (await ott.ai.getExamples(activeId)).rows || [];
+
+  const num = el('input', { placeholder: 'Customer number, e.g. 919812345678' });
+  const outcome = el('select');
+  [['sale', 'Successful sale'], ['good', 'Good example, no sale yet'], ['exclude', 'Do not use for AI']]
+    .forEach(([v, n]) => outcome.append(el('option', { value: v }, n)));
+  const count = el('input', { type: 'number', min: '10', max: '200', value: '60' });
+  const review = el('div', {});
+
+  // Offer the people already in the CRM rather than making the owner type a number.
+  const pick = el('select');
+  pick.append(el('option', { value: '' }, 'Pick from your leads and deals…'));
+  const known = new Map();
+  store.get('ott_deals', []).forEach((d) => known.set(d.number, (d.name || d.number) + ' · bought ' + d.item));
+  store.get('ott_leads', []).forEach((l) => { const n = digits(String(l.number)); if (!known.has(n)) known.set(n, l.name || n); });
+  [...known].forEach(([n, label]) => pick.append(el('option', { value: n }, label)));
+  pick.onchange = () => { if (pick.value) num.value = pick.value; };
+
+  const load = async () => {
+    const n = digits(num.value);
+    if (!n) return toast('Enter or pick a number first', 'err');
+    if (outcome.value === 'exclude') {
+      // An explicit "never learn from this person" is itself a privacy control.
+      const s = (await ott.ai.getSettings(activeId)).settings;
+      const ex = [...new Set([...(s.excludeContacts || []), n])];
+      await ott.ai.saveSettings(activeId, { excludeContacts: ex });
+      toast('This contact is now excluded from AI replies and learning');
+      return;
+    }
+
+    review.innerHTML = '';
+    review.append(el('div', { className: 'muted' }, 'Reading the conversation…'));
+    const msgs = await aiFetchChat(n, Number(count.value));
+    if (!Array.isArray(msgs)) {
+      review.innerHTML = '';
+      review.append(el('div', { className: 'muted' },
+        (msgs && msgs.err) || 'Could not read that chat. Open it in WhatsApp once, then try again.'));
+      return;
+    }
+
+    const products = aiProducts();
+    const pairs = aiPairs(msgs).map((p) => aiClassifyPair(p, products))
+      .map((p) => ({ ...p, question: aiRedactLocal(p.question), reply: aiRedactLocal(p.reply) }));
+
+    review.innerHTML = '';
+    if (!pairs.length) {
+      review.append(el('div', { className: 'muted' },
+        'No usable question-and-answer pairs in the last ' + msgs.length + ' messages. Try a longer range.'));
+      return;
+    }
+
+    const head = el('div', { className: 'fp-note' },
+      pairs.length + ' pair(s) found in ' + msgs.length + ' messages. Phone numbers, emails, UPI ids and '
+      + 'order references have already been removed. Approve the ones that show how you want the assistant to sound.');
+    const list = el('div', { className: 'rules' });
+    pairs.forEach((p, i) => list.append(aiPairCard(p, i, outcome.value)));
+    review.append(head,
+      el('div', { className: 'row' },
+        el('button', { className: 'btn small', onclick: async () => {
+          let n2 = 0;
+          for (const card of [...list.children]) { if (card._approve) { await card._approve(); n2++; } }
+          toast(n2 ? n2 + ' example(s) saved — press Re-embed in Knowledge' : 'Nothing selected', n2 ? 'ok' : 'err');
+          refreshPanel('ai');
+        } }, 'Approve all shown')),
+      list);
+  };
+
+  box.append(
+    el('div', { className: 'fp-note' },
+      'The model is never retrained. A conversation that went well is turned into examples of how you talk, '
+      + 'so the assistant copies your phrasing. It never copies prices from an old chat — those always come from your catalog.'),
+    lbl('Pick a customer', pick),
+    el('div', { className: 'row' }, lbl('Or type a number', num), lbl('Messages to read', count)),
+    lbl('What was this conversation?', outcome),
+    el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: load }, 'Read conversation')),
+    review,
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '14px 0 8px' } }),
+    el('b', {}, 'Saved examples (' + saved.length + ')'),
+    saved.length
+      ? el('div', { className: 'rules', style: { marginTop: '8px' } },
+          ...saved.map((r) => el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+            el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              el('b', {}, (r.question || '').slice(0, 70)),
+              r.product ? el('span', { className: 'rate-tag cost' }, r.product) : null,
+              r.objection ? el('span', { className: 'rate-tag cost' }, r.objection) : null,
+              el('span', { className: 'deal-when ' + (r.approved ? 'ok' : 'soon') }, r.approved ? 'Approved' : 'Awaiting review'),
+              r.embedded ? null : el('span', { className: 'rate-tag loss' }, 'needs re-embed')),
+            el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px' } }, (r.reply || '').slice(0, 180)),
+            el('div', { className: 'row', style: { marginTop: '8px' } },
+              r.approved ? null : el('button', { className: 'btn small', onclick: async () => {
+                await ott.ai.saveExample(activeId, { id: r.id, approved: true }); refreshPanel('ai');
+              } }, 'Approve'),
+              el('button', { className: 'btn small ghost', onclick: async () => {
+                await ott.ai.saveExample(activeId, { id: r.id, active: r.active === false }); refreshPanel('ai');
+              } }, r.active === false ? 'Turn on' : 'Turn off'),
+              el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: async () => {
+                if (!(await aiConfirm('Delete this example?', (r.question || '').slice(0, 80)))) return;
+                await ott.ai.deleteExample(activeId, r.id); refreshPanel('ai');
+              } }, 'Delete')))))
+      : el('div', { className: 'muted' }, 'None yet.'));
+  return box;
+}
+
+function aiPairCard(p, i, outcomeKind) {
+  const q = el('textarea', { value: p.question, style: { minHeight: '52px' } });
+  const a = el('textarea', { value: p.reply, style: { minHeight: '72px' } });
+  const product = el('input', { value: p.product || '', placeholder: 'Product (optional)' });
+  const objection = el('input', { value: p.objection || '', placeholder: 'Objection (optional)' });
+  const use = chk(false);
+
+  const card = el('div', { className: 'card', style: { padding: '10px 12px', marginBottom: '8px' } },
+    el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+      el('b', {}, 'Pair ' + (i + 1)),
+      el('span', { className: 'rate-tag cost' }, p.language),
+      p.closing ? el('span', { className: 'rate-tag margin' }, 'closing message') : null,
+      p.product ? el('span', { className: 'rate-tag cost' }, p.product) : null),
+    lbl('Customer asked', q),
+    lbl('You replied', a),
+    el('div', { className: 'row' }, lbl('Product', product), lbl('Objection', objection)),
+    chkRow(use, 'Use this as an example'),
+    el('div', { className: 'row', style: { marginTop: '6px' } },
+      el('button', { className: 'btn small primary', onclick: async () => {
+        use.checked = true;
+        await card._approve();
+        toast('Saved');
+      } }, 'Save this one')));
+
+  // Exposed so "Approve all shown" can reuse exactly the same save path.
+  card._approve = async () => {
+    if (!use.checked) return;
+    if (!q.value.trim() || !a.value.trim()) return;
+    await ott.ai.saveExample(activeId, {
+      question: q.value.trim(), reply: a.value.trim(),
+      product: product.value.trim(), objection: objection.value.trim(),
+      outcome: outcomeKind === 'sale' ? 'sale' : 'example',
+      language: p.language, closing: !!p.closing,
+      tags: p.tags || [], approved: true, active: true,
+    });
+    use.checked = false;
+  };
+  return card;
+}
+
+// Import a product catalog from a website into the CRM.
+//
+// Imported products land in the CATALOG (ott_quick), not just the knowledge base — that is
+// deliberate. The reply validator checks every rupee figure against the catalog, so a
+// price only becomes quotable once it is a live CRM fact. Descriptions go to knowledge so
+// the assistant can talk about a product; prices are never read from there.
+async function aiImportWebsite() {
+  const url = el('input', { placeholder: 'https://yourshop.com/plans' });
+  const token = el('input', { placeholder: 'Only if your site needs one' });
+  const limit = el('input', { type: 'number', min: '1', max: '300', value: '300' });
+  const status = el('div', { className: 'fp-note' });
+  const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
+  let found = [];
+
+  const run = async () => {
+    if (!url.value.trim()) return toast('Enter your shop address', 'err');
+    found = []; preview.innerHTML = '';
+    status.textContent = 'Reading your site…';
+    const r = await ott.ai.importCatalog({
+      url: url.value.trim(), token: token.value.trim(), limit: Number(limit.value) || 100,
+    });
+    if (!r || !r.ok) { status.textContent = (r && r.err) || 'Import failed'; return; }
+    found = r.products || [];
+    status.textContent = (r.total && r.total > found.length
+      ? `${found.length} of ${r.total} product(s) imported — raise "Max products" to get them all`
+      : `${found.length} product(s) found`)
+      + (r.via && r.via.startsWith('json') && !r.via.startsWith('jsonld') ? ' from your product feed.' : ' by reading your product pages.')
+      + ' Check the prices below before importing — these become the only prices the assistant may quote.';
+    preview.innerHTML = '';
+    found.slice(0, 40).forEach((p) => preview.append(el('div', { className: 'bk-row' },
+      el('div', { style: { flex: '1', minWidth: '0' } },
+        el('div', { style: { fontSize: '12.5px' } }, p.title),
+        el('div', { className: 'muted', style: { fontSize: '11px' } }, (p.category || '') + (p.stock ? '' : ' · OUT OF STOCK'))),
+      el('span', { className: 'rate-tag' }, '₹' + p.price))));
+    if (found.length > 40) preview.append(el('div', { className: 'muted' }, `…and ${found.length - 40} more`));
+  };
+
+  const save = async () => {
+    // Telling the owner to press the other button first is a dead end. Read the site for
+    // them — the preview still appears, and nothing is written until this finishes.
+    if (!found.length) {
+      await run();
+      if (!found.length) return;   // run() has already explained why
+    }
+    const qs = store.get('ott_quick', []);
+    let added = 0, updated = 0;
+    for (const p of found) {
+      if (!p.title || !p.price) continue;
+      const existing = qs.find((q) => (q.title || '').toLowerCase() === p.title.toLowerCase());
+      if (existing) { existing.sell = p.price; existing.category = p.category || existing.category; existing.stock = p.stock; updated++; }
+      else {
+        // pinned:false — an imported catalog of 50 items must not carpet the chat bar with chips.
+        qs.push({ title: p.title, category: p.category || '', text: p.description || '',
+          sell: p.price, cost: 0, stock: p.stock, pinned: false, source: 'website' });
+        added++;
+      }
+    }
+    store.set('ott_quick', qs);
+
+    // Descriptions become knowledge so the assistant can describe a product. The price is
+    // deliberately left out — it is read live from the catalog at reply time.
+    let notes = 0;
+    for (const p of found) {
+      if (!p.description || !p.title) continue;
+      await ott.ai.saveKnowledgeRow(activeId, {
+        kind: 'product', title: p.title,
+        body: `${p.title}${p.category ? ' (' + p.category + ')' : ''}. ${p.description}`,
+        tags: ['website'],
+      });
+      notes++;
+    }
+    closeAiModal();
+    toast(`${added} added, ${updated} updated, ${notes} description(s) saved — press Re-embed`);
+    refreshPanel('ai');
+  };
+
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) scrim.remove(); } },
+    el('div', { className: 'modal-box', style: { width: '540px', textAlign: 'left', maxHeight: '80vh', overflowY: 'auto' } },
+      el('h3', {}, 'Import products from your website'),
+      el('div', { className: 'fp-note' },
+        'Point this at your shop or product-listing page. Most storefronts publish their catalog in a form this can read, '
+        + 'so no API is needed. If your site does have a product feed it will be used instead, which is faster and includes stock.'),
+      lbl('Shop or listing page', url),
+      el('div', { className: 'row' }, lbl('Access token (optional)', token), lbl('Max products', limit)),
+      el('div', { className: 'row' },
+        el('button', { className: 'btn', onclick: run }, 'Read my site'),
+        el('button', { className: 'btn primary', onclick: save }, 'Import into catalog')),
+      status, preview));
+  window.__aiModal = scrim;
+  document.body.append(scrim);
+  setTimeout(() => url.focus(), 0);
+}
+function closeAiModal() { if (window.__aiModal) { window.__aiModal.remove(); window.__aiModal = null; } }
+
+async function aiViewLogs() {
+  const rows = (await ott.ai.getLogs(activeId, 100)).rows || [];
+  const box = el('div', {});
+  const sent = rows.filter((r) => r.sent).length;
+  const handovers = rows.filter((r) => r.action === 'handover').length;
+  const errors = rows.filter((r) => r.action === 'error').length;
+  const timed = rows.filter((r) => r.ms);
+  const avg = timed.length ? Math.round(timed.reduce((a, r) => a + r.ms, 0) / timed.length) : 0;
+  const corrected = rows.filter((r) => r.ownerAction === 'edited').length;
+
+  box.append(el('div', { className: 'bk-kpis' },
+    dKpi('Messages handled', String(rows.length), 'Seen by the assistant'),
+    dKpi('Sent automatically', String(sent), 'Without you', sent ? 'good' : ''),
+    dKpi('Handed to you', String(handovers), 'Needed a human', handovers ? 'warn' : '')));
+  box.append(el('div', { className: 'bk-kpis' },
+    dKpi('You edited', String(corrected), 'Reply reworded before sending'),
+    dKpi('Errors', String(errors), 'Model or connection', errors ? 'bad' : ''),
+    dKpi('Avg response', avg + ' ms', 'Model round trip')));
+
+  const list = el('div', { className: 'rules', style: { marginTop: '10px' } });
+  if (!rows.length) list.append(el('div', { className: 'muted' }, 'No AI activity yet.'));
+  rows.forEach((r) => list.append(el('div', { className: 'bk-row' },
+    el('div', { style: { flex: '1', minWidth: '0' } },
+      el('div', { style: { fontSize: '12.5px' } },
+        (r.name || r.number) + ' — “' + String(r.customerMessage || '').slice(0, 70) + '”'),
+      el('div', { className: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+        new Date(r.ts).toLocaleString() + ' · ' + r.action
+        + (r.confidence ? ' · ' + Math.round(r.confidence * 100) + '%' : '')
+        + (r.handoverReason ? ' · ' + aiReasonLabel(r.handoverReason) : '')
+        + (r.error ? ' · ' + r.error : '')
+        + (r.ownerAction ? ' · you ' + r.ownerAction : ''))))));
+  box.append(list);
+  return box;
+}
+
+// ---------------- Training: fill-in text file ----------------
+// A file the owner fills in offline. Typing knowledge into a form one row at a time does
+// not scale past a handful, and most owners already have this written down somewhere —
+// this lets them paste it in one go, or hand the file to staff to fill in.
+const AI_TEMPLATE = [
+  '# ===================================================================',
+  '# AI TRAINING FILE',
+  '# ===================================================================',
+  '#',
+  '# Fill this in and upload it back. Everything the assistant knows about',
+  '# your business comes from entries like these.',
+  '#',
+  '# HOW TO FILL IT IN',
+  '#   * Start every entry with ###',
+  '#   * The FIRST line after ### is the question, or a short title',
+  '#   * The lines under it are the answer',
+  '#   * Optional: a line starting with TAGS: to help it match',
+  '#   * Lines starting with # are ignored - including these',
+  '#',
+  '# Keep answers short and exact. The assistant repeats what you write here.',
+  '# Do NOT put prices you change often in this file - those come from your',
+  '# catalog, and a stale price here would be quoted to a customer as fact.',
+  '#',
+  '# ===================================================================',
+  '',
+  '### What are your delivery timings?',
+  'Orders placed before 6 PM are delivered the same day. After that, next morning.',
+  'TAGS: delivery, shipping, timing',
+  '',
+  '### Which payment methods do you accept?',
+  'UPI, GPay, PhonePe and Paytm. Bank transfer on request.',
+  'TAGS: payment, upi',
+  '',
+  '### Do you give a warranty?',
+  'Yes. If the account stops working inside the validity period we replace it free.',
+  'TAGS: warranty, replacement',
+  '',
+  '### ',
+  '',
+  '### ',
+  '',
+].join('\n');
+
+// Blocks split on ### at line start. Deliberately forgiving: unfilled placeholders, stray
+// blank lines and any amount of # commentary are skipped rather than rejected, because the
+// file comes back from a human who was not thinking about a parser.
+function aiParseTemplate(text) {
+  const out = [];
+  const blocks = String(text || '').split(/^\s*###\s*/m).slice(1);
+  for (const b of blocks) {
+    const lines = b.split(/\r?\n/).map((l) => l.replace(/\s+$/, ''))
+      .filter((l) => !/^\s*#/.test(l));
+    const title = (lines.shift() || '').trim();
+    let tags = [];
+    const body = lines.filter((l) => {
+      const m = /^\s*TAGS?\s*:\s*(.*)$/i.exec(l);
+      if (!m) return true;
+      tags = m[1].split(',').map((x) => x.trim()).filter(Boolean);
+      return false;
+    }).join('\n').trim();
+    if (!title || !body) continue;                 // an unfilled placeholder, not an error
+    out.push({ title: title.slice(0, 120), body, tags });
+  }
+  return out;
+}
+
+function aiDownloadTemplate() {
+  const url = URL.createObjectURL(new Blob([AI_TEMPLATE], { type: 'text/plain;charset=utf-8' }));
+  const a = el('a', { href: url, download: (BRAND.slug || 'ai') + '-training-template.txt' });
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Template downloaded - fill it in, then upload it back');
+}
+
+function aiUploadTemplate() {
+  const status = el('div', { className: 'fp-note' });
+  const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
+  let rows = [];
+
+  const inp = el('input', {
+    type: 'file', accept: '.txt,text/plain', style: { display: 'none' },
+    onchange: (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        rows = aiParseTemplate(String(rd.result || ''));
+        preview.innerHTML = '';
+        if (!rows.length) {
+          status.textContent = 'Nothing usable in that file. Every entry needs a ### line, '
+            + 'a question under it, and an answer under that.';
+          return;
+        }
+        status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} ready. `
+          + 'Check them, then add to knowledge.';
+        rows.slice(0, 30).forEach((r) => preview.append(el('div', { className: 'bk-row' },
+          el('div', { style: { flex: '1', minWidth: '0' } },
+            el('div', { style: { fontSize: '12.5px' } }, r.title),
+            el('div', { className: 'muted', style: { fontSize: '11px' } }, r.body.slice(0, 90))),
+          r.tags.length ? el('span', { className: 'rate-tag cost' }, r.tags.join(', ').slice(0, 24)) : null)));
+        if (rows.length > 30) preview.append(el('div', { className: 'muted' }, `…and ${rows.length - 30} more`));
+      };
+      rd.readAsText(f);
+      e.target.value = '';                          // re-picking the same file must re-read it
+    },
+  });
+
+  const save = async () => {
+    if (!rows.length) return toast('Upload a filled-in file first', 'err');
+    let n = 0;
+    for (const r of rows) {
+      const ok = await ott.ai.saveKnowledgeRow(activeId, {
+        kind: 'faq', title: r.title, body: r.body, tags: r.tags.concat(['from-file']),
+      });
+      if (ok) n++;
+    }
+    rows = []; preview.innerHTML = ''; status.textContent = '';
+    toast(`Added ${n} entr${n === 1 ? 'y' : 'ies'} to knowledge`);
+    refreshPanel('ai');
+  };
+
+  return el('div', {},
+    el('div', { className: 'fp-note' },
+      'Download the file, fill in your answers in any text editor, and upload it back. '
+      + 'Useful for writing a lot at once, or for handing to someone else to fill in.'),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn', onclick: aiDownloadTemplate }, 'Download blank file'),
+      el('button', { className: 'btn', onclick: () => inp.click() }, 'Upload filled file'),
+      el('button', { className: 'btn primary', onclick: save }, 'Add to knowledge')),
+    inp, status, preview);
+}
+
+// ---------------- Training: website sitemap ----------------
+// The catalog importer already reads product pages for prices. This is the other half:
+// everything that is not a product - policies, FAQs, shipping, returns - which is exactly
+// what customers ask about and what a price feed never contains.
+function aiTextFromHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,nav,header,footer,noscript,svg,form').forEach((n) => n.remove());
+  const main = doc.querySelector('main,article,[role="main"]') || doc.body;
+  const heading = doc.querySelector('h1') || doc.querySelector('title');
+  const text = String((main && main.textContent) || '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n\s*\n+/g, '\n\n')
+    .trim();
+  return { title: String((heading && heading.textContent) || '').replace(/\s+/g, ' ').trim(), text };
+}
+
+// Accepts a sitemap, a sitemap index, or a bare domain. An index points at more sitemaps
+// rather than pages, so it is followed one level - stopping there would silently return
+// nothing on the many sites that use one.
+async function aiCollectSitemapUrls(input, cap) {
+  const raw = input.trim().replace(/^https?:\/\//i, '');
+  const base = 'https://' + raw.replace(/\/+$/, '');
+  const tries = /\.xml(\?|$)/i.test(raw)
+    ? [base]
+    : [base + '/sitemap.xml', base + '/sitemap_index.xml', base + '/wp-sitemap.xml'];
+
+  const readXml = async (u) => {
+    const r = await ott.catalogFetch(u).catch(() => null);
+    if (!r || !r.ok || !r.html) return null;
+    const doc = new DOMParser().parseFromString(r.html, 'application/xml');
+    if (doc.querySelector('parsererror')) return null;
+    return doc;
+  };
+
+  for (const t of tries) {
+    const doc = await readXml(t);
+    if (!doc) continue;
+    const locs = [...doc.querySelectorAll('loc')].map((n) => n.textContent.trim()).filter(Boolean);
+    if (!locs.length) continue;
+    if (doc.querySelector('sitemapindex')) {
+      const pages = [];
+      for (const child of locs.slice(0, 5)) {
+        const sub = await readXml(child);
+        if (!sub) continue;
+        pages.push(...[...sub.querySelectorAll('url > loc')].map((n) => n.textContent.trim()));
+        if (pages.length >= cap) break;
+      }
+      if (pages.length) return { urls: pages.slice(0, cap), from: t };
+    }
+    return { urls: locs.slice(0, cap), from: t };
+  }
+  return { urls: [], from: null };
+}
+
+function aiImportSitemap() {
+  const url = el('input', { placeholder: 'yourshop.com   or   yourshop.com/sitemap.xml' });
+  const limit = el('input', { type: 'number', min: '1', max: '80', value: '25' });
+  const status = el('div', { className: 'fp-note' });
+  const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
+  let found = [];
+
+  const run = async (e) => {
+    if (!url.value.trim()) return toast('Enter your website address', 'err');
+    const btn = e && e.currentTarget;
+    if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
+    found = []; preview.innerHTML = '';
+    const cap = Math.max(1, Math.min(80, Number(limit.value) || 25));
+    try {
+      status.textContent = 'Looking for your sitemap…';
+      const { urls, from } = await aiCollectSitemapUrls(url.value.trim(), cap);
+      if (!urls.length) {
+        status.textContent = 'No sitemap found there. Try the full address of your sitemap.xml, '
+          + 'or use the fill-in file instead.';
+        return;
+      }
+      // Sequential on purpose. This hits a real website, and a burst of parallel requests
+      // from a desktop app is how you get rate-limited or firewalled.
+      for (let i = 0; i < urls.length; i++) {
+        status.textContent = `Reading page ${i + 1} of ${urls.length}…`;
+        const r = await ott.catalogFetch(urls[i]).catch(() => null);
+        if (!r || !r.ok || !r.html) continue;
+        const { title, text } = aiTextFromHtml(r.html);
+        // Under ~200 characters is a nav stub or a redirect landing, not an answer.
+        if (text.length < 200) continue;
+        found.push({ title: title || urls[i], body: text.slice(0, 4000), url: urls[i] });
+      }
+      status.textContent = found.length
+        ? `${found.length} page(s) read. Check them below - whatever you import becomes what the `
+          + 'assistant tells customers. Prices are never taken from here.'
+        : 'Pages were found but none had enough readable text to use.';
+      preview.innerHTML = '';
+      found.slice(0, 30).forEach((p) => preview.append(el('div', { className: 'bk-row' },
+        el('div', { style: { flex: '1', minWidth: '0' } },
+          el('div', { style: { fontSize: '12.5px' } }, p.title.slice(0, 80)),
+          el('div', { className: 'muted', style: { fontSize: '11px' } }, p.body.slice(0, 90) + '…')),
+        el('span', { className: 'rate-tag cost' }, (Math.round(p.body.length / 100) / 10) + 'k'))));
+      if (found.length > 30) preview.append(el('div', { className: 'muted' }, `…and ${found.length - 30} more`));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Read website'; }
+    }
+  };
+
+  const save = async () => {
+    if (!found.length) return toast('Read your website first', 'err');
+    let n = 0;
+    for (const p of found) {
+      const ok = await ott.ai.saveKnowledgeRow(activeId, {
+        kind: 'note', title: p.title.slice(0, 120), body: p.body,
+        tags: ['website'], source: p.url,
+      });
+      if (ok) n++;
+    }
+    found = []; preview.innerHTML = '';
+    toast(`Added ${n} page(s) to knowledge`);
+    refreshPanel('ai');
+  };
+
+  return el('div', {},
+    el('div', { className: 'fp-note' },
+      'Reads the pages of your website - policies, FAQs, shipping, returns - so the assistant can answer '
+      + 'questions your product list does not cover. Prices are never taken from here.'),
+    el('div', { className: 'row' }, lbl('Website or sitemap address', url), lbl('Max pages', limit)),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn', onclick: run }, 'Read website'),
+      el('button', { className: 'btn primary', onclick: save }, 'Add to knowledge')),
+    status, preview);
+}

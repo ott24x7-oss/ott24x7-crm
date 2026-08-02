@@ -5,6 +5,7 @@ const { Worker } = require('node:worker_threads');
 const config = require('../config.js');
 const brand = require('../brand.js');
 const license = require('./license.js');
+const ai = require('./ai/index.js');
 
 let win;
 
@@ -206,6 +207,10 @@ ipcMain.handle('catalog:image', (_e, url) => grab(url, { asDataUri: true }));
 
 // Durable data store in userData (survives app updates — NSIS never touches userData).
 function dataDir() { const d = path.join(app.getPath('userData'), 'data'); fs.mkdirSync(d, { recursive: true }); return d; }
+
+// The assistant's knowledge, embeddings and reply log live in this process and on this
+// machine. Only the customer's message and the retrieved knowledge ever reach the model.
+ai.register(ipcMain, dataDir());
 // Backup to a real file the user chooses. A CRM's whole value is its history, and until
 // now that history only existed in this machine's localStorage.
 ipcMain.handle('backup:save', async (_e, json) => {
