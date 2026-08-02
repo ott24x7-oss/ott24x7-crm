@@ -19,12 +19,36 @@ function deviceId() {
   return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
 }
 
+// Verify the server's reply with its Ed25519 public key.
+//
+// This replaces an HMAC over a shared secret. That secret had to ship inside the app to
+// verify anything, so anyone holding a build — a customer, or a reseller handed a
+// white-label copy — could extract it and mint their own "activation valid" reply. Only
+// the public key ships now; forging a reply needs the private key, which never leaves
+// the server.
+//
+// Fails closed: no signature, a malformed one, or no public key configured all return
+// false, and the gate treats that exactly like an invalid licence.
 function verifySignature(resp) {
   if (!resp || typeof resp !== 'object') return false;
-  const { signature, ...core } = resp;
-  const expected = crypto.createHmac('sha256', config.LICENSE_SIGNING_SECRET)
-    .update(JSON.stringify(core)).digest('hex');
-  return signature === expected;
+  const pem = String(config.LICENSE_PUBLIC_KEY || '').trim();
+  if (!pem || !resp.sig) return false;
+
+  // Rebuild the exact bytes the server signed: everything except the two signature
+  // fields, in the order they arrived. Listing what to strip — rather than picking out
+  // known keys — is what keeps this working when the server adds a field like trialDays,
+  // which is inside the signed payload and must stay in the copy we hash.
+  const { signature, sig, ...core } = resp;
+  try {
+    return crypto.verify(
+      null,
+      Buffer.from(JSON.stringify(core), 'utf8'),
+      crypto.createPublicKey(pem),
+      Buffer.from(String(sig), 'base64'),
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function call(endpoint, body) {

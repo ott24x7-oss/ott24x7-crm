@@ -7,11 +7,16 @@ module.exports = {
   // Must match a product slug in the license server.
   PRODUCT_SLUG: process.env.PRODUCT_SLUG || 'ott24x7-crm',
 
-  // Must match LICENSE_SIGNING_SECRET on the server so the client can verify
-  // that an "activation valid" response genuinely came from your server.
-  // NOTE: client-side verification embeds this in the app by design; it only
-  // blocks trivial spoofing. Rotate it (here + server) together when needed.
-  LICENSE_SIGNING_SECRET: process.env.LICENSE_SIGNING_SECRET || '0f11e20cc49601d9a5471fb6a45590c44e8d5732c1145bcc355debfa41844cd86811730f4dcc4d94ab07b408fae9c90c',
+  // Public half of the server's Ed25519 signing key. Safe to ship: it can verify an
+  // "activation valid" reply but cannot produce one. The private half lives only in the
+  // license server's LICENSE_SIGNING_KEY env var.
+  //
+  // This replaced a shared HMAC secret that had to be embedded here to verify anything —
+  // which meant every build, including white-label copies handed to resellers, contained
+  // everything needed to forge a valid activation.
+  LICENSE_PUBLIC_KEY: process.env.LICENSE_PUBLIC_KEY || `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAXXKOzlneEZQKRQmQ4rb9FiP1dp0OGimONcijlnxAcaM=
+-----END PUBLIC KEY-----`,
 
   // WhatsApp Web is loaded in a persistent session so linking is a one-time step.
   WA_PARTITION: 'persist:whatsapp',
