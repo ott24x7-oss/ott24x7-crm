@@ -3509,9 +3509,32 @@ async function aiHandle(msg) {
   const number = digits(String(msg.number || ''));
   if (!number) return;
 
+  // The last few turns of this chat. This was passing an empty array, so every message was
+  // answered in isolation: a customer asking "how much is Netflix?" and then "and for three
+  // months?" got the second question answered with no idea what "it" referred to. It also
+  // held historyTurns at zero, which silently withheld 10% of the confidence score on every
+  // reply — pushing borderline answers into suggestions instead of sends.
+  //
+  // Trimmed to the recent tail because the orchestrator keeps only the last 8 turns anyway,
+  // and reading a long chat costs a round trip into the webview on every incoming message.
+  let history = [];
+  try {
+    const chat = await aiFetchChat(number, 20);
+    if (Array.isArray(chat)) {
+      const turns = chat.slice(-12).map((m) => ({ fromMe: m.fromMe, text: m.body }));
+      // The message that triggered this is already in the chat, and the orchestrator appends
+      // it again as the current turn. Left in, the model sees the customer ask the same
+      // thing twice in a row and answers as if they had repeated themselves.
+      const cur = String(msg.body || '').trim();
+      while (turns.length && !turns[turns.length - 1].fromMe
+             && String(turns[turns.length - 1].text || '').trim() === cur) turns.pop();
+      history = turns;
+    }
+  } catch (e) { /* no history is better than no reply — carry on without it */ }
+
   const r = await ott.ai.generate({
     accId: activeId, number, name: msg.name, text: msg.body, msgId: msg.msgId,
-    isGroup: !!msg.isGroup, history: [], products: aiProducts(),
+    isGroup: !!msg.isGroup, history, products: aiProducts(),
     customer: aiCustomer(number), lastActivityAt: aiLastActivity,
   });
   if (!r || !r.ok) { if (r && r.action === 'error') aiNotify('AI error: ' + r.err, 'err'); return; }
