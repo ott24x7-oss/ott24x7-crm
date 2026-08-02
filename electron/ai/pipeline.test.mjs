@@ -4,7 +4,10 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const src = fs.readFileSync('C:/Users/D K/ott24x7-crm/renderer/app.js', 'utf8');
+// Resolved from this file, not an absolute path. It was hardcoded to the machine it was
+// written on, so this test could never pass anywhere else - including CI.
+const src = fs.readFileSync(
+  new URL('../../renderer/app.js', import.meta.url), 'utf8');
 const from = src.indexOf('// ================= AI Sales Assistant (renderer) =================');
 const to = src.indexOf('// ---------- panel ----------');
 const block = src.slice(from, to);   // runtime only; the panel needs a real DOM
