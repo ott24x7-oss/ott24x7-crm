@@ -4500,3 +4500,262 @@ async function aiViewLogs() {
   box.append(list);
   return box;
 }
+
+// ---------------- Training: fill-in text file ----------------
+// A file the owner fills in offline. Typing knowledge into a form one row at a time does
+// not scale past a handful, and most owners already have this written down somewhere —
+// this lets them paste it in one go, or hand the file to staff to fill in.
+const AI_TEMPLATE = [
+  '# ===================================================================',
+  '# AI TRAINING FILE',
+  '# ===================================================================',
+  '#',
+  '# Fill this in and upload it back. Everything the assistant knows about',
+  '# your business comes from entries like these.',
+  '#',
+  '# HOW TO FILL IT IN',
+  '#   * Start every entry with ###',
+  '#   * The FIRST line after ### is the question, or a short title',
+  '#   * The lines under it are the answer',
+  '#   * Optional: a line starting with TAGS: to help it match',
+  '#   * Lines starting with # are ignored - including these',
+  '#',
+  '# Keep answers short and exact. The assistant repeats what you write here.',
+  '# Do NOT put prices you change often in this file - those come from your',
+  '# catalog, and a stale price here would be quoted to a customer as fact.',
+  '#',
+  '# ===================================================================',
+  '',
+  '### What are your delivery timings?',
+  'Orders placed before 6 PM are delivered the same day. After that, next morning.',
+  'TAGS: delivery, shipping, timing',
+  '',
+  '### Which payment methods do you accept?',
+  'UPI, GPay, PhonePe and Paytm. Bank transfer on request.',
+  'TAGS: payment, upi',
+  '',
+  '### Do you give a warranty?',
+  'Yes. If the account stops working inside the validity period we replace it free.',
+  'TAGS: warranty, replacement',
+  '',
+  '### ',
+  '',
+  '### ',
+  '',
+].join('\n');
+
+// Blocks split on ### at line start. Deliberately forgiving: unfilled placeholders, stray
+// blank lines and any amount of # commentary are skipped rather than rejected, because the
+// file comes back from a human who was not thinking about a parser.
+function aiParseTemplate(text) {
+  const out = [];
+  const blocks = String(text || '').split(/^\s*###\s*/m).slice(1);
+  for (const b of blocks) {
+    const lines = b.split(/\r?\n/).map((l) => l.replace(/\s+$/, ''))
+      .filter((l) => !/^\s*#/.test(l));
+    const title = (lines.shift() || '').trim();
+    let tags = [];
+    const body = lines.filter((l) => {
+      const m = /^\s*TAGS?\s*:\s*(.*)$/i.exec(l);
+      if (!m) return true;
+      tags = m[1].split(',').map((x) => x.trim()).filter(Boolean);
+      return false;
+    }).join('\n').trim();
+    if (!title || !body) continue;                 // an unfilled placeholder, not an error
+    out.push({ title: title.slice(0, 120), body, tags });
+  }
+  return out;
+}
+
+function aiDownloadTemplate() {
+  const url = URL.createObjectURL(new Blob([AI_TEMPLATE], { type: 'text/plain;charset=utf-8' }));
+  const a = el('a', { href: url, download: (BRAND.slug || 'ai') + '-training-template.txt' });
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Template downloaded - fill it in, then upload it back');
+}
+
+function aiUploadTemplate() {
+  const status = el('div', { className: 'fp-note' });
+  const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
+  let rows = [];
+
+  const inp = el('input', {
+    type: 'file', accept: '.txt,text/plain', style: { display: 'none' },
+    onchange: (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        rows = aiParseTemplate(String(rd.result || ''));
+        preview.innerHTML = '';
+        if (!rows.length) {
+          status.textContent = 'Nothing usable in that file. Every entry needs a ### line, '
+            + 'a question under it, and an answer under that.';
+          return;
+        }
+        status.textContent = `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} ready. `
+          + 'Check them, then add to knowledge.';
+        rows.slice(0, 30).forEach((r) => preview.append(el('div', { className: 'bk-row' },
+          el('div', { style: { flex: '1', minWidth: '0' } },
+            el('div', { style: { fontSize: '12.5px' } }, r.title),
+            el('div', { className: 'muted', style: { fontSize: '11px' } }, r.body.slice(0, 90))),
+          r.tags.length ? el('span', { className: 'rate-tag cost' }, r.tags.join(', ').slice(0, 24)) : null)));
+        if (rows.length > 30) preview.append(el('div', { className: 'muted' }, `…and ${rows.length - 30} more`));
+      };
+      rd.readAsText(f);
+      e.target.value = '';                          // re-picking the same file must re-read it
+    },
+  });
+
+  const save = async () => {
+    if (!rows.length) return toast('Upload a filled-in file first', 'err');
+    let n = 0;
+    for (const r of rows) {
+      const ok = await ott.ai.saveKnowledgeRow(activeId, {
+        kind: 'faq', title: r.title, body: r.body, tags: r.tags.concat(['from-file']),
+      });
+      if (ok) n++;
+    }
+    rows = []; preview.innerHTML = ''; status.textContent = '';
+    toast(`Added ${n} entr${n === 1 ? 'y' : 'ies'} to knowledge`);
+    refreshPanel('ai');
+  };
+
+  return el('div', {},
+    el('div', { className: 'fp-note' },
+      'Download the file, fill in your answers in any text editor, and upload it back. '
+      + 'Useful for writing a lot at once, or for handing to someone else to fill in.'),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn', onclick: aiDownloadTemplate }, 'Download blank file'),
+      el('button', { className: 'btn', onclick: () => inp.click() }, 'Upload filled file'),
+      el('button', { className: 'btn primary', onclick: save }, 'Add to knowledge')),
+    inp, status, preview);
+}
+
+// ---------------- Training: website sitemap ----------------
+// The catalog importer already reads product pages for prices. This is the other half:
+// everything that is not a product - policies, FAQs, shipping, returns - which is exactly
+// what customers ask about and what a price feed never contains.
+function aiTextFromHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,nav,header,footer,noscript,svg,form').forEach((n) => n.remove());
+  const main = doc.querySelector('main,article,[role="main"]') || doc.body;
+  const heading = doc.querySelector('h1') || doc.querySelector('title');
+  const text = String((main && main.textContent) || '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n\s*\n+/g, '\n\n')
+    .trim();
+  return { title: String((heading && heading.textContent) || '').replace(/\s+/g, ' ').trim(), text };
+}
+
+// Accepts a sitemap, a sitemap index, or a bare domain. An index points at more sitemaps
+// rather than pages, so it is followed one level - stopping there would silently return
+// nothing on the many sites that use one.
+async function aiCollectSitemapUrls(input, cap) {
+  const raw = input.trim().replace(/^https?:\/\//i, '');
+  const base = 'https://' + raw.replace(/\/+$/, '');
+  const tries = /\.xml(\?|$)/i.test(raw)
+    ? [base]
+    : [base + '/sitemap.xml', base + '/sitemap_index.xml', base + '/wp-sitemap.xml'];
+
+  const readXml = async (u) => {
+    const r = await ott.catalogFetch(u).catch(() => null);
+    if (!r || !r.ok || !r.html) return null;
+    const doc = new DOMParser().parseFromString(r.html, 'application/xml');
+    if (doc.querySelector('parsererror')) return null;
+    return doc;
+  };
+
+  for (const t of tries) {
+    const doc = await readXml(t);
+    if (!doc) continue;
+    const locs = [...doc.querySelectorAll('loc')].map((n) => n.textContent.trim()).filter(Boolean);
+    if (!locs.length) continue;
+    if (doc.querySelector('sitemapindex')) {
+      const pages = [];
+      for (const child of locs.slice(0, 5)) {
+        const sub = await readXml(child);
+        if (!sub) continue;
+        pages.push(...[...sub.querySelectorAll('url > loc')].map((n) => n.textContent.trim()));
+        if (pages.length >= cap) break;
+      }
+      if (pages.length) return { urls: pages.slice(0, cap), from: t };
+    }
+    return { urls: locs.slice(0, cap), from: t };
+  }
+  return { urls: [], from: null };
+}
+
+function aiImportSitemap() {
+  const url = el('input', { placeholder: 'yourshop.com   or   yourshop.com/sitemap.xml' });
+  const limit = el('input', { type: 'number', min: '1', max: '80', value: '25' });
+  const status = el('div', { className: 'fp-note' });
+  const preview = el('div', { className: 'rules', style: { marginTop: '8px' } });
+  let found = [];
+
+  const run = async (e) => {
+    if (!url.value.trim()) return toast('Enter your website address', 'err');
+    const btn = e && e.currentTarget;
+    if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
+    found = []; preview.innerHTML = '';
+    const cap = Math.max(1, Math.min(80, Number(limit.value) || 25));
+    try {
+      status.textContent = 'Looking for your sitemap…';
+      const { urls, from } = await aiCollectSitemapUrls(url.value.trim(), cap);
+      if (!urls.length) {
+        status.textContent = 'No sitemap found there. Try the full address of your sitemap.xml, '
+          + 'or use the fill-in file instead.';
+        return;
+      }
+      // Sequential on purpose. This hits a real website, and a burst of parallel requests
+      // from a desktop app is how you get rate-limited or firewalled.
+      for (let i = 0; i < urls.length; i++) {
+        status.textContent = `Reading page ${i + 1} of ${urls.length}…`;
+        const r = await ott.catalogFetch(urls[i]).catch(() => null);
+        if (!r || !r.ok || !r.html) continue;
+        const { title, text } = aiTextFromHtml(r.html);
+        // Under ~200 characters is a nav stub or a redirect landing, not an answer.
+        if (text.length < 200) continue;
+        found.push({ title: title || urls[i], body: text.slice(0, 4000), url: urls[i] });
+      }
+      status.textContent = found.length
+        ? `${found.length} page(s) read. Check them below - whatever you import becomes what the `
+          + 'assistant tells customers. Prices are never taken from here.'
+        : 'Pages were found but none had enough readable text to use.';
+      preview.innerHTML = '';
+      found.slice(0, 30).forEach((p) => preview.append(el('div', { className: 'bk-row' },
+        el('div', { style: { flex: '1', minWidth: '0' } },
+          el('div', { style: { fontSize: '12.5px' } }, p.title.slice(0, 80)),
+          el('div', { className: 'muted', style: { fontSize: '11px' } }, p.body.slice(0, 90) + '…')),
+        el('span', { className: 'rate-tag cost' }, (Math.round(p.body.length / 100) / 10) + 'k'))));
+      if (found.length > 30) preview.append(el('div', { className: 'muted' }, `…and ${found.length - 30} more`));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Read website'; }
+    }
+  };
+
+  const save = async () => {
+    if (!found.length) return toast('Read your website first', 'err');
+    let n = 0;
+    for (const p of found) {
+      const ok = await ott.ai.saveKnowledgeRow(activeId, {
+        kind: 'note', title: p.title.slice(0, 120), body: p.body,
+        tags: ['website'], source: p.url,
+      });
+      if (ok) n++;
+    }
+    found = []; preview.innerHTML = '';
+    toast(`Added ${n} page(s) to knowledge`);
+    refreshPanel('ai');
+  };
+
+  return el('div', {},
+    el('div', { className: 'fp-note' },
+      'Reads the pages of your website - policies, FAQs, shipping, returns - so the assistant can answer '
+      + 'questions your product list does not cover. Prices are never taken from here.'),
+    el('div', { className: 'row' }, lbl('Website or sitemap address', url), lbl('Max pages', limit)),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn', onclick: run }, 'Read website'),
+      el('button', { className: 'btn primary', onclick: save }, 'Add to knowledge')),
+    status, preview);
+}
