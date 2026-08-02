@@ -3660,7 +3660,8 @@ async function aiViewInbox() {
   if (h.ok && !h.chatReady) {
     box.append(el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
       `The assistant cannot reply: "${s.chatModel}" is not installed. `
-      + (h.chatSuggestion ? `You do have "${h.chatSuggestion}".` : `Run: ollama pull ${s.chatModel}`)));
+      + (h.chatSuggestion ? `You do have "${h.chatSuggestion}".`
+        : (h.hosted ? 'Check the model name against the list your provider publishes.' : `Run: ollama pull ${s.chatModel}`))));
     if (h.chatSuggestion) {
       box.append(el('button', { className: 'btn small primary', style: { marginBottom: '8px' }, onclick: async () => {
         await ott.ai.saveSettings(activeId, { chatModel: h.chatSuggestion });
@@ -3668,10 +3669,15 @@ async function aiViewInbox() {
       } }, `Use ${h.chatSuggestion} instead`));
     }
   }
-  if (h.ok && !h.embedReady) {
+  // Strictly false, never null. null means embeddings are switched off deliberately —
+  // HeyRoute serves none — and retrieval runs on keyword matching, which is a working
+  // configuration. Testing !embedReady treated that as a fault and showed a red
+  // "Search will not work: "" is not installed" banner with an empty model name.
+  if (h.ok && h.embedReady === false) {
     box.append(el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
-      `Search will not work: "${s.embedModel}" is not installed. `
-      + (h.embedSuggestion ? `You do have "${h.embedSuggestion}".` : `Run: ollama pull ${s.embedModel}`)));
+      `Search quality is reduced: "${s.embedModel}" is not available. `
+      + (h.embedSuggestion ? `You do have "${h.embedSuggestion}".`
+        : (h.hosted ? 'Your provider may not serve embeddings; clear the field to use keyword search instead.' : `Run: ollama pull ${s.embedModel}`))));
   }
 
   box.append(el('div', { className: 'row' },
@@ -3788,9 +3794,32 @@ async function aiViewSettings() {
     .forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
   mode.value = s.mode;
 
+  const provider = el('select');
+  [['heyroute', 'HeyRoute / OpenAI-compatible API'], ['ollama', 'Ollama (local, on this PC)']]
+    .forEach(([v, n]) => provider.append(el('option', { value: v }, n)));
+  provider.value = s.provider === 'ollama' ? 'ollama' : 'heyroute';
+
   const baseUrl = el('input', { value: s.baseUrl });
+  // type=password so a key is not readable over someone's shoulder or in a screen share —
+  // owners demo this app. Value still saves in full.
+  const apiKey = el('input', { type: 'password', value: s.apiKey || '', placeholder: 'sk-…', spellcheck: false });
   const chatModel = el('input', { value: s.chatModel });
-  const embedModel = el('input', { value: s.embedModel });
+  const embedModel = el('input', { value: s.embedModel, placeholder: 'leave empty if your provider has none' });
+
+  // Rows that only apply to one engine, so the panel never asks for something irrelevant.
+  const keyRow = lbl('API key', apiKey);
+  const privacy = el('div', { className: 'fp-note' });
+  const syncProvider = () => {
+    const local = provider.value === 'ollama';
+    keyRow.style.display = local ? 'none' : '';
+    // Accuracy matters more here than reassurance. On a hosted key the customer's message
+    // genuinely leaves this machine, and the old copy promised the opposite.
+    privacy.textContent = local
+      ? 'The assistant only runs while this app is open, and entirely on this computer. No customer data is sent anywhere.'
+      : 'The assistant only runs while this app is open. To write a reply it sends the customer’s message and the '
+        + 'matching notes from your knowledge base to your AI provider over the internet. Nothing else leaves this computer, '
+        + 'and no data is sent when the assistant is off.';
+  };
   const business = el('textarea', { value: s.businessInstructions || '',
     placeholder: 'How you want the assistant to talk about your business. Anything it must always say, or never say.' });
   const minConf = el('input', { type: 'number', min: '0', max: '100', value: String(Math.round(s.minConfidence * 100)) });
@@ -3809,21 +3838,40 @@ async function aiViewSettings() {
   const status = el('div', { className: 'fp-note' });
   const cmds = el('div', { className: 'fp-note' });
 
+  const isLocal = () => provider.value === 'ollama';
+
   const showCmds = () => {
-    cmds.textContent = 'Not installed yet? Run once in a terminal:  ollama pull '
-      + (chatModel.value.trim() || 'qwen3:4b') + '   then   ollama pull ' + (embedModel.value.trim() || 'nomic-embed-text');
+    // Only a local engine has anything to install. Telling someone on a hosted key to run
+    // "ollama pull" sends them off to fix a machine that is not the problem.
+    cmds.textContent = isLocal()
+      ? ('Not installed yet? Run once in a terminal:  ollama pull '
+        + (chatModel.value.trim() || 'qwen3:4b')
+        + (embedModel.value.trim() ? '   then   ollama pull ' + embedModel.value.trim() : ''))
+      : 'Paste the API key from your provider. The base address is usually just the site, e.g. https://heyroute.ai';
   };
-  chatModel.oninput = embedModel.oninput = showCmds; showCmds();
+  chatModel.oninput = embedModel.oninput = showCmds;
+  provider.onchange = () => { syncProvider(); showCmds(); };
+  syncProvider(); showCmds();
 
   const test = async () => {
     status.textContent = 'Testing…';
     await ott.ai.saveSettings(activeId, {
-      baseUrl: baseUrl.value.trim(), chatModel: chatModel.value.trim(), embedModel: embedModel.value.trim(),
+      provider: provider.value,
+      baseUrl: baseUrl.value.trim(), apiKey: apiKey.value.trim(),
+      chatModel: chatModel.value.trim(), embedModel: embedModel.value.trim(),
     });
     const h = await ott.ai.health(activeId);
     if (!h.ok) { status.textContent = h.err; return; }
-    status.textContent = `Connected to Ollama ${h.version}. ${h.models.length} model(s) installed. `
-      + `Chat model ${h.chatReady ? 'ready' : 'NOT installed'}, embedding model ${h.embedReady ? 'ready' : 'NOT installed'}.`;
+    // Worded per engine. "N model(s) installed" is meaningless against a gateway, and
+    // "embedding model NOT installed" when embeddings are switched off on purpose reads
+    // as a fault — that class of misleading status is what got this feature withdrawn.
+    const embedNote = h.embedReady === null
+      ? 'Embeddings off — search runs on keyword matching.'
+      : `Embedding model ${h.embedReady ? 'ready' : 'NOT available'}.`;
+    status.textContent = h.hosted
+      ? `Connected. ${h.version}. Chat model ${h.chatReady ? 'ready' : 'NOT in this account\'s model list'}. ${embedNote}`
+      : `Connected to Ollama ${h.version}. ${h.models.length} model(s) installed. `
+        + `Chat model ${h.chatReady ? 'ready' : 'NOT installed'}. ${embedNote}`;
     // Offer what is actually installed rather than making the owner type a name exactly.
     if (h.models.length) {
       const pick = el('select');
@@ -3835,12 +3883,13 @@ async function aiViewSettings() {
   };
 
   box.append(
-    el('div', { className: 'fp-note' },
-      'The assistant only runs while WA-CRM is open, and only on this computer. No customer data is sent anywhere.'),
+    privacy,
     lbl('Mode', mode),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '10px 0' } }),
     el('b', {}, 'Connection'),
-    lbl('Ollama address', baseUrl),
+    lbl('AI engine', provider),
+    lbl('Address', baseUrl),
+    keyRow,
     el('div', { className: 'row' }, lbl('Chat model', chatModel), lbl('Embedding model', embedModel)),
     el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: test }, 'Test connection')),
     status, cmds,
@@ -3862,7 +3911,8 @@ async function aiViewSettings() {
         if (!go) return;
       }
       await ott.ai.saveSettings(activeId, {
-        mode: mode.value, baseUrl: baseUrl.value.trim(), chatModel: chatModel.value.trim(),
+        mode: mode.value, provider: provider.value, baseUrl: baseUrl.value.trim(),
+        apiKey: apiKey.value.trim(), chatModel: chatModel.value.trim(),
         embedModel: embedModel.value.trim(), businessInstructions: business.value,
         minConfidence: Math.max(0, Math.min(1, Number(minConf.value) / 100)),
         replyDelayMs: Math.max(0, Number(delay.value) * 1000),

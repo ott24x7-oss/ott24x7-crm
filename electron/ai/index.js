@@ -236,13 +236,21 @@ function register(ipc, dataDir) {
       // Exact tag match, with :latest filled in the way Ollama does. A prefix match said
       // "qwen3:4b ready" because "qwen3.5:latest" starts with "qwen3" — the panel showed
       // Ready and every reply then failed with "model not installed".
+      // Hosted gateways are keyed, not installed: what the provider lists is what is
+      // callable. Reported honestly either way, because claiming a model was ready when it
+      // was not is the single failure that cost this feature its trust.
+      hosted: s.provider !== 'ollama',
       chatReady: have.has(tag(s.chatModel)),
-      embedReady: have.has(tag(s.embedModel)),
+      // null, not false, when embeddings are deliberately switched off — HeyRoute serves
+      // no embedding endpoint at any tier, and retrieval runs on term matching instead.
+      // Reporting false made the panel warn that "" was not installed, which reads as a
+      // fault rather than a configuration.
+      embedReady: s.embedModel ? have.has(tag(s.embedModel)) : null,
       // When the configured model is missing, name one that is actually here so the owner
       // can fix it in a click instead of guessing.
       chatSuggestion: have.has(tag(s.chatModel)) ? null
         : (names.find((n) => !/embed|bge|minilm|e5|gte/i.test(n)) || null),
-      embedSuggestion: have.has(tag(s.embedModel)) ? null
+      embedSuggestion: (!s.embedModel || have.has(tag(s.embedModel))) ? null
         : (names.find((n) => /embed|bge|minilm|e5|gte/i.test(n)) || null),
     };
   });
