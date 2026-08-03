@@ -905,6 +905,9 @@ RENDER.quick = (b) => {
       const qs = store.get('ott_quick', []);
       for (const [n, p] of rows.entries()) {
         const item = {
+          // Kept so the assistant can paste a real buy link, the way the Telegram bot does.
+          // Without it a reply can name a product but never point at it.
+          url: p.url || '',
           title: p.title, category: p.category || '', text: catalogMessage(p),
           // Never pinned on import: sixty new chips would bury the chat bar. Pin the few
           // you actually use from the list below.
@@ -3491,6 +3494,7 @@ function aiProducts() {
       price: Number(q.sell) || 0,
       category: q.category || '',
       stock: q.stock !== false,
+      url: q.url || '',
     }))
     .filter((p) => p.title);
 }

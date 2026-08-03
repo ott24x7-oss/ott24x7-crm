@@ -170,7 +170,8 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
     lines.push('LIVE PRODUCT DATA — the only prices and stock you may quote:');
     for (const p of products.slice(0, 25)) {
       lines.push(`- ${p.title}${p.price ? ` | price ₹${p.price}` : ' | price not listed'}` +
-        `${p.stock === false ? ' | OUT OF STOCK' : ''}${p.category ? ` | ${p.category}` : ''}`);
+        `${p.stock === false ? ' | OUT OF STOCK' : ''}${p.category ? ` | ${p.category}` : ''}` +
+        `${p.url ? ` | link ${p.url}` : ''}`);
     }
     lines.push('');
   }
@@ -194,6 +195,26 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
     lines.push('');
   }
 
+  // Tone and layout, ported from the Telegram/WhatsApp bot this business already runs.
+  // Without these the model answers correctly and reads like a form letter: one dense
+  // paragraph with prices and links buried in it. The bot's replies land better purely
+  // because of how they are laid out, and that is entirely a prompt matter.
+  lines.push('TONE — sound like a warm, helpful human, not a robot:');
+  lines.push('- Open with a short friendly line that directly answers what they asked.');
+  lines.push('- Be natural and kind. If something is unavailable, say so and offer the closest item.');
+  lines.push('- At most 1-2 emojis. Never more.');
+  lines.push('- Close with a short friendly nudge or question.');
+  lines.push('- Never repeat a point twice or over-explain.');
+  lines.push('');
+  lines.push('FORMAT — this matters as much as the words. WhatsApp, not email:');
+  lines.push('- Short: a friendly opener, at most 2-3 options, a one-line close.');
+  lines.push('- Put each product on its OWN line, with a blank line between products:');
+  lines.push('      *Product name* — ₹price');
+  lines.push('      <its link on its own line, if one is given above>');
+  lines.push('- NEVER cram products or links into one paragraph.');
+  lines.push('- Every link goes on its own line so it stays tappable.');
+  lines.push('- Bold with *single asterisks* — that is what WhatsApp understands.');
+  lines.push('');
   lines.push('Write only the reply text. No greeting boilerplate if the conversation is already going.');
   return lines.join('\n');
 }
