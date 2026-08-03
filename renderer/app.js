@@ -1454,7 +1454,7 @@ function applyLeadButton(accId) {
 
        The flag is now claimed only once the listener is genuinely attached, and it keeps
        trying until it is. */
-    function onMsg(m){window.__ott_evt=(window.__ott_evt||0)+1;(async function(){try{if(!m)return;var body=(m.body||'');
+    function onMsg(m){window.__ott_evt=(window.__ott_evt||0)+1;window.__ott_evt_at=Date.now();(async function(){try{if(!m)return;var body=(m.body||'');
       if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});
         /* An owner reply is the strongest possible signal that they are present. */
         window.__ott_ownerq=window.__ott_ownerq||[];window.__ott_ownerq.push({to:(m.to&&(m.to._serialized||m.to))||'',ts:Date.now()});return;}
@@ -1482,6 +1482,7 @@ function applyLeadButton(accId) {
         if(!WPP.isReady)return false;
         WPP.on('chat.new_message',onMsg);
         window.__ott_lead_init=true;   /* only now that it is really attached */
+        window.__ott_hook_at=Date.now();
         return true;
       }catch(e){return false;}
     }
@@ -3779,6 +3780,7 @@ async function aiDiagnose(accId) {
     page = await wv.executeJavaScript(`(function(){var o={wpp:false,on:false,hooked:false,q:-1,guard:false};
       try{o.wpp=(typeof WPP!=='undefined');o.on=(o.wpp&&typeof WPP.on==='function');
       o.ready=(o.wpp&&!!WPP.isReady);o.evt=(window.__ott_evt||0);
+      o.hookAt=(window.__ott_hook_at||0);o.evtAt=(window.__ott_evt_at||0);
       o.hooked=!!window.__ott_lead_init;o.guard=!!window.__ott_guard_init;
       o.q=(window.__ott_inq||[]).length;}catch(e){}return o;})()`);
   } catch (e) {
@@ -3792,11 +3794,21 @@ async function aiDiagnose(accId) {
     page.ready ? '' : 'wa-js has loaded but is not hooked into WhatsApp yet. Attaching now would look fine and receive nothing.');
   add(!!page.hooked, 'Listening for new messages',
     page.hooked ? '' : 'NOT attached — no incoming message can reach the assistant. This is the fault that made it silent.');
-  // "Registered" and "receiving" are different claims. The first was true while the second
-  // was false, and only the first was ever checked.
-  add(page.evt > 0, 'Listener has actually received messages',
-    page.evt > 0 ? `${page.evt} since this account loaded`
-                 : 'ZERO events. It is registered but WhatsApp is not feeding it — reload the account tab.');
+  // "Registered" and "receiving" are different claims, and the first was true while the
+  // second was false. But zero is not proof of anything on its own: right after a restart it
+  // just means nobody has messaged yet. Reporting that as a failure sent the owner chasing a
+  // fault that was not there. Only call it broken once enough time has passed that a message
+  // really should have landed, and say plainly when the reading is simply inconclusive.
+  const upMin = page.hookAt ? Math.round((Date.now() - page.hookAt) / 60000) : 0;
+  if (page.evt > 0) {
+    const ago = page.evtAt ? Math.round((Date.now() - page.evtAt) / 1000) : null;
+    add(true, 'Listener is receiving messages',
+      `${page.evt} received${ago === null ? '' : `, last one ${ago}s ago`}`);
+  } else {
+    add(true, 'Listener is receiving messages',
+      `nothing yet — attached ${upMin < 1 ? 'just now' : upMin + ' min ago'}. `
+      + 'Send a message from another phone, then press this again: the count must go up.');
+  }
   add(page.q >= 0, 'Message queue reachable', page.q >= 0 ? `${page.q} waiting to be picked up` : 'queue missing');
 
   // The renderer side.
