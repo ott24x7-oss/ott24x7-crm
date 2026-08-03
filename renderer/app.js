@@ -3604,7 +3604,20 @@ function aiCustomer(number) {
 // Called from pollTick for every incoming message. Returns immediately.
 function aiOnIncoming(msg) {
   if (!msg || !msg.body || !window.ott || !ott.ai) return;
-  if (!aiSettingsCache || aiSettingsCache.mode === 'off') return;
+  // The cache is a shortcut, not the authority.
+  //
+  // This used to drop the message whenever the cache was empty. aiInit fills it once and
+  // nothing retries, so a single failed read - an IPC hiccup, a call before the account
+  // existed - silently disabled the assistant for the whole session. Every message vanished
+  // here, before generate() was reached, so not even a skip was recorded and the Logs screen
+  // read "No AI activity yet" with nothing to explain it. Same shape as the listener that
+  // claimed to be installed and was not: a cheap early return standing in for a decision the
+  // main process makes properly a moment later.
+  //
+  // An empty cache now means "ask", not "ignore" - generate() reads the real settings and
+  // records its reason either way.
+  if (!aiSettingsCache) { try { aiInit(); } catch (e) {} }
+  else if (aiSettingsCache.mode === 'off') return;
   aiQueue.push(msg);
   aiDrain();
 }
