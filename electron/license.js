@@ -69,11 +69,29 @@ function verifySignature(resp) {
 const TIMEOUT_MS = 12000;
 const ATTEMPTS = 3;
 
+// Chromium's network stack, not Node's.
+//
+// Node's fetch (undici) ignores the system proxy, keeps its own DNS and connection
+// handling, and on a consumer connection fails in ways the same request through a browser
+// does not — which is what "Cannot reach license server" turned out to be on a machine
+// where the server was demonstrably up. Electron's net.fetch is the same API backed by the
+// stack Chromium already uses for the WhatsApp webview in this app, so it inherits proxy
+// settings, the OS certificate store and far better connection recovery.
+//
+// Falls back to global fetch outside Electron, so this file stays testable.
+let netFetch = null;
+function httpFetch(url, opts) {
+  if (netFetch === null) {
+    try { netFetch = require('electron').net.fetch; } catch { netFetch = false; }
+  }
+  return netFetch ? netFetch(url, opts) : fetch(url, opts);
+}
+
 async function once(endpoint, body) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${config.LICENSE_SERVER}/api/v1/${endpoint}`, {
+    const res = await httpFetch(`${config.LICENSE_SERVER}/api/v1/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

@@ -15,7 +15,7 @@ const DEFAULT_TIMEOUT = 150000;
 
 // fetch with a hard deadline. Ollama on a cold model can sit for a long time, and a
 // blocked reply is worse than a fast failure the owner can see and act on.
-async function req(url, opts, timeoutMs, label, model) {
+async function req(url, opts, timeoutMs, label, model, hosted) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs || DEFAULT_TIMEOUT);
   const started = Date.now();
@@ -24,7 +24,7 @@ async function req(url, opts, timeoutMs, label, model) {
     const ms = Date.now() - started;
     if (!r.ok) {
       const body = await r.text().catch(() => '');
-      return { ok: false, ms, err: friendly(r.status, body, label, model) };
+      return { ok: false, ms, err: friendly(r.status, body, label, model, hosted) };
     }
     return { ok: true, ms, json: await r.json() };
   } catch (e) {
@@ -33,7 +33,9 @@ async function req(url, opts, timeoutMs, label, model) {
       return { ok: false, ms, err: `${label} timed out after ${Math.round((timeoutMs || DEFAULT_TIMEOUT) / 1000)}s. A large model on a slow machine can exceed this — raise the timeout or use a smaller model.` };
     }
     if (/ECONNREFUSED|fetch failed/i.test(String(e && e.message))) {
-      return { ok: false, ms, err: 'Cannot reach the AI server. Is Ollama running? Start it with "ollama serve".' };
+      return { ok: false, ms, err: hosted
+        ? 'Cannot reach the AI service. Check the address and your internet connection.'
+        : 'Cannot reach the AI server. Is Ollama running? Start it with "ollama serve".' };
     }
     return { ok: false, ms, err: String((e && e.message) || e) };
   } finally {
@@ -42,7 +44,18 @@ async function req(url, opts, timeoutMs, label, model) {
 }
 
 // Turn an HTTP status into something an owner can act on, not a stack trace.
-function friendly(status, body, label, model) {
+function friendly(status, body, label, model, hosted) {
+  // Every message below used to assume a local engine, and req() is shared by both
+  // providers - so a hosted gateway returning 404 for an endpoint it does not serve told
+  // the owner to run "ollama pull gpt-5.6-luna". That sends someone to install software
+  // they do not need, to fix a problem they do not have.
+  if (hosted) {
+    if (status === 401 || status === 403) return `${label}: the API key was rejected (HTTP ${status}). Check the key and that it has credit.`;
+    if (status === 404) return `${label}: your provider does not serve this endpoint or model. Check the model name against their published list; if they only serve chat, leave the embedding model empty.`;
+    if (status === 429) return `${label}: rate limited by your provider (HTTP 429). Wait a moment, or check your plan's limits.`;
+    if (status >= 500) return `${label}: your AI provider returned ${status}. That is their side - try again shortly.`;
+    return `${label} failed (HTTP ${status}). ${String(body).slice(0, 200)}`;
+  }
   if (status === 404 && /model/i.test(body)) {
     // /api/chat names the model in its error; /api/embed does not. Fall back to the model
     // we asked for, so the message is always a command the owner can paste and run.
@@ -186,7 +199,7 @@ function openaiCompatible(cfg) {
 
     async health() {
       if (!apiKey) return { ok: false, err: 'No API key set. Paste the key from your provider into AI settings.' };
-      const r = await req(`${v1}/models`, { method: 'GET', headers: headers() }, 12000, 'Health check');
+      const r = await req(`${v1}/models`, { method: 'GET', headers: headers() }, 12000, 'Health check', null, true);
       if (!r.ok) return { ok: false, err: r.err };
       const list = (r.json && (r.json.data || r.json.models)) || [];
       // Reachable and authenticated is the honest claim. Whether the *chosen* model exists
@@ -196,7 +209,7 @@ function openaiCompatible(cfg) {
 
     async models() {
       if (!apiKey) return { ok: false, err: 'No API key set.', models: [] };
-      const r = await req(`${v1}/models`, { method: 'GET', headers: headers() }, 15000, 'Model list');
+      const r = await req(`${v1}/models`, { method: 'GET', headers: headers() }, 15000, 'Model list', null, true);
       if (!r.ok) return { ok: false, err: r.err, models: [] };
       const raw = (r.json && (r.json.data || r.json.models)) || [];
       const models = raw.map((m) => {
@@ -220,7 +233,7 @@ function openaiCompatible(cfg) {
       };
       const r = await withRetry(
         () => req(`${v1}/chat/completions`, { method: 'POST', headers: headers(), body: JSON.stringify(body) },
-          timeout, 'Chat', body.model),
+          timeout, 'Chat', body.model, true),
         2
       );
       if (!r.ok) return { ok: false, err: r.err, ms: r.ms };
@@ -243,7 +256,7 @@ function openaiCompatible(cfg) {
       const r = await withRetry(
         () => req(`${v1}/embeddings`, { method: 'POST', headers: headers(),
           body: JSON.stringify({ model: embedModel, input: texts }) },
-          timeout, 'Embedding', embedModel),
+          timeout, 'Embedding', embedModel, true),
         2
       );
       if (!r.ok) {

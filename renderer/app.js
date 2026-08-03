@@ -3826,7 +3826,7 @@ function aiCard(sg) {
         await ott.ai.saveKnowledgeRow(activeId, {
           kind: 'faq', title: (sg.incoming || '').slice(0, 60), body: t, tags: ['from-chat'],
         });
-        toast('Added to knowledge — press Re-embed');
+        toast('Added to knowledge');
       } }, 'Save to knowledge')));
 }
 
@@ -3986,6 +3986,11 @@ async function aiViewSettings() {
 async function aiViewKnowledge() {
   const box = el('div', {});
   const rows = (await ott.ai.getKnowledge(activeId)).rows || [];
+  // With no embedding model, retrieval runs on keyword matching and every entry is already
+  // searchable. Without knowing that, this screen called 262 working entries "not
+  // searchable yet" and pushed a Re-embed that could only ever fail.
+  const kSet = (await ott.ai.getSettings(activeId).catch(() => null)) || {};
+  const embedsOn = !!((kSet.settings || {}).embedModel || '').trim();
 
   // ---- state ----
   let query = '';
@@ -4013,7 +4018,7 @@ async function aiViewKnowledge() {
           kind: kind.value, title: title.value.trim(), body: body.value.trim(),
           tags: tags.value.split(',').map((x) => x.trim()).filter(Boolean),
         });
-        toast('Saved — press Re-embed to make it searchable');
+        toast('Saved — the assistant can use it now');
         refreshPanel('ai');
       } }, 'Save entry')));
 
@@ -4132,10 +4137,15 @@ async function aiViewKnowledge() {
       'The assistant answers only from these entries plus your live catalog. Prices and stock are always read from the catalog, never from here, so they can never go stale.'),
     el('div', { className: 'bk-kpis' },
       dKpi('Entries', String(rows.length), dupes ? `${dupes} duplicated` : (off ? `${off} turned off` : 'All active'), dupes ? 'bad' : (rows.length ? 'good' : '')),
-      dKpi('Searchable', String(rows.length - pending), pending ? `${pending} waiting` : 'All embedded', pending ? 'warn' : 'good'),
+      embedsOn
+        ? dKpi('Searchable', String(rows.length - pending), pending ? `${pending} waiting` : 'All embedded', pending ? 'warn' : 'good')
+        : dKpi('Searchable', String(rows.length), 'By keyword', 'good'),
       dKpi('Products', String(rows.filter((r) => (r.kind || '') === 'product').length), 'From your catalog')),
-    pending ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
+    (embedsOn && pending) ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
       pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' not searchable yet — press Re-embed.') : null,
+    (!embedsOn && rows.length) ? el('div', { className: 'fp-note' },
+      'Your AI provider does not offer embeddings, so these entries are searched by keyword. '
+      + 'They are all in use — nothing needs embedding.') : null,
     dupes ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
       `${dupes} duplicate entr${dupes === 1 ? 'y' : 'ies'} — the same title saved more than once. `
       + 'Older imports stacked copies; clearing them makes retrieval sharper.') : null,
@@ -4168,12 +4178,12 @@ async function aiViewKnowledge() {
         refreshPanel('ai');
       } }, 'Import from catalog'),
       el('button', { className: 'btn small', onclick: aiImportWebsite }, 'Import from website'),
-      el('button', { className: 'btn small' + (pending ? ' primary' : ''), onclick: async () => {
+      embedsOn ? el('button', { className: 'btn small' + (pending ? ' primary' : ''), onclick: async () => {
         toast('Embedding…');
         const r = await ott.ai.embedAll(activeId);
         toast(r.ok ? r.embedded + ' entries embedded' : r.err, r.ok ? 'ok' : 'err');
         refreshPanel('ai');
-      } }, 'Re-embed')),
+      } }, 'Re-embed') : null),
     addForm,
     rows.length > 8 ? search : null,
     listBox,
@@ -4336,7 +4346,7 @@ async function aiViewTraining() {
         el('button', { className: 'btn small', onclick: async () => {
           let n2 = 0;
           for (const card of [...list.children]) { if (card._approve) { await card._approve(); n2++; } }
-          toast(n2 ? n2 + ' example(s) saved — press Re-embed in Knowledge' : 'Nothing selected', n2 ? 'ok' : 'err');
+          toast(n2 ? n2 + ' example(s) saved' : 'Nothing selected', n2 ? 'ok' : 'err');
           refreshPanel('ai');
         } }, 'Approve all shown')),
       list);
@@ -4496,7 +4506,7 @@ async function aiImportWebsite() {
       notes++;
     }
     closeAiModal();
-    toast(`${added} added, ${updated} updated, ${notes} description(s) saved — press Re-embed`);
+    toast(`${added} added, ${updated} updated, ${notes} description(s) saved`);
     refreshPanel('ai');
   };
 
