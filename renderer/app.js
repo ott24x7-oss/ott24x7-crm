@@ -3989,8 +3989,13 @@ async function aiViewKnowledge() {
   // With no embedding model, retrieval runs on keyword matching and every entry is already
   // searchable. Without knowing that, this screen called 262 working entries "not
   // searchable yet" and pushed a Re-embed that could only ever fail.
-  const kSet = (await ott.ai.getSettings(activeId).catch(() => null)) || {};
-  const embedsOn = !!((kSet.settings || {}).embedModel || '').trim();
+  // Guarded rather than chained: if this IPC is ever missing, calling .catch on undefined
+  // throws and takes the whole Knowledge screen down over a cosmetic detail.
+  let embedsOn = false;
+  try {
+    const kSet = (ott.ai.getSettings ? await ott.ai.getSettings(activeId) : null) || {};
+    embedsOn = !!String((kSet.settings || {}).embedModel || '').trim();
+  } catch (e) { embedsOn = false; }
 
   // ---- state ----
   let query = '';

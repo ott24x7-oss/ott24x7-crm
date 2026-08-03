@@ -53,7 +53,8 @@ async function build() {
     toast: () => {}, refreshPanel: () => {}, aiConfirm: async () => true,
     aiProducts: () => [], aiImportWebsite: () => {}, activeId: 'a1',
     store: { get: () => [], set: () => true },
-    ott: { ai: { getKnowledge: async () => ({ rows: ROWS }), saveKnowledgeRow: async () => ({}), deleteKnowledge: async () => ({}), embedAll: async () => ({ ok: true, embedded: 0 }) } },
+    ott: { ai: { getSettings: async () => ({ settings: { embedModel: '' } }),
+      getKnowledge: async () => ({ rows: ROWS }), saveKnowledgeRow: async () => ({}), deleteKnowledge: async () => ({}), embedAll: async () => ({ ok: true, embedded: 0 }) } },
   });
   ctx.globalThis = ctx;
   vm.runInContext(block + '\n;globalThis.V = aiViewKnowledge;', ctx);
