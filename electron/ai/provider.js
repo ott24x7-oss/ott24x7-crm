@@ -24,7 +24,10 @@ async function req(url, opts, timeoutMs, label, model, hosted) {
     const ms = Date.now() - started;
     if (!r.ok) {
       const body = await r.text().catch(() => '');
-      return { ok: false, ms, err: friendly(r.status, body, label, model, hosted) };
+      // Carry the status up. Callers need to tell "this will never work" (the gateway does
+      // not serve this endpoint) from "try again later" — the first should switch something
+      // off, the second should not.
+      return { ok: false, ms, status: r.status, err: friendly(r.status, body, label, model, hosted) };
     }
     return { ok: true, ms, json: await r.json() };
   } catch (e) {
@@ -269,7 +272,13 @@ function openaiCompatible(cfg) {
         // A chat-only gateway is a normal configuration, not a fault. Say so precisely so
         // the owner knows retrieval falls back to keyword matching rather than assuming
         // training is broken.
-        return { ok: false, vectors: [],
+        //
+        // 400 and 404 from an embeddings endpoint mean the gateway will not serve this
+        // request however many times it is asked — the model is not one it carries, or it
+        // routes chat only. Saying so lets the caller switch embeddings off once instead of
+        // reporting the same failure on every message the owner receives.
+        const unsupported = r.status === 400 || r.status === 404;
+        return { ok: false, vectors: [], status: r.status, unsupported,
           err: `${r.err} — if this gateway only serves chat models, leave embeddings off; training still works on keyword matching.` };
       }
       const vectors = ((r.json && r.json.data) || []).map((d) => d.embedding).filter(Array.isArray);

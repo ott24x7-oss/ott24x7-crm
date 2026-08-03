@@ -50,6 +50,24 @@ function ownerAvailability(settings, { lastActivityAt, now }) {
 }
 
 // ---------- embedding ----------
+
+// Switch embeddings off for good when the provider says it will never serve them.
+//
+// Clearing a known-bad model name at startup only helps for names that were thought of in
+// advance. This handles the general case: whatever the model is called, if the gateway
+// answers 400 or 404 the app stops asking. Without it the owner sees the same red failure
+// on every single incoming message, and a Re-embed button that cannot ever succeed.
+//
+// Retrieval is unaffected — search falls back to keyword matching, which is what was
+// actually answering questions the whole time.
+function disableEmbeddings(accId, why) {
+  const s = store.getSettings(accId);
+  if (!s.embedModel) return false;
+  store.saveSettings(accId, { ...s, embedModel: '' });
+  console.warn(`[ai] embeddings disabled for ${accId}: ${why}`);
+  return true;
+}
+
 async function embedRows(accId, rows, kind) {
   const s = store.getSettings(accId);
   const p = providerFor(s);
@@ -64,7 +82,14 @@ async function embedRows(accId, rows, kind) {
       ? `${r.question}\n${r.reply}`
       : `${r.title}\n${r.body}`).slice(0, 4000));
     const e = await p.embed(texts);
-    if (!e.ok) return { ok: false, err: e.err, embedded: done };
+    if (!e.ok) {
+      if (e.unsupported) {
+        disableEmbeddings(accId, `embeddings returned HTTP ${e.status}`);
+        // Not an error the owner has to act on — the knowledge is still searchable.
+        return { ok: true, embedded: done, disabled: true, err: e.err };
+      }
+      return { ok: false, err: e.err, embedded: done };
+    }
     batch.forEach((r, j) => { r.vec = e.vectors[j] || []; r.vecModel = s.embedModel; });
     done += batch.length;
   }
@@ -139,6 +164,9 @@ async function generate(ctx) {
   // message regardless, so a chat-only gateway returned HTTP 400 each time - a wasted round
   // trip on the reply path and an alarming error toast for a working configuration.
   const q = s.embedModel ? await p.embed(ctx.text) : { ok: false, vectors: [] };
+  // First customer message is enough to learn the gateway does not do embeddings. Turn it
+  // off here rather than repeating the same failed round trip on every message after it.
+  if (q.unsupported) disableEmbeddings(accId, `embeddings returned HTTP ${q.status}`);
   if (q.ok && q.vectors[0]) {
     hits = rag.search(q.vectors[0], knowledge, { topK: 5 });
     exampleHits = rag.search(q.vectors[0], examples, { topK: 3 });
