@@ -3674,11 +3674,14 @@ RENDER.ai = (b) => {
     wrap.append(body);
   };
 
-  [['inbox', 'Inbox'], ['settings', 'Settings'], ['knowledge', 'Knowledge'], ['training', 'Learn from chats'], ['logs', 'Logs']]
+  [['inbox', 'Inbox'], ['settings', 'Settings'], ['knowledge', 'Knowledge'], ['training', 'Train the AI'], ['logs', 'Logs']]
     .forEach(([k, lab]) => tabs.append(el('button', { className: 'btn small', onclick: () => { tab = k; draw(); } }, lab)));
 
   b.append(el('div', { className: 'fp-note' },
-    'A sales assistant that runs entirely on this computer. It reads your catalog and knowledge base, drafts replies in English, Hindi or Hinglish, and — once you switch it on — answers customers while you are away. It never invents a price and never confirms a payment.'),
+    'A sales assistant that reads your catalog and knowledge base, drafts replies in English, Hindi or Hinglish, '
+    + 'and — once you switch it on — answers customers while you are away. It never invents a price and never '
+    + 'confirms a payment. Open “Train the AI” to teach it your business: type entries, learn from a past chat, '
+    + 'fill in a text file, or read your website.'),
     tabs, wrap);
   draw();
 };

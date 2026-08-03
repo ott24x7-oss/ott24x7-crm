@@ -11,9 +11,16 @@ const { createProvider } = require('./provider');
 
 let ipcMain = null;
 
+// Every field the provider needs, listed explicitly so nothing from settings leaks into a
+// provider that has no business seeing it.
+//
+// apiKey was missing here. It saved correctly and sat in settings, but never reached the
+// provider, so a hosted engine reported "No API key set" no matter what was pasted in -
+// which looks exactly like a rejected key and sends you to check the wrong thing. This
+// list was written when the only engine was local and needed no credential.
 const providerFor = (s) => createProvider({
-  provider: s.provider, baseUrl: s.baseUrl, chatModel: s.chatModel,
-  embedModel: s.embedModel, timeoutMs: s.timeoutMs,
+  provider: s.provider, baseUrl: s.baseUrl, apiKey: s.apiKey,
+  chatModel: s.chatModel, embedModel: s.embedModel, timeoutMs: s.timeoutMs,
 });
 
 // ---------- owner availability ----------
