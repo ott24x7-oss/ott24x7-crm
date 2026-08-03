@@ -6,17 +6,52 @@ const path = require('node:path');
 const config = require('../config.js');
 
 // Stable-ish device fingerprint (hostname + arch + first MAC).
-function deviceId() {
+// Adapters that come and go. A VPN connecting, a dock being plugged in, or Hyper-V
+// starting all add interfaces, and Object.keys() order is not stable — so "the first MAC"
+// silently became a different MAC, which produced a different device id, which the server
+// correctly rejected as device_not_activated. That is the app deactivating itself, and
+// every drift also burned one of the licence's device slots.
+const VIRTUAL = /^(vethernet|veth|vmware|virtualbox|vbox|hyper-v|loopback|bluetooth|tap|tun|wsl|docker|zerotier|tailscale|wintun|npcap|teredo|isatap|nordlynx|proton|wg\d)/i;
+
+function pickMac() {
   const nets = os.networkInterfaces();
-  let mac = '';
+  const macs = [];
   for (const name of Object.keys(nets)) {
+    if (VIRTUAL.test(name)) continue;                       // ignore adapters that appear and vanish
     for (const ni of nets[name] || []) {
-      if (!ni.internal && ni.mac && ni.mac !== '00:00:00:00:00:00') { mac = ni.mac; break; }
+      if (!ni.internal && ni.mac && ni.mac !== '00:00:00:00:00:00') macs.push(ni.mac.toLowerCase());
     }
-    if (mac) break;
   }
-  const raw = `${os.hostname()}|${os.arch()}|${mac || os.userInfo().username}`;
-  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
+  // Sorted, so the answer does not depend on the order the OS happened to enumerate in.
+  macs.sort();
+  return macs[0] || '';
+}
+
+// Computed once, then written down. Even a perfectly deterministic fingerprint changes if
+// the hardware does — a replaced network card should not cost someone their activation —
+// so the id is persisted on first run and read back forever after. Hardware is only a
+// seed, never the identity.
+let cachedId = null;
+function idFile() {
+  try {
+    const { app } = require('electron');
+    return require('node:path').join(app.getPath('userData'), 'device.json');
+  } catch { return null; }
+}
+
+function deviceId() {
+  if (cachedId) return cachedId;
+  const file = idFile();
+  if (file) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8')).id;
+      if (saved && /^[a-f0-9]{32}$/.test(saved)) { cachedId = saved; return cachedId; }
+    } catch { /* first run, or unreadable — fall through and make one */ }
+  }
+  const raw = `${os.hostname()}|${os.arch()}|${pickMac() || os.userInfo().username}`;
+  cachedId = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
+  if (file) { try { fs.writeFileSync(file, JSON.stringify({ id: cachedId }), 'utf8'); } catch (e) {} }
+  return cachedId;
 }
 
 // Verify the server's reply with its Ed25519 public key.

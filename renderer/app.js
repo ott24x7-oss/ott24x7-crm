@@ -11,7 +11,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Keys mirrored to a durable file in userData so they survive every app update.
 // Everything the user would be upset to lose must be written to the durable file store
 // in userData, not just localStorage — localStorage does not survive a profile reset.
-const PERSIST_KEYS = ['ott_theme', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
+const PERSIST_KEYS = ['ott_theme', 'ott_lic_ok', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
   'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items',
   'ott_reminders', 'ott_schedule', 'ott_sig', 'ott_notes', 'ott_books', 'ott_deals', 'ott_deal_cfg'];
 const store = {
@@ -104,7 +104,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (saved) {
     $('#licenseKey').value = saved;
     const r = await safe(() => ott.licenseValidate(saved));
-    if (r && r.valid && r.trusted) { trialInfo = { isTrial: saved.startsWith('TRIAL-'), expiresAt: r.expiresAt || null }; return enterApp(); }
+    if (r && r.valid && r.trusted) {
+      trialInfo = { isTrial: saved.startsWith('TRIAL-'), expiresAt: r.expiresAt || null };
+      store.set('ott_lic_ok', Date.now());          // last time the server actually said yes
+      return enterApp();
+    }
+    // Unreachable, but this licence verified recently. Let them work. Requiring the server
+    // on every launch means a customer on a bad connection cannot open software they paid
+    // for; the next reachable launch re-checks, and a revoked licence still locks then.
+    if (r && r.netFail) {
+      const okAt = Number(store.get('ott_lic_ok', 0)) || 0;
+      if (okAt && Date.now() - okAt < 7 * 86400000) {
+        trialInfo = { isTrial: saved.startsWith('TRIAL-'), expiresAt: null };
+        toast('Working offline — could not reach the licence server', 'err');
+        return enterApp();
+      }
+    }
     // Could not reach the server at all. The gate still has to close - an unverifiable
     // licence is not a valid one - but say what actually happened, because "activate this
     // device" in front of someone who activated it months ago reads as lost data.
@@ -192,6 +207,11 @@ function updateTrialBanner() {
 async function recheckLicense() {
   const key = await ott.licenseLoad(); if (!key) return;
   const r = await safe(() => ott.licenseValidate(key));
+  // netFail is "we could not ask", not "the answer was no". call() returns valid:false on a
+  // network failure so the gate stays shut on a fresh launch — but here that same shape was
+  // locking a running app out mid-session on any blip, which is the app appearing to
+  // deactivate itself. A verdict has to come from the server to revoke access.
+  if (r && r.netFail) return;
   if (r && (r.valid === false || r.trusted === false)) lockApp(r.reason);
 }
 function lockApp(reason) {
