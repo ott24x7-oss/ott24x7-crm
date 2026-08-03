@@ -1454,7 +1454,7 @@ function applyLeadButton(accId) {
 
        The flag is now claimed only once the listener is genuinely attached, and it keeps
        trying until it is. */
-    function onMsg(m){(async function(){try{if(!m)return;var body=(m.body||'');
+    function onMsg(m){window.__ott_evt=(window.__ott_evt||0)+1;(async function(){try{if(!m)return;var body=(m.body||'');
       if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});
         /* An owner reply is the strongest possible signal that they are present. */
         window.__ott_ownerq=window.__ott_ownerq||[];window.__ott_ownerq.push({to:(m.to&&(m.to._serialized||m.to))||'',ts:Date.now()});return;}
@@ -1471,6 +1471,15 @@ function applyLeadButton(accId) {
       if(window.__ott_lead_init)return true;
       try{
         if(typeof WPP==='undefined'||typeof WPP.on!=='function')return false;
+        /* WPP.on exists the moment the wa-js script loads - long before wa-js has hooked
+           itself into WhatsApp's own modules. Attaching then registers a listener on an
+           emitter nothing is feeding yet, so it is silently never called. That reads as
+           "attached" everywhere while not one message arrives, which is precisely what the
+           diagnostic reported: every check green, zero messages handled.
+
+           WPP.isReady is the signal that wa-js is actually wired in - the same one the
+           status poll has always used to decide an account is connected. */
+        if(!WPP.isReady)return false;
         WPP.on('chat.new_message',onMsg);
         window.__ott_lead_init=true;   /* only now that it is really attached */
         return true;
@@ -2229,6 +2238,7 @@ function applyGuard(accId) {
     function _ghook(){
       if(window.__ott_guard_init)return true;
       try{ if(typeof WPP==='undefined'||typeof WPP.on!=='function')return false;
+        if(!WPP.isReady)return false;   /* same premature-attach trap as the AI listener */
         WPP.on('chat.new_message',_gOnMsg); window.__ott_guard_init=true; return true;
       }catch(e){return false;}
     }
@@ -3768,6 +3778,7 @@ async function aiDiagnose(accId) {
   try {
     page = await wv.executeJavaScript(`(function(){var o={wpp:false,on:false,hooked:false,q:-1,guard:false};
       try{o.wpp=(typeof WPP!=='undefined');o.on=(o.wpp&&typeof WPP.on==='function');
+      o.ready=(o.wpp&&!!WPP.isReady);o.evt=(window.__ott_evt||0);
       o.hooked=!!window.__ott_lead_init;o.guard=!!window.__ott_guard_init;
       o.q=(window.__ott_inq||[]).length;}catch(e){}return o;})()`);
   } catch (e) {
@@ -3777,9 +3788,15 @@ async function aiDiagnose(accId) {
 
   add(!!page.wpp, 'WhatsApp engine (wa-js) loaded',
     page.wpp ? '' : 'WhatsApp Web has not finished loading. Wait for your chats to appear.');
-  add(!!page.on, 'Engine ready to accept a listener', page.on ? '' : 'wa-js is present but not initialised yet.');
+  add(!!page.ready, 'WhatsApp engine fully wired in',
+    page.ready ? '' : 'wa-js has loaded but is not hooked into WhatsApp yet. Attaching now would look fine and receive nothing.');
   add(!!page.hooked, 'Listening for new messages',
     page.hooked ? '' : 'NOT attached — no incoming message can reach the assistant. This is the fault that made it silent.');
+  // "Registered" and "receiving" are different claims. The first was true while the second
+  // was false, and only the first was ever checked.
+  add(page.evt > 0, 'Listener has actually received messages',
+    page.evt > 0 ? `${page.evt} since this account loaded`
+                 : 'ZERO events. It is registered but WhatsApp is not feeding it — reload the account tab.');
   add(page.q >= 0, 'Message queue reachable', page.q >= 0 ? `${page.q} waiting to be picked up` : 'queue missing');
 
   // The renderer side.

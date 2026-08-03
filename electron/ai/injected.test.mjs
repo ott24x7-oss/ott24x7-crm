@@ -71,8 +71,15 @@ test('the message listener attaches once wa-js appears, not before', () => {
   assert.ok(!win.__ott_lead_init, 'must NOT claim success while WPP is missing — that is the bug');
   assert.ok(Array.isArray(win.__ott_inq), 'the queue should still exist');
 
-  // wa-js finishes loading; the retry must pick it up.
-  ctx.WPP = { on: (ev, fn) => listeners.push([ev, fn]) };
+  // wa-js's script loads: WPP.on exists, but it is not wired into WhatsApp yet. Attaching
+  // here registers a listener on an emitter nothing feeds - green everywhere, zero messages.
+  ctx.WPP = { on: (ev, fn) => listeners.push([ev, fn]), isReady: false };
+  timers.forEach((fn) => fn());
+  assert.strictEqual(listeners.length, 0, 'must NOT attach before wa-js is wired in');
+  assert.ok(!win.__ott_lead_init, 'and must not claim to be listening');
+
+  // wa-js finishes wiring in.
+  ctx.WPP.isReady = true;
   assert.ok(timers.length, 'nothing scheduled a retry — a failed attach would be permanent');
   timers.forEach((fn) => fn());
   assert.strictEqual(listeners.length, 1, 'listener was never attached after WPP appeared');
@@ -89,7 +96,7 @@ test('an incoming message lands on the queue the poll reads', () => {
   };
   win.window = win;
   const ctx = vm.createContext(win);
-  ctx.WPP = { on: (ev, fn) => listeners.push([ev, fn]) };
+  ctx.WPP = { on: (ev, fn) => listeners.push([ev, fn]), isReady: true };
   new vm.Script(code).runInContext(ctx);
 
   const [, onMsg] = listeners[0];
