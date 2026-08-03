@@ -3584,6 +3584,15 @@ async function aiHandle(msg) {
   const number = digits(String(msg.number || ''));
   if (!number) return;
 
+  // The account this message arrived on — fixed for the whole of this reply.
+  //
+  // Everything below used activeId. That was survivable only while the poll drained the
+  // visible account alone, because then activeId was right by construction. Now that every
+  // account is served, reading the tab on screen would send account B's customer a reply
+  // out of account A's WhatsApp — from the wrong business, to someone who never messaged it.
+  const acc = msg.accId || activeId;
+  if (!acc) return;
+
   // The last few turns of this chat. This was passing an empty array, so every message was
   // answered in isolation: a customer asking "how much is Netflix?" and then "and for three
   // months?" got the second question answered with no idea what "it" referred to. It also
@@ -3594,7 +3603,7 @@ async function aiHandle(msg) {
   // and reading a long chat costs a round trip into the webview on every incoming message.
   let history = [];
   try {
-    const chat = await aiFetchChat(number, 20);
+    const chat = await aiFetchChat(number, 20, acc);
     if (Array.isArray(chat)) {
       const turns = chat.slice(-12).map((m) => ({ fromMe: m.fromMe, text: m.body }));
       // The message that triggered this is already in the chat, and the orchestrator appends
@@ -3611,7 +3620,7 @@ async function aiHandle(msg) {
   // message on account B was answered from account A's settings, catalogue and reply
   // history the instant the owner had another tab open.
   const r = await ott.ai.generate({
-    accId: msg.accId || activeId, number, name: msg.name, text: msg.body, msgId: msg.msgId,
+    accId: acc, number, name: msg.name, text: msg.body, msgId: msg.msgId,
     isGroup: !!msg.isGroup, history, products: aiProducts(),
     customer: aiCustomer(number), lastActivityAt: aiLastActivity,
   });
@@ -3619,14 +3628,14 @@ async function aiHandle(msg) {
   if (r.action === 'skip') return;
 
   if (r.action === 'handover') {
-    aiAddSuggestion({ number, name: msg.name, incoming: msg.body, text: '', handover: true,
+    aiAddSuggestion({ accId: acc, number, name: msg.name, incoming: msg.body, text: '', handover: true,
       reason: r.reason, confidence: 0, sources: [], logId: r.logId });
     aiNotify((msg.name || number) + ' needs you — ' + aiReasonLabel(r.reason), 'err');
     return;
   }
 
   if (r.action === 'suggest') {
-    aiAddSuggestion({ number, name: msg.name, incoming: msg.body, text: r.text,
+    aiAddSuggestion({ accId: acc, number, name: msg.name, incoming: msg.body, text: r.text,
       confidence: r.confidence, sources: r.sources, validation: r.validation, logId: r.logId });
     return;
   }
@@ -3635,15 +3644,15 @@ async function aiHandle(msg) {
     // The delay is the owner's window to take over, and it stops a reply landing so fast
     // it reads as a bot.
     await new Promise((res) => setTimeout(res, Math.max(0, r.delayMs || 0)));
-    const st = await ott.ai.convoState(activeId, number);
+    const st = await ott.ai.convoState(acc, number);
     if (st && st.state && st.state.takenOver) return;
 
-    const sent = await sendTextOn(activeId, number, r.text);
+    const sent = await sendTextOn(acc, number, r.text);
     if (sent && sent.ok) {
-      await ott.ai.markSent(activeId, number, r.logId, r.text);
+      await ott.ai.markSent(acc, number, r.logId, r.text);
       aiNotify('AI replied to ' + (msg.name || number));
     } else {
-      aiAddSuggestion({ number, name: msg.name, incoming: msg.body, text: r.text,
+      aiAddSuggestion({ accId: acc, number, name: msg.name, incoming: msg.body, text: r.text,
         confidence: r.confidence, sources: r.sources, logId: r.logId,
         reason: 'send failed — saved as a suggestion' });
     }
@@ -3901,9 +3910,9 @@ function aiCard(sg) {
       sg.handover ? null : el('button', { className: 'btn small primary', onclick: async () => {
         const t = ta.value.trim();
         if (!t) return toast('Nothing to send', 'err');
-        const r = await sendTextOn(activeId, sg.number, t);
+        const r = await sendTextOn(sg.accId || activeId, sg.number, t);
         if (!r || !r.ok) return toast('Could not send — is this account linked?', 'err');
-        await ott.ai.markSent(activeId, sg.number, sg.logId, t);
+        await ott.ai.markSent(sg.accId || activeId, sg.number, sg.logId, t);
         drop(t === (sg.text || '') ? 'approved' : 'edited');
         toast('Sent');
       } }, 'Approve & send'),
@@ -4359,7 +4368,7 @@ async function aiViewKnowledge() {
 
 // Pull the recent turns of one conversation straight from WhatsApp. There is no message
 // archive in the CRM, so this is the only source.
-async function aiFetchChat(number, count) {
+async function aiFetchChat(number, count, accId) {
   const jid = JSON.stringify(digits(number) + '@c.us');
   const expr = `(async()=>{try{
     var ms=await WPP.chat.getMessages({chatId:${jid},count:${Math.max(10, Math.min(200, count || 60))}});
@@ -4371,7 +4380,7 @@ async function aiFetchChat(number, count) {
     };}).filter(function(x){return x.body;});
   }catch(e){return {err:String(e&&e.message||e)}}})()`;
   try {
-    const r = await waExecOn(activeId, expr);
+    const r = await waExecOn(accId || activeId, expr);
     return Array.isArray(r) ? r : { err: (r && r.err) || 'Could not read this conversation' };
   } catch (e) { return { err: String((e && e.message) || e) }; }
 }
