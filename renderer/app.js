@@ -3740,7 +3740,15 @@ async function aiViewInbox() {
   if (!h.ok) blockers.push('The AI service cannot be reached: ' + String(h.err || '').slice(0, 90));
   const kb = (await ott.ai.getKnowledge(activeId).catch(() => null)) || {};
   const kbRows = (kb.rows || []).filter((r) => r.active !== false).length;
-  if (!kbRows) blockers.push('Nothing has been taught yet — open “Train the AI”. Until then every chat is handed to you rather than answered.');
+  const prodCount = aiProducts().length;
+  // The catalogue counts as training now, so saying "nothing taught" to a shop with 237
+  // products would be wrong. Only knowledge beyond the product list is missing, and that
+  // is a suggestion rather than a blocker.
+  if (!kbRows && !prodCount) {
+    blockers.push('Nothing has been taught yet and the catalogue is empty — open “Train the AI”. Until then every chat is handed to you.');
+  } else if (!kbRows) {
+    blockers.push(`It can answer about your ${prodCount} product(s), but nothing else. Questions about delivery, payment or returns get handed to you — add those in “Train the AI”.`);
+  }
   if (!s.allowGroups) blockers.push('Group chats are left alone. Only one-to-one chats get replies.');
 
   if (blockers.length) {

@@ -148,7 +148,7 @@ const LANG_RULE = {
   hinglish: 'Reply in Hinglish — Hindi written in Roman script, the way the customer wrote to you.',
 };
 
-function buildSystemPrompt({ settings, language, business, knowledge, examples, products, customer }) {
+function buildSystemPrompt({ settings, language, business, knowledge, examples, products, productHits, customer }) {
   const lines = [];
   const biz = String((settings.businessName || '')).trim();
   lines.push(biz
@@ -171,7 +171,15 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
 
   if (products && products.length) {
     lines.push('LIVE PRODUCT DATA — the only prices and stock you may quote:');
-    for (const p of products.slice(0, 25)) {
+    // Matched products first. 237 products truncated to the first 25 meant the one the
+    // customer asked about usually never reached the model, and it answered "I will check"
+    // about something sitting in the catalogue.
+    const matchedTitles = new Set((productHits || []).map((h) => h.row.title));
+    const ordered = [
+      ...products.filter((p) => matchedTitles.has(p.title)),
+      ...products.filter((p) => !matchedTitles.has(p.title)),
+    ];
+    for (const p of ordered.slice(0, 25)) {
       lines.push(`- ${p.title}${p.price ? ` | price ₹${p.price}` : ' | price not listed'}` +
         `${p.stock === false ? ' | OUT OF STOCK' : ''}${p.category ? ` | ${p.category}` : ''}` +
         `${p.url ? ` | link ${p.url}` : ''}`);
@@ -315,16 +323,25 @@ const simScore = (s, lexical) => (lexical
   ? Math.max(0, Math.min(1, (s - LEX_FLOOR) / (LEX_GOOD - LEX_FLOOR)))
   : Math.max(0, Math.min(1, (s - SIM_FLOOR) / (SIM_GOOD - SIM_FLOOR))));
 
-function confidence({ hits, exampleHits, intent, validation, historyTurns, hasProducts }) {
+function confidence({ hits, exampleHits, productHits, intent, validation, historyTurns, hasProducts }) {
   // Validation is a gate, not a contributor: the caller refuses to auto-send when it fails,
   // and paying 0.20 simply for "said nothing forbidden" gave every empty reply a free floor.
   if (validation && !validation.ok) return 0;
 
-  const top = hits && hits.length ? hits[0].score : 0;
+  // A catalogue match is evidence, and it was not being counted as any. hasProducts paid a
+  // flat 0.10 whether the customer asked about a listed product or about the weather, so a
+  // shop with 237 products and no knowledge entries scored 0.295 on "netflix ka price kya
+  // hai" and handed it over. Answering from the catalogue is the main thing this is for.
+  const topProd = productHits && productHits.length ? productHits[0].score : 0;
+  const topKnow = hits && hits.length ? hits[0].score : 0;
+  const top = Math.max(topKnow, topProd);
   // Which retriever produced the hit decides how the score is read — the two scales are
   // not comparable, and treating a lexical 0.5 as a cosine 0.5 would roughly double it.
-  const isLex = !!(hits && hits.length && hits[0].lexical);
-  const breadth = Math.min(1, ((hits || []).length + (exampleHits || []).length) / 4);
+  const isLex = topProd >= topKnow
+    ? !!(productHits && productHits.length && productHits[0].lexical)
+    : !!(hits && hits.length && hits[0].lexical);
+  const breadth = Math.min(1, ((hits || []).length + (exampleHits || []).length
+    + (productHits || []).length) / 4);
 
   let score = 0;
   score += simScore(top, isLex) * 0.50;                 // how well knowledge actually matched

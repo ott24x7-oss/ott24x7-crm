@@ -149,10 +149,22 @@ async function generate(ctx) {
   if (!hits.length) hits = rag.lexicalSearch(ctx.text, knowledge, { topK: 5 });
   if (!exampleHits.length) exampleHits = rag.lexicalSearch(ctx.text, examples, { topK: 3 });
 
+  // Match the question against the catalogue too. The catalogue is the one thing every
+  // shop has from day one - answering from it is the whole point - but nothing here ever
+  // searched it, so a shop with hundreds of products and no knowledge entries handed every
+  // product question to the owner.
+  const productHits = rag.lexicalSearch(ctx.text,
+    (ctx.products || []).map((p) => ({
+      title: p.title,
+      body: `${p.category || ''} ${p.price ? '₹' + p.price : ''}${p.stock === false ? ' out of stock' : ''}`,
+      tags: [p.category || ''],
+    })),
+    { topK: 4 });
+
   const system = rag.buildSystemPrompt({
     settings: s, language, business: s.businessInstructions,
     knowledge: hits, examples: exampleHits,
-    products: ctx.products || [], customer: ctx.customer || {},
+    products: ctx.products || [], productHits, customer: ctx.customer || {},
   });
 
   const history = (ctx.history || []).slice(-8).map((m) => ({
@@ -175,6 +187,7 @@ async function generate(ctx) {
   const validation = rag.validate(out.text, { settings: s, products: ctx.products || [], language });
   const score = rag.confidence({
     hits, exampleHits, intent, validation,
+    productHits,
     historyTurns: history.length, hasProducts: !!(ctx.products || []).length,
   });
 
