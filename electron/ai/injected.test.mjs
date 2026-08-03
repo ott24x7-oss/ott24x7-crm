@@ -117,3 +117,74 @@ test('the poll reports whether the listener is attached', () => {
   assert.match(src, /hookMap\[activeId\] === false/,
     'the panel must say so rather than showing a healthy assistant that sees nothing');
 });
+
+// The event path is registered against a live engine and never fires in the wa-js build
+// this app ships: a real customer message arrived five minutes after the listener attached
+// and the counter stayed at zero. The scanner is what actually carries messages now, so it
+// gets the same scrutiny — parsing is not evidence that it works.
+test('the scanner finds a new message without any event firing', async () => {
+  const code = injectedScript('applyLeadButton');
+  const timers = [];
+  const win = {
+    document: { querySelector: () => null, getElementById: () => null, createElement: () => ({ style: {} }) },
+    setInterval: (fn, ms) => timers.push({ fn, ms }),
+    clearInterval: () => {}, setTimeout: () => 1,
+  };
+  win.window = win;
+  const ctx = vm.createContext(win);
+  const now = Date.now();
+  ctx.WPP = {
+    isReady: true,
+    on: () => {},                              // registered, but deliberately never fired
+    chat: {
+      list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 1 }],
+      getMessages: async () => ([{
+        id: { _serialized: 'SCAN1' }, fromMe: false, body: 'Netflix ka price kya h?',
+        t: Math.floor((now + 5000) / 1000), from: { user: '919876543210', server: 'c.us' },
+        notifyName: 'Anup',
+      }]),
+    },
+  };
+  new vm.Script(code).runInContext(ctx);
+
+  const scan = timers.find((t) => t.ms === 3000);
+  assert.ok(scan, 'no scan interval was scheduled — the only working path is missing');
+  await scan.fn();
+
+  assert.strictEqual(win.__ott_inq.length, 1, 'a new unread message was not picked up by scanning');
+  assert.strictEqual(win.__ott_inq[0].body, 'Netflix ka price kya h?');
+  assert.strictEqual(win.__ott_inq[0].msgId, 'SCAN1');
+  assert.strictEqual(win.__ott_inq[0].isGroup, false);
+
+  await scan.fn();                             // a second pass must not re-queue it
+  assert.strictEqual(win.__ott_inq.length, 1, 'the same message was queued twice');
+});
+
+test('the scanner ignores the backlog and the owner\'s own messages', async () => {
+  const code = injectedScript('applyLeadButton');
+  const timers = [];
+  const win = {
+    document: { querySelector: () => null, getElementById: () => null, createElement: () => ({ style: {} }) },
+    setInterval: (fn, ms) => timers.push({ fn, ms }),
+    clearInterval: () => {}, setTimeout: () => 1,
+  };
+  win.window = win;
+  const ctx = vm.createContext(win);
+  const now = Date.now();
+  ctx.WPP = {
+    isReady: true, on: () => {},
+    chat: {
+      list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 3 }],
+      getMessages: async () => ([
+        { id: { _serialized: 'OLD' }, fromMe: false, body: 'sitting unread since this morning',
+          t: Math.floor((now - 3600000) / 1000), from: { user: '919876543210' } },
+        { id: { _serialized: 'MINE' }, fromMe: true, body: 'my own reply',
+          t: Math.floor((now + 5000) / 1000), from: { user: '919876543210' } },
+      ]),
+    },
+  };
+  new vm.Script(code).runInContext(ctx);
+  await timers.find((t) => t.ms === 3000).fn();
+  assert.strictEqual(win.__ott_inq.length, 0,
+    'answering a backlog on startup, or replying to the owner, would both be worse than silence');
+});

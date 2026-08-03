@@ -1487,6 +1487,66 @@ function applyLeadButton(accId) {
       }catch(e){return false;}
     }
     if(!hook()){var _t=setInterval(function(){if(hook())clearInterval(_t);},1000);}
+
+    /* Find new messages by reading, not by waiting to be told.
+       ------------------------------------------------------------------
+       WPP.on('chat.new_message') is registered against a fully-ready engine and never
+       fires in this build: a real customer message arrived five minutes after the listener
+       attached and the event count stayed at zero. Several releases went into making that
+       event attach at the right moment, which was worth doing, but no amount of attaching
+       helps an event that is not emitted.
+
+       WPP.chat.list() and WPP.chat.getMessages() are what the Lead Manager and contact
+       import already use every day in this app, so they are known to work here. This polls
+       them for unread chats and pushes anything new onto the same queue the event handler
+       fed, so everything downstream is unchanged.
+
+       Only messages that arrive after the scanner starts are picked up - answering a
+       backlog the moment the app opens would be worse than not answering it. */
+    window.__ott_seen_ids=window.__ott_seen_ids||{};
+    if(!window.__ott_scan_from)window.__ott_scan_from=Date.now();
+
+    async function scan(){
+      try{
+        if(typeof WPP==='undefined'||!WPP.isReady||!WPP.chat||!WPP.chat.list)return;
+        var chats=await WPP.chat.list();
+        var hot=[];
+        for(var i=0;i<chats.length&&hot.length<20;i++){
+          if((chats[i].unreadCount||0)>0)hot.push(chats[i]);
+        }
+        for(var k=0;k<hot.length;k++){
+          var c=hot[k];
+          var cid=(c.id&&(c.id._serialized||c.id))||'';
+          if(!cid)continue;
+          var isG=/@g\\.us$/.test(String(cid));
+          var msgs=[];
+          try{msgs=await WPP.chat.getMessages({chatId:cid,count:6})||[];}catch(e){continue;}
+          for(var j=0;j<msgs.length;j++){
+            var m=msgs[j];
+            if(!m||m.fromMe)continue;
+            var mid=(m.id&&(m.id._serialized||m.id))||'';
+            if(!mid||window.__ott_seen_ids[mid])continue;
+            var ts=(m.t||0)*1000;
+            if(!ts||ts<window.__ott_scan_from)continue;
+            window.__ott_seen_ids[mid]=1;
+            var body=(m.body||m.caption||'');
+            if(!body)continue;
+            var num='';
+            try{num=await _ph(m.from)||(m.from&&m.from.user)||'';}catch(e){num=(m.from&&m.from.user)||'';}
+            if(!num)continue;
+            window.__ott_inq.push({number:num,raw:num,body:body,msgId:mid,isGroup:isG,
+              name:(m.sender&&(m.sender.pushname||m.sender.name))||m.notifyName||'',ts:ts});
+            window.__ott_evt=(window.__ott_evt||0)+1;window.__ott_evt_at=Date.now();
+            window.__ott_scan_hits=(window.__ott_scan_hits||0)+1;
+          }
+        }
+        /* Keep the dedupe table from growing without bound over a long session. */
+        var ids=Object.keys(window.__ott_seen_ids);
+        if(ids.length>4000){for(var z=0;z<2000;z++)delete window.__ott_seen_ids[ids[z]];}
+      }catch(e){}
+    }
+    if(!window.__ott_scan_init){window.__ott_scan_init=true;setInterval(scan,3000);}
+
     if(!window.__ott_place_init){window.__ott_place_init=true;setInterval(place,4000);}
     async function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(!c)return;var u=await _ph(c.id);if(!u&&c.contact&&c.contact.id)u=await _ph(c.contact.id);var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;var b=document.getElementById('ott-lead-btn');if(!u){if(b){b.textContent='no number';setTimeout(function(){b.textContent='\uFF0B Lead';},1600);}return;}window.__ott_leadq.push({number:u,name:nm});if(b){b.textContent='\u2713 Lead saved';setTimeout(function(){b.textContent='\uFF0B Lead';},1500);}}catch(e){}}
     function place(){var header=document.querySelector('#main header');if(!header||document.getElementById('ott-lead-btn'))return;var b=document.createElement('button');b.id='ott-lead-btn';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:#12b866;color:#fff;border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
@@ -3781,6 +3841,7 @@ async function aiDiagnose(accId) {
       try{o.wpp=(typeof WPP!=='undefined');o.on=(o.wpp&&typeof WPP.on==='function');
       o.ready=(o.wpp&&!!WPP.isReady);o.evt=(window.__ott_evt||0);
       o.hookAt=(window.__ott_hook_at||0);o.evtAt=(window.__ott_evt_at||0);
+      o.scan=!!window.__ott_scan_init;o.scanHits=(window.__ott_scan_hits||0);
       o.hooked=!!window.__ott_lead_init;o.guard=!!window.__ott_guard_init;
       o.q=(window.__ott_inq||[]).length;}catch(e){}return o;})()`);
   } catch (e) {
@@ -3792,8 +3853,12 @@ async function aiDiagnose(accId) {
     page.wpp ? '' : 'WhatsApp Web has not finished loading. Wait for your chats to appear.');
   add(!!page.ready, 'WhatsApp engine fully wired in',
     page.ready ? '' : 'wa-js has loaded but is not hooked into WhatsApp yet. Attaching now would look fine and receive nothing.');
-  add(!!page.hooked, 'Listening for new messages',
-    page.hooked ? '' : 'NOT attached — no incoming message can reach the assistant. This is the fault that made it silent.');
+  add(!!page.hooked, 'Listening for new messages (event)',
+    page.hooked ? '' : 'not attached');
+  // The event proved unreliable in practice, so this is the path that actually carries
+  // messages. It matters more than the line above it.
+  add(!!page.scan, 'Scanning WhatsApp for new messages',
+    page.scan ? `${page.scanHits} picked up by scanning` : 'scanner not running — reload the account tab');
   // "Registered" and "receiving" are different claims, and the first was true while the
   // second was false. But zero is not proof of anything on its own: right after a restart it
   // just means nobody has messaged yet. Reporting that as a failure sent the owner chasing a
