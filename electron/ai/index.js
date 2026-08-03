@@ -51,22 +51,36 @@ function ownerAvailability(settings, { lastActivityAt, now }) {
 
 // ---------- embedding ----------
 
-// Switch embeddings off for good when the provider says it will never serve them.
+// Stop asking for embeddings once it is clear they are not coming.
 //
-// Clearing a known-bad model name at startup only helps for names that were thought of in
-// advance. This handles the general case: whatever the model is called, if the gateway
-// answers 400 or 404 the app stops asking. Without it the owner sees the same red failure
-// on every single incoming message, and a Re-embed button that cannot ever succeed.
+// This started as a list of "permanent" status codes: 400 and 404 meant give up, everything
+// else meant retry. That was the wrong shape. A gateway that does not do embeddings can say
+// so with 503 just as easily, and then the app reads "their side, try again shortly",
+// retries forever, and the owner watches the same red box on every message with a Re-embed
+// button that cannot succeed.
 //
-// Retrieval is unaffected — search falls back to keyword matching, which is what was
-// actually answering questions the whole time.
-function disableEmbeddings(accId, why) {
+// So it counts instead of classifying. Whatever the reason - a status nobody predicted, a
+// timeout, a gateway that is simply down - a few failures in a row is enough. The cost of
+// being wrong is close to nothing: keyword retrieval keeps working, and setting an
+// embedding model again re-enables it.
+const EMBED_STRIKES = 3;
+const strikes = new Map();
+
+function embedFailed(accId, err, permanent) {
+  const n = (strikes.get(accId) || 0) + 1;
+  strikes.set(accId, n);
+  if (!permanent && n < EMBED_STRIKES) return false;
   const s = store.getSettings(accId);
   if (!s.embedModel) return false;
   store.saveSettings(accId, { ...s, embedModel: '' });
-  console.warn(`[ai] embeddings disabled for ${accId}: ${why}`);
+  strikes.delete(accId);
+  console.warn(`[ai] embeddings disabled for ${accId} after ${n}: ${err}`);
   return true;
 }
+
+// A success clears the count, so an outage that recovers does not accumulate toward a
+// permanent switch-off across a long-running session.
+const embedWorked = (accId) => strikes.delete(accId);
 
 async function embedRows(accId, rows, kind) {
   const s = store.getSettings(accId);
@@ -83,13 +97,15 @@ async function embedRows(accId, rows, kind) {
       : `${r.title}\n${r.body}`).slice(0, 4000));
     const e = await p.embed(texts);
     if (!e.ok) {
-      if (e.unsupported) {
-        disableEmbeddings(accId, `embeddings returned HTTP ${e.status}`);
-        // Not an error the owner has to act on — the knowledge is still searchable.
+      // Pressing Re-embed is the owner asking directly, so one failure is answer enough —
+      // no point making them click three times to learn the same thing.
+      if (embedFailed(accId, e.err, true)) {
+        // Not an error to act on: the knowledge stays searchable by keyword.
         return { ok: true, embedded: done, disabled: true, err: e.err };
       }
       return { ok: false, err: e.err, embedded: done };
     }
+    embedWorked(accId);
     batch.forEach((r, j) => { r.vec = e.vectors[j] || []; r.vecModel = s.embedModel; });
     done += batch.length;
   }
@@ -164,9 +180,11 @@ async function generate(ctx) {
   // message regardless, so a chat-only gateway returned HTTP 400 each time - a wasted round
   // trip on the reply path and an alarming error toast for a working configuration.
   const q = s.embedModel ? await p.embed(ctx.text) : { ok: false, vectors: [] };
-  // First customer message is enough to learn the gateway does not do embeddings. Turn it
-  // off here rather than repeating the same failed round trip on every message after it.
-  if (q.unsupported) disableEmbeddings(accId, `embeddings returned HTTP ${q.status}`);
+  // On the reply path a stated refusal (400/404) is acted on at once; anything else gets a
+  // few tries first, in case the provider really is just having a moment. Either way this
+  // stops well short of failing on every message the owner ever receives.
+  if (s.embedModel && !q.ok && !q.notConfigured) embedFailed(accId, q.err, !!q.unsupported);
+  else if (q.ok) embedWorked(accId);
   if (q.ok && q.vectors[0]) {
     hits = rag.search(q.vectors[0], knowledge, { topK: 5 });
     exampleHits = rag.search(q.vectors[0], examples, { topK: 3 });

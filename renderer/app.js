@@ -4303,12 +4303,16 @@ async function aiViewKnowledge() {
       'The assistant answers only from these entries plus your live catalog. Prices and stock are always read from the catalog, never from here, so they can never go stale.'),
     el('div', { className: 'bk-kpis' },
       dKpi('Entries', String(rows.length), dupes ? `${dupes} duplicated` : (off ? `${off} turned off` : 'All active'), dupes ? 'bad' : (rows.length ? 'good' : '')),
-      embedsOn
-        ? dKpi('Searchable', String(rows.length - pending), pending ? `${pending} waiting` : 'All embedded', pending ? 'warn' : 'good')
-        : dKpi('Searchable', String(rows.length), 'By keyword', 'good'),
+      // Every entry is searchable the moment it is saved — keyword retrieval needs no setup
+      // and is what has been answering questions all along. Embedding only sharpens the
+      // matching. Counting un-embedded rows as NOT searchable, in red, said the knowledge
+      // base was broken when nothing was wrong with it, and sent owners to a Re-embed button
+      // that could not help.
+      dKpi('Searchable', String(rows.length), embedsOn && pending ? `${pending} not yet embedded` : 'All entries', 'good'),
       dKpi('Products', String(rows.filter((r) => (r.kind || '') === 'product').length), 'From your catalog')),
-    (embedsOn && pending) ? el('div', { className: 'fp-note', style: { color: 'var(--danger)' } },
-      pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' not searchable yet — press Re-embed.') : null,
+    (embedsOn && pending) ? el('div', { className: 'fp-note' },
+      pending + ' entr' + (pending === 1 ? 'y is' : 'ies are') + ' searched by keyword. '
+      + 'Embedding sharpens the matching — press Re-embed if your provider supports it.') : null,
     (!embedsOn && rows.length) ? el('div', { className: 'fp-note' },
       'Your AI provider does not offer embeddings, so these entries are searched by keyword. '
       + 'They are all in use — nothing needs embedding.') : null,
