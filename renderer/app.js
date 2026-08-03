@@ -3725,6 +3725,31 @@ async function aiViewInbox() {
       h.ok ? (h.chatReady ? s.chatModel : `${s.chatModel} is not installed`) : String(h.err || '').slice(0, 42),
       h.ok && h.chatReady ? 'good' : 'bad')));
 
+  // Why it is not replying, stated up front.
+  //
+  // Every gate in generate() returns a silent skip: consent, group chats, excluded
+  // contacts. Nothing is logged and nothing reaches the Inbox, so "Nothing waiting" was
+  // shown whether the assistant was idle or switched off at the knees - and the Assistant
+  // tile says "Auto 24x7 Active" because it reflects mode, which is true while consent
+  // still blocks every single message. This checks the same conditions directly, so the
+  // answer does not depend on a customer messaging in first.
+  const blockers = [];
+  if (s.mode === 'off') blockers.push('The assistant is switched off — set a mode in Settings.');
+  if (s.paused) blockers.push('The assistant is paused — press Resume above.');
+  if (!s.consentAccepted) blockers.push('The consent box in Settings is not ticked. Nothing will be sent until it is.');
+  if (!h.ok) blockers.push('The AI service cannot be reached: ' + String(h.err || '').slice(0, 90));
+  const kb = (await ott.ai.getKnowledge(activeId).catch(() => null)) || {};
+  const kbRows = (kb.rows || []).filter((r) => r.active !== false).length;
+  if (!kbRows) blockers.push('Nothing has been taught yet — open “Train the AI”. Until then every chat is handed to you rather than answered.');
+  if (!s.allowGroups) blockers.push('Group chats are left alone. Only one-to-one chats get replies.');
+
+  if (blockers.length) {
+    box.append(el('div', { className: 'fp-note', style: { color: blockers.length ? 'var(--danger)' : '' } },
+      el('b', {}, 'Why it is not replying'),
+      el('ul', { style: { margin: '6px 0 0', paddingLeft: '18px', lineHeight: '1.6' } },
+        ...blockers.map((t) => el('li', {}, t)))));
+  }
+
   // A missing model is the difference between working and silently failing on every
   // message, so it gets a fix-it row rather than a colour on a tile.
   if (h.ok && !h.chatReady) {
