@@ -4031,6 +4031,9 @@ async function aiViewKnowledge() {
   } catch (e) { embedsOn = false; }
 
   // ---- state ----
+  // Selection is by id, not row index: the list is grouped, filtered and paged, so an index
+  // means nothing once any of those change under it.
+  const picked = new Set();
   let query = '';
   const open = {};                       // which type groups are expanded
   const shown = {};                      // how many rows revealed per group
@@ -4115,9 +4118,19 @@ async function aiViewKnowledge() {
       },
         el('span', { className: 'kb-caret' }),
         el('b', {}, KIND_LABEL[k] || k),
-        el('span', { className: 'kb-count' }, String(g.length)),
-        pending ? el('span', { className: 'rate-tag loss' }, pending + ' to embed') : null);
-      listBox.append(head);
+        el('span', { className: 'kb-count' }, String(g.length)));
+      // Selecting a whole group is the common case - "clear out the old products" - and
+      // ticking 237 boxes by hand is not a feature.
+      const all = g.every((r) => picked.has(r.id));
+      const groupPick = el('button', {
+        className: 'btn small ghost', style: { marginLeft: '8px' },
+        onclick: (e) => {
+          e.stopPropagation();
+          g.forEach((r) => (all ? picked.delete(r.id) : picked.add(r.id)));
+          draw(); drawBulk();
+        },
+      }, all ? `Unselect ${g.length}` : `Select all ${g.length}`);
+      listBox.append(el('div', { style: { display: 'flex', alignItems: 'center' } }, head, groupPick));
       if (!isOpen) continue;
 
       const limit = shown[k] || PAGE;
@@ -4135,7 +4148,10 @@ async function aiViewKnowledge() {
 
   function kbRow(r) {
     const sub = gist(r);
+    const box = chk(picked.has(r.id));
+    box.onchange = () => { if (box.checked) picked.add(r.id); else picked.delete(r.id); drawBulk(); };
     return el('div', { className: 'kb-row' + (r.active === false ? ' off' : '') },
+      box,
       el('div', { className: 'kb-main' },
         el('div', { className: 'kb-title' }, r.title),
         sub ? el('div', { className: 'kb-sub' }, sub) : null),
@@ -4154,6 +4170,42 @@ async function aiViewKnowledge() {
           },
         }, '×')));
   }
+
+  // ---- bulk actions ----
+  const bulkCount = el('b', {});
+  const bulkBar = el('div', {
+    className: 'row',
+    style: { display: 'none', alignItems: 'center', gap: '10px', margin: '0 0 8px',
+             padding: '8px 12px', border: '1px solid var(--line)', borderRadius: '10px',
+             background: 'rgba(18,184,102,.06)' },
+  });
+  function drawBulk() {
+    // Ids can disappear underneath a stale selection (another delete, a refresh), so the
+    // count is always recomputed against rows that still exist - it must never promise to
+    // delete more than it can.
+    const live = new Set(rows.map((r) => r.id));
+    [...picked].forEach((id) => { if (!live.has(id)) picked.delete(id); });
+    bulkBar.style.display = rows.length ? 'flex' : 'none';
+    bulkCount.textContent = picked.size ? `${picked.size} selected` : '';
+    bulkCount.style.color = picked.size ? 'var(--danger)' : 'var(--muted)';
+  }
+  const bulkDelete = async () => {
+    const ids = [...picked];
+    if (!ids.length) return toast('Nothing selected', 'err');
+    if (!(await aiConfirm(`Delete ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}?`,
+      'This cannot be undone. Products can be re-imported from your catalog or website.'))) return;
+    let n = 0;
+    for (const id of ids) { if (await ott.ai.deleteKnowledge(activeId, id)) n++; }
+    picked.clear();
+    toast(`Deleted ${n} entr${n === 1 ? 'y' : 'ies'}`);
+    refreshPanel('ai');
+  };
+  bulkBar.append(
+    el('button', { className: 'btn small ghost', onclick: () => { rows.forEach((r) => picked.add(r.id)); draw(); drawBulk(); } }, 'Select everything'),
+    el('button', { className: 'btn small ghost', onclick: () => { picked.clear(); draw(); drawBulk(); } }, 'Clear'),
+    el('span', { style: { flex: '1' } }),
+    bulkCount,
+    el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: bulkDelete }, 'Delete selected'));
 
   let searchTimer = 0;
   search.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = search.value; draw(); }, 150); };
@@ -4224,8 +4276,10 @@ async function aiViewKnowledge() {
       } }, 'Re-embed') : null),
     addForm,
     rows.length > 8 ? search : null,
+    bulkBar,
     listBox,
   ].filter(Boolean).forEach((n) => box.append(n));
+  drawBulk();
   draw();
   return box;
 }

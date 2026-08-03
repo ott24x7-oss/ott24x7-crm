@@ -51,6 +51,8 @@ async function build() {
     lbl: (t, c) => { const n = mk('label'); n.textContent = t; n.append(c); return n; },
     dKpi: (l, v, s) => { const n = mk('div'); n.className = 'bk-kpi'; n.textContent = `${l} ${v} ${s}`; return n; },
     toast: () => {}, refreshPanel: () => {}, aiConfirm: async () => true,
+    // Bulk-select checkboxes; the view builds one per row.
+    chk: (v) => { const n = mk('input'); n.type = 'checkbox'; n.checked = !!v; return n; },
     aiProducts: () => [], aiImportWebsite: () => {}, activeId: 'a1',
     store: { get: () => [], set: () => true },
     ott: { ai: { getSettings: async () => ({ settings: { embedModel: '' } }),
