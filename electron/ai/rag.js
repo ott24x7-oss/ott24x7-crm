@@ -107,7 +107,14 @@ const INTENTS = [
   ['warranty', /\b(warranty|guarantee|replace|replacement|garanti)\b/i],
   ['refund', /\b(refund|return|money back|paisa wapas|cancel)\b/i],
   ['order_status', /\b(order status|tracking|where is my|kahan hai|dispatch hua)\b/i],
-  ['greeting', /^\s*(hi|hello|hey|namaste|hlo|good (morning|evening|afternoon))\b/i],
+  ['greeting', /^\s*(hi+|hello+|hey+|hyy+|hlo+|namaste|namaskar|salam|as-?salam|good (morning|evening|afternoon|night))\b/i],
+  // Small talk carries no product question, so it must be answerable with no knowledge-base
+  // match at all — "how are you?" was scoring 16% and being handed to the owner, which is
+  // exactly the moment a customer decides they are talking to a machine.
+  ['smalltalk', /^\s*(how are (you|u)|kaise ho|kaisi ho|kya haal|kya chal raha|wassup|sup|thank(s| you)|thanku|shukriya|dhanyavad|ok+|okay+|okk+|thik hai|theek hai|acha|accha|hmm+|haan+|yes+|no+|nahi+|bye+|good ?night|gn|take care|who are you|kaun ho|are you (a )?bot|robot ho|ai ho|bahut (badhiya|acha)|nice|great|super|👍|🙏|❤️|😊)\b/i],
+  // A language switch can be phrased any way at all — a real customer wrote "Can you talk
+  // to. Me. In. Hindi?" — so this one is not anchored to the start of the message.
+  ['smalltalk', /\b(talk|baat|bolo|speak|chat|reply|message)\b[\s\S]{0,25}\b(hindi|english|hinglish)\b|\b(hindi|english|hinglish)\b[\s\S]{0,25}\b(baat|bolo|batao|talk|speak|reply|karo)\b/i],
 ];
 
 function detectIntent(text) {
@@ -225,6 +232,12 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
   lines.push('- At most 1-2 emojis. Never more.');
   lines.push('- Close with a short friendly nudge or question.');
   lines.push('- Never repeat a point twice or over-explain.');
+  lines.push('- Greetings and small talk ("hi", "how are you?", "thanks", "kaise ho?"): reply warmly in');
+  lines.push('  ONE short line, in the customer\'s own language, then gently ask how you can help.');
+  lines.push('  A customer switching language ("hindi me baat karo") is a request, not a question —');
+  lines.push('  switch immediately and carry on in that language.');
+  lines.push('- If asked directly whether you are a bot, be honest in one friendly line and move on');
+  lines.push('  to helping. Never volunteer it otherwise.');
   lines.push('');
   lines.push('FORMAT — this matters as much as the words. WhatsApp, not email:');
   lines.push('- Short: a friendly opener, at most 2-3 options, a one-line close.');
@@ -327,6 +340,17 @@ function confidence({ hits, exampleHits, productHits, intent, validation, histor
   // Validation is a gate, not a contributor: the caller refuses to auto-send when it fails,
   // and paying 0.20 simply for "said nothing forbidden" gave every empty reply a free floor.
   if (validation && !validation.ok) return 0;
+
+  // Small talk is scored on its own terms. The formula below is built around "how well did
+  // retrieval match", which is the right question for a product query and a nonsense
+  // question for "hello" or "how are you?" — there is nothing to retrieve, so greetings
+  // scored ~16% and were handed to the owner. Nothing feels less human than a support chat
+  // that cannot say hello back. Forced handovers run before any of this, and the validator
+  // still gates anything the model invents, so the floor cannot leak prices or promises.
+  const kind = intent && intent.intent;
+  if (kind === 'greeting' || kind === 'smalltalk') {
+    return Math.max(0.7, Math.min(1, 0.7 + Math.min(1, (historyTurns || 0) / 4) * 0.1));
+  }
 
   // A catalogue match is evidence, and it was not being counted as any. hasProducts paid a
   // flat 0.10 whether the customer asked about a listed product or about the weather, so a

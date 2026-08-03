@@ -274,6 +274,36 @@ t('but falsely promising an out-of-stock item is still rejected', () => {
   assert.ok(!v.ok);
 });
 
+// ---------- small talk feels human ----------
+// "How are you?" was scoring 16% and being handed to the owner: the confidence formula
+// asks "how well did retrieval match", which is the wrong question when there is nothing
+// to retrieve. These pin the floor and the intent detection that feeds it.
+t('greetings and small talk are answerable with an empty knowledge base', () => {
+  for (const msg of ['Hello', 'hi', 'Namaste', 'how are you?', 'kaise ho', 'thanks bhai',
+                     'ok', 'Can you talk to. Me. In. Hindi?', 'hindi me baat karo', 'are you a bot?']) {
+    const intent = rag.detectIntent(msg);
+    assert.ok(intent.intent === 'greeting' || intent.intent === 'smalltalk',
+      `"${msg}" detected as ${intent.intent} — it would be scored like a product query`);
+    const c = rag.confidence({ hits: [], exampleHits: [], productHits: [], intent,
+      validation: { ok: true }, historyTurns: 0, hasProducts: false });
+    assert.ok(c >= 0.62, `"${msg}" scored ${c} — below the auto-send threshold, so it would be handed over`);
+  }
+});
+
+t('product questions still require real retrieval', () => {
+  const intent = rag.detectIntent('netflix ka price kya hai');
+  assert.notStrictEqual(intent.intent, 'smalltalk');
+  const c = rag.confidence({ hits: [], exampleHits: [], productHits: [], intent,
+    validation: { ok: true }, historyTurns: 0, hasProducts: false });
+  assert.ok(c < 0.5, `a price question with NO catalogue match scored ${c} — it must not get the small-talk floor`);
+});
+
+t('forced handovers outrank the small-talk floor', () => {
+  // "thanks but I want a refund" must never be auto-answered just because it says thanks.
+  assert.ok(rag.forcedHandover('thanks bro but refund my money', {}),
+    'refund wording must force a human whatever the intent detector says');
+});
+
 try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
 console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);
 process.exit(fail ? 1 : 0);

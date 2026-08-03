@@ -237,9 +237,15 @@ async function generate(ctx) {
     products: ctx.products || [], productHits, customer: ctx.customer || {},
   });
 
-  const history = (ctx.history || []).slice(-8).map((m) => ({
-    role: m.fromMe ? 'assistant' : 'user', content: String(m.text || '').slice(0, 800),
-  }));
+  // Photos, stickers and voice notes arrive as turns with no text. Now that history
+  // actually loads, one of those became {role:'user', content:''} and the gateway rejected
+  // the whole request as invalid (HTTP 400) — so a customer who had ever sent a photo could
+  // not be answered at all. An empty turn carries nothing the model can use; drop it.
+  const history = (ctx.history || [])
+    .filter((m) => m && String(m.text || '').trim())
+    .slice(-8).map((m) => ({
+      role: m.fromMe ? 'assistant' : 'user', content: String(m.text || '').slice(0, 800),
+    }));
 
   const out = await p.chat({
     system, messages: [...history, { role: 'user', content: String(ctx.text || '').slice(0, 2000) }],
