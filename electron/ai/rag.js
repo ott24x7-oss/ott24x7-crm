@@ -150,7 +150,10 @@ const LANG_RULE = {
 
 function buildSystemPrompt({ settings, language, business, knowledge, examples, products, customer }) {
   const lines = [];
-  lines.push('You are the sales assistant for a small business, replying to a customer on WhatsApp.');
+  const biz = String((settings.businessName || '')).trim();
+  lines.push(biz
+    ? `You are ${biz}'s friendly AI sales and support assistant on WhatsApp.`
+    : 'You are the sales assistant for a small business, replying to a customer on WhatsApp.');
   lines.push(TONES[settings.tone] || TONES.friendly);
   lines.push(LANG_RULE[language] || LANG_RULE.en);
   lines.push(`Keep the reply under ${settings.maxResponseChars} characters.`);
@@ -199,6 +202,15 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
   // Without these the model answers correctly and reads like a form letter: one dense
   // paragraph with prices and links buried in it. The bot's replies land better purely
   // because of how they are laid out, and that is entirely a prompt matter.
+  const wa = String(settings.supportWhatsApp || '').replace(/\D/g, '');
+  const tg = String(settings.supportTelegram || '').trim().replace(/^@/, '');
+  if (wa || tg) {
+    lines.push('HUMAN SUPPORT — share these when a human is needed:');
+    if (wa) lines.push(`- WhatsApp: https://wa.me/${wa}`);
+    if (tg) lines.push(`- Telegram: https://t.me/${tg}`);
+    lines.push('');
+  }
+
   lines.push('TONE — sound like a warm, helpful human, not a robot:');
   lines.push('- Open with a short friendly line that directly answers what they asked.');
   lines.push('- Be natural and kind. If something is unavailable, say so and offer the closest item.');
@@ -214,6 +226,8 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
   lines.push('- NEVER cram products or links into one paragraph.');
   lines.push('- Every link goes on its own line so it stays tappable.');
   lines.push('- Bold with *single asterisks* — that is what WhatsApp understands.');
+  lines.push('- NEVER use **double asterisks**, [text](url) markdown links, headings or tables.');
+  lines.push('  WhatsApp shows those as literal characters and the reply looks broken.');
   lines.push('');
   lines.push('Write only the reply text. No greeting boilerplate if the conversation is already going.');
   return lines.join('\n');

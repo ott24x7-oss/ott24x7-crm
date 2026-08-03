@@ -75,6 +75,13 @@ const DEFAULT_SETTINGS = {
   handoverKeywords: ['refund', 'complaint', 'legal', 'lawyer', 'police', 'fraud', 'cheat',
     'scam', 'chargeback', 'discount', 'manager', 'owner', 'human', 'call me',
     'paisa wapas', 'shikayat', 'dhokha'],
+  // Named, so the assistant introduces itself as the business rather than as "a small
+  // business" - the Telegram bot opens with the brand and it reads completely differently.
+  businessName: '',
+  // Real humans to hand off to. The bot shares these when it cannot help; without them
+  // the CRM could only say "someone will get back to you" and leave the customer waiting.
+  supportWhatsApp: '',             // digits only, e.g. 919812345678
+  supportTelegram: '',             // handle without the @
   tone: 'friendly',                // friendly | formal | concise
   maxResponseChars: 600,
   labelAiToCustomer: false,        // never tag replies to the customer unless asked for

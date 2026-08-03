@@ -3870,6 +3870,9 @@ async function aiViewSettings() {
         + 'matching notes from your knowledge base to your AI provider over the internet. Nothing else leaves this computer, '
         + 'and no data is sent when the assistant is off.';
   };
+  const bizName = el('input', { value: s.businessName || '', placeholder: 'e.g. OTT24x7', maxLength: 60 });
+  const supWa = el('input', { value: s.supportWhatsApp || '', placeholder: '919812345678' });
+  const supTg = el('input', { value: s.supportTelegram || '', placeholder: 'yourhandle (no @)' });
   const business = el('textarea', { value: s.businessInstructions || '',
     placeholder: 'How you want the assistant to talk about your business. Anything it must always say, or never say.' });
   const minConf = el('input', { type: 'number', min: '0', max: '100', value: String(Math.round(s.minConfidence * 100)) });
@@ -3945,6 +3948,10 @@ async function aiViewSettings() {
     status, cmds,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '10px 0' } }),
     el('b', {}, 'How it behaves'),
+    lbl('Business name (the assistant introduces itself as this)', bizName),
+    el('div', { className: 'row' }, lbl('Human support WhatsApp', supWa), lbl('Human support Telegram', supTg)),
+    el('div', { className: 'fp-note', style: { margin: '-2px 0 0' } },
+      'When the assistant cannot help, it shares these so the customer reaches a person instead of waiting.'),
     lbl('Business instructions', business),
     el('div', { className: 'row' }, lbl('Tone', tone), lbl('Max reply length', maxChars)),
     el('div', { className: 'row' }, lbl('Send automatically above (%)', minConf), lbl('Wait before sending (sec)', delay)),
@@ -3964,6 +3971,8 @@ async function aiViewSettings() {
         mode: mode.value, provider: provider.value, baseUrl: baseUrl.value.trim(),
         apiKey: apiKey.value.trim(), chatModel: chatModel.value.trim(),
         embedModel: embedModel.value.trim(), businessInstructions: business.value,
+        businessName: bizName.value.trim(),
+        supportWhatsApp: digits(supWa.value), supportTelegram: supTg.value.trim().replace(/^@/, ''),
         minConfidence: Math.max(0, Math.min(1, Number(minConf.value) / 100)),
         replyDelayMs: Math.max(0, Number(delay.value) * 1000),
         maxRepliesPerConversation: Math.max(1, Number(maxReplies.value) || 5),
