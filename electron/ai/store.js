@@ -95,7 +95,23 @@ const DEFAULT_SETTINGS = {
   consentAccepted: false,
 };
 
-const getSettings = (accId) => ({ ...DEFAULT_SETTINGS, ...(read('settings', accId, {}) || {}) });
+// Embedding models that only exist in a local Ollama install. A settings file written
+// before the provider became a hosted key still carries one of these, and a stored value
+// beats the new empty default — so the app kept asking HeyRoute for "nomic-embed-text",
+// got HTTP 400 on every incoming message, and kept insisting the knowledge base was "not
+// searchable" when keyword matching was working fine. Changing the default fixed new
+// installs and did nothing for anyone who already had one.
+const LOCAL_EMBED = /^(nomic-embed-text|mxbai-embed-large|all-minilm|snowflake-arctic-embed|bge-|gte-|e5-)/i;
+
+const getSettings = (accId) => {
+  const out = { ...DEFAULT_SETTINGS, ...(read('settings', accId, {}) || {}) };
+  // Carried forward once, then written back so the correction sticks.
+  if (out.provider !== 'ollama' && LOCAL_EMBED.test(String(out.embedModel || '').trim())) {
+    out.embedModel = '';
+    try { write('settings', accId, out); } catch (e) { /* read-only disk — still correct in memory */ }
+  }
+  return out;
+};
 const saveSettings = (accId, patch) => {
   const next = { ...getSettings(accId), ...(patch || {}) };
   return write('settings', accId, next) ? next : null;
