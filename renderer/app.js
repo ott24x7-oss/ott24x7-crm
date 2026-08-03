@@ -3741,6 +3741,58 @@ function aiBadge() {
   dot.textContent = String(aiSuggestions.length);
 }
 
+// Walk the whole path a message travels and report where it stops.
+//
+// Six releases went into fixing this pipeline one silent break at a time, each found by
+// reading code rather than asking the running app, because nothing could be asked. Every
+// stage failed the same way: an early return or an empty catch, no error, and a panel full
+// of green indicators that were all individually telling the truth.
+//
+// This checks each stage against the live webview and names the first one that is broken.
+async function aiDiagnose(accId) {
+  const out = [];
+  const add = (ok, label, detail) => out.push({ ok, label, detail });
+
+  const wv = document.querySelector(`webview[data-acc="${accId}"]`);
+  if (!wv) { add(false, 'WhatsApp account', 'No account tab. Add one first.'); return out; }
+
+  // The engine injection sets this. If it threw, the poll skips this account entirely and
+  // absolutely nothing downstream runs — with no symptom anywhere.
+  if (!wv.dataset.injected) {
+    add(false, 'CRM engine injected', 'Not injected — the app is not reading this account at all. Reload the tab.');
+    return out;
+  }
+  add(true, 'CRM engine injected', '');
+
+  let page;
+  try {
+    page = await wv.executeJavaScript(`(function(){var o={wpp:false,on:false,hooked:false,q:-1,guard:false};
+      try{o.wpp=(typeof WPP!=='undefined');o.on=(o.wpp&&typeof WPP.on==='function');
+      o.hooked=!!window.__ott_lead_init;o.guard=!!window.__ott_guard_init;
+      o.q=(window.__ott_inq||[]).length;}catch(e){}return o;})()`);
+  } catch (e) {
+    add(false, 'Can read the page', String((e && e.message) || e));
+    return out;
+  }
+
+  add(!!page.wpp, 'WhatsApp engine (wa-js) loaded',
+    page.wpp ? '' : 'WhatsApp Web has not finished loading. Wait for your chats to appear.');
+  add(!!page.on, 'Engine ready to accept a listener', page.on ? '' : 'wa-js is present but not initialised yet.');
+  add(!!page.hooked, 'Listening for new messages',
+    page.hooked ? '' : 'NOT attached — no incoming message can reach the assistant. This is the fault that made it silent.');
+  add(page.q >= 0, 'Message queue reachable', page.q >= 0 ? `${page.q} waiting to be picked up` : 'queue missing');
+
+  // The renderer side.
+  add(!!aiSettingsCache, 'Settings loaded',
+    aiSettingsCache ? `mode: ${aiSettingsCache.mode}` : 'Not loaded — reopen the panel.');
+  add(hookMap[accId] === true, 'Poll is reading this account',
+    hookMap[accId] === true ? '' : 'The 3-second poll has not confirmed this account yet.');
+
+  const h = await ott.ai.health(accId).catch(() => null);
+  add(!!(h && h.ok), 'AI provider reachable', (h && h.ok) ? '' : String((h && h.err) || 'no answer'));
+  return out;
+}
+
 async function aiTakeOver(number, on) {
   await ott.ai.setConvoState(activeId, number, { takenOver: !!on, lastOwnerAt: Date.now() });
   if (openFeatureId === 'ai') refreshPanel('ai');
@@ -3853,8 +3905,13 @@ async function aiViewInbox() {
   // other indicator still reads healthy — connected, model ready, mode active — and not one
   // message is ever seen. That was invisible from the outside and cost several releases of
   // guessing. Now it says so.
-  if (hookMap[activeId] === false) {
-    blockers.push('Not listening for new messages on this account yet. If this does not clear within a minute, reload the account tab.');
+  // `=== false` alone missed the worse case. If the engine injection failed, the poll skips
+  // the account entirely and this stays undefined — so the check that exists to catch a dead
+  // pipeline was itself silent in the one situation where the pipeline was most dead.
+  if (hookMap[activeId] !== true) {
+    blockers.push(hookMap[activeId] === false
+      ? 'Not listening for new messages on this account yet. If this does not clear within a minute, reload the account tab.'
+      : 'This account is not being read at all — press “Check why” below.');
   }
 
   // What actually happened to the last message that came in.
@@ -3912,6 +3969,25 @@ async function aiViewInbox() {
       await ott.ai.saveSettings(activeId, { ownerManualStatus: av.online ? 'offline' : 'auto' });
       refreshPanel('ai');
     } }, av.online ? 'Set me away' : 'Back to automatic'),
+    // "Nothing is happening and I cannot tell why" needed an answer that does not depend on
+    // someone reading the source.
+    el('button', { className: 'btn small ghost', onclick: async (e) => {
+      const btn = e.target; btn.textContent = 'Checking…'; btn.disabled = true;
+      let rows = [];
+      try { rows = await aiDiagnose(activeId); }
+      catch (err) { rows = [{ ok: false, label: 'Check failed', detail: String((err && err.message) || err) }]; }
+      btn.textContent = 'Check why'; btn.disabled = false;
+      const bad = rows.find((r) => !r.ok);
+      const box2 = el('div', { className: 'fp-note', style: { marginTop: '8px', lineHeight: '1.7' } },
+        el('b', {}, bad ? 'Found the problem' : 'Everything is connected'),
+        el('div', { style: { marginTop: '6px' } },
+          ...rows.map((r) => el('div', { style: { color: r.ok ? '' : 'var(--danger)' } },
+            (r.ok ? '✓ ' : '✗ ') + r.label + (r.detail ? ' — ' + r.detail : '')))),
+        bad ? null : el('div', { style: { marginTop: '6px' } },
+          'Send a NEW message from another phone — messages already sitting unread are never answered.'));
+      const old = document.getElementById('ai-diag'); if (old) old.remove();
+      box2.id = 'ai-diag'; btn.parentElement.parentElement.append(box2);
+    } }, 'Check why'),
     aiSuggestions.length ? el('button', { className: 'btn small ghost', onclick: async () => {
       if (!(await aiConfirm('Clear all suggestions?', 'They are removed from this list. Nothing is sent.'))) return;
       aiSuggestions = []; store.set('ott_ai_suggestions', aiSuggestions); refreshPanel('ai'); aiBadge();
