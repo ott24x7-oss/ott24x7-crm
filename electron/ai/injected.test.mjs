@@ -205,3 +205,36 @@ test('the scanner ignores the backlog and the owner\'s own messages', async () =
   assert.strictEqual(win.__ott_inq.length, 0,
     'answering a backlog on startup, or replying to the owner, would both be worse than silence');
 });
+
+// getMessages returns raw MODELS in this engine, and on a model fromMe lives on the
+// MsgKey (m.id.fromMe), not at the top level. The engine's own serializer reads it from
+// there. A scanner that checks only m.fromMe answers the owner's own outbound messages.
+test('owner messages are skipped even when fromMe only exists on the key', async () => {
+  const code = injectedScript('applyLeadButton');
+  const timers = [];
+  const win = {
+    document: { querySelector: () => null, getElementById: () => null, createElement: () => ({ style: {} }) },
+    setInterval: (fn, ms) => timers.push({ fn, ms }),
+    clearInterval: () => {}, setTimeout: () => 1,
+  };
+  win.window = win;
+  const ctx = vm.createContext(win);
+  const now = Date.now();
+  ctx.WPP = {
+    isReady: true, on: () => {},
+    chat: {
+      list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 1 }],
+      getMessages: strictGetMessages({ '919876543210@c.us': [
+        // Model shape: no top-level fromMe anywhere.
+        { id: { _serialized: 'true_919876543210@c.us_AAA', fromMe: true }, body: 'reply I typed myself',
+          t: Math.floor((now + 4000) / 1000), from: { user: '919876543210' } },
+        { id: { _serialized: 'false_919876543210@c.us_BBB', fromMe: false }, body: 'customer question',
+          t: Math.floor((now + 5000) / 1000), from: { user: '919876543210' }, notifyName: 'Anup' },
+      ] }),
+    },
+  };
+  new vm.Script(code).runInContext(ctx);
+  await timers.find((t) => t.ms === 3000).fn();
+  assert.strictEqual(win.__ott_inq.length, 1, 'exactly the customer message, never the owner\'s own');
+  assert.strictEqual(win.__ott_inq[0].body, 'customer question');
+});

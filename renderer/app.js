@@ -1507,6 +1507,11 @@ function applyLeadButton(accId) {
     if(!window.__ott_scan_from)window.__ott_scan_from=Date.now();
 
     async function scan(){
+      if(window.__ott_scan_busy)return;   /* getMessages can outlast the 3s interval */
+      window.__ott_scan_busy=true;
+      try{ await _scan(); }finally{ window.__ott_scan_busy=false; }
+    }
+    async function _scan(){
       /* Instrumented at every step. Three times today a check reported a stage healthy when
          it had only confirmed something was scheduled or registered, never that it ran or
          produced anything. A silent catch here would do it again, so record what actually
@@ -1541,7 +1546,10 @@ function applyLeadButton(accId) {
           catch(e){window.__ott_scan_err='getMessages: '+String((e&&e.message)||e);continue;}
           for(var j=0;j<msgs.length;j++){
             var m=msgs[j];
-            if(!m||m.fromMe)continue;
+            /* getMessages returns raw models, and on a model fromMe lives on the KEY -
+               m.id.fromMe - not at the top level. Checking only m.fromMe let the owner's
+               own outbound messages through, and the assistant must never answer those. */
+            if(!m||m.fromMe||(m.id&&m.id.fromMe))continue;
             var mid=(m.id&&(m.id._serialized||m.id))||'';
             if(!mid||window.__ott_seen_ids[mid])continue;
             var ts=(m.t||0)*1000;
@@ -4665,7 +4673,7 @@ async function aiFetchChat(number, count, accId) {
   const expr = `(async()=>{try{
     var ms=await WPP.chat.getMessages(${jid},{count:${Math.max(10, Math.min(200, count || 60))}});
     return (ms||[]).map(function(m){return {
-      fromMe: !!m.fromMe,
+      fromMe: !!(m.fromMe||(m.id&&m.id.fromMe)),
       body: String((m.body||m.caption||'')).slice(0,1500),
       ts: (m.t||0)*1000,
       type: m.type||'chat'
