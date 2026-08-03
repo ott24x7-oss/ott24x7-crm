@@ -1507,33 +1507,57 @@ function applyLeadButton(accId) {
     if(!window.__ott_scan_from)window.__ott_scan_from=Date.now();
 
     async function scan(){
+      /* Instrumented at every step. Three times today a check reported a stage healthy when
+         it had only confirmed something was scheduled or registered, never that it ran or
+         produced anything. A silent catch here would do it again, so record what actually
+         happened: how many times this ran, how many chats came back, how many looked worth
+         reading, and the last error. */
+      window.__ott_scan_runs=(window.__ott_scan_runs||0)+1;
       try{
-        if(typeof WPP==='undefined'||!WPP.isReady||!WPP.chat||!WPP.chat.list)return;
+        if(typeof WPP==='undefined'||!WPP.isReady||!WPP.chat||!WPP.chat.list){
+          window.__ott_scan_err='WPP.chat.list is not available';return;}
         var chats=await WPP.chat.list();
+        window.__ott_scan_chats=(chats&&chats.length)||0;
         var hot=[];
-        for(var i=0;i<chats.length&&hot.length<20;i++){
-          if((chats[i].unreadCount||0)>0)hot.push(chats[i]);
+        for(var i=0;i<chats.length&&hot.length<25;i++){
+          var ch=chats[i];
+          /* Do not depend on unreadCount alone - if that property is named differently in
+             this build, every chat looks read and nothing is ever examined. Recent activity
+             is the more reliable signal, so either one qualifies. */
+          var lastT=(ch.t||ch.lastReceivedKey&&0||0)*1000;
+          if((ch.unreadCount||0)>0||(lastT&&lastT>=window.__ott_scan_from))hot.push(ch);
         }
+        window.__ott_scan_hot=hot.length;
         for(var k=0;k<hot.length;k++){
           var c=hot[k];
           var cid=(c.id&&(c.id._serialized||c.id))||'';
           if(!cid)continue;
           var isG=/@g\\.us$/.test(String(cid));
           var msgs=[];
-          try{msgs=await WPP.chat.getMessages({chatId:cid,count:6})||[];}catch(e){continue;}
+          /* chatId is the FIRST argument; the options object is the second. Passing one
+             object with both meant assertGetChat received {chatId,count} as the id and
+             threw on every chat - and the old catch{continue} hid that completely. */
+          try{msgs=await WPP.chat.getMessages(cid,{count:6})||[];}
+          catch(e){window.__ott_scan_err='getMessages: '+String((e&&e.message)||e);continue;}
           for(var j=0;j<msgs.length;j++){
             var m=msgs[j];
             if(!m||m.fromMe)continue;
             var mid=(m.id&&(m.id._serialized||m.id))||'';
             if(!mid||window.__ott_seen_ids[mid])continue;
             var ts=(m.t||0)*1000;
-            if(!ts||ts<window.__ott_scan_from)continue;
+            if(!ts){window.__ott_scan_skip='message has no timestamp';continue;}
+            if(ts<window.__ott_scan_from){window.__ott_scan_skip='older than app start';continue;}
             window.__ott_seen_ids[mid]=1;
             var body=(m.body||m.caption||'');
-            if(!body)continue;
+            if(!body){window.__ott_scan_skip='message had no text (image, sticker or reaction)';continue;}
+            /* The chat id is already known and is the most reliable source of the number.
+               Depending on m.from being shaped a particular way would skip every message
+               with no way to see why - the same trap as everything else today. */
             var num='';
-            try{num=await _ph(m.from)||(m.from&&m.from.user)||'';}catch(e){num=(m.from&&m.from.user)||'';}
-            if(!num)continue;
+            try{num=await _ph(m.from)||'';}catch(e){num='';}
+            if(!num)num=(m.from&&m.from.user)||'';
+            if(!num)num=String(cid).replace(/@.*$/,'').replace(/\\D/g,'');
+            if(!num){window.__ott_scan_skip='could not work out the phone number';continue;}
             window.__ott_inq.push({number:num,raw:num,body:body,msgId:mid,isGroup:isG,
               name:(m.sender&&(m.sender.pushname||m.sender.name))||m.notifyName||'',ts:ts});
             window.__ott_evt=(window.__ott_evt||0)+1;window.__ott_evt_at=Date.now();
@@ -1543,7 +1567,8 @@ function applyLeadButton(accId) {
         /* Keep the dedupe table from growing without bound over a long session. */
         var ids=Object.keys(window.__ott_seen_ids);
         if(ids.length>4000){for(var z=0;z<2000;z++)delete window.__ott_seen_ids[ids[z]];}
-      }catch(e){}
+        window.__ott_scan_err='';
+      }catch(e){window.__ott_scan_err=String((e&&e.message)||e);}
     }
     if(!window.__ott_scan_init){window.__ott_scan_init=true;setInterval(scan,3000);}
 
@@ -3842,6 +3867,9 @@ async function aiDiagnose(accId) {
       o.ready=(o.wpp&&!!WPP.isReady);o.evt=(window.__ott_evt||0);
       o.hookAt=(window.__ott_hook_at||0);o.evtAt=(window.__ott_evt_at||0);
       o.scan=!!window.__ott_scan_init;o.scanHits=(window.__ott_scan_hits||0);
+      o.runs=(window.__ott_scan_runs||0);o.chats=(window.__ott_scan_chats||0);
+      o.hot=(window.__ott_scan_hot||0);o.scanErr=(window.__ott_scan_err||'');
+      o.skip=(window.__ott_scan_skip||'');
       o.hooked=!!window.__ott_lead_init;o.guard=!!window.__ott_guard_init;
       o.q=(window.__ott_inq||[]).length;}catch(e){}return o;})()`);
   } catch (e) {
@@ -3857,8 +3885,20 @@ async function aiDiagnose(accId) {
     page.hooked ? '' : 'not attached');
   // The event proved unreliable in practice, so this is the path that actually carries
   // messages. It matters more than the line above it.
-  add(!!page.scan, 'Scanning WhatsApp for new messages',
-    page.scan ? `${page.scanHits} picked up by scanning` : 'scanner not running — reload the account tab');
+  // Report what the scan DID, not that it was scheduled. A green tick for "an interval
+  // exists" is the same empty claim that hid this for three releases.
+  if (page.scanErr) {
+    add(false, 'Scanning WhatsApp for new messages', `failing: ${page.scanErr}`);
+  } else if (!page.runs) {
+    add(false, 'Scanning WhatsApp for new messages', 'scheduled but has never run — reload the account tab');
+  } else if (!page.chats) {
+    add(false, 'Scanning WhatsApp for new messages',
+      `ran ${page.runs}x but WhatsApp returned no chats at all`);
+  } else {
+    add(true, 'Scanning WhatsApp for new messages',
+      `ran ${page.runs}x · ${page.chats} chats · ${page.hot} worth reading · ${page.scanHits} picked up`
+      + (page.scanHits ? '' : (page.skip ? ` · last one passed over: ${page.skip}` : '')));
+  }
   // "Registered" and "receiving" are different claims, and the first was true while the
   // second was false. But zero is not proof of anything on its own: right after a restart it
   // just means nobody has messaged yet. Reporting that as a failure sent the owner chasing a
@@ -4623,7 +4663,7 @@ async function aiViewKnowledge() {
 async function aiFetchChat(number, count, accId) {
   const jid = JSON.stringify(digits(number) + '@c.us');
   const expr = `(async()=>{try{
-    var ms=await WPP.chat.getMessages({chatId:${jid},count:${Math.max(10, Math.min(200, count || 60))}});
+    var ms=await WPP.chat.getMessages(${jid},{count:${Math.max(10, Math.min(200, count || 60))}});
     return (ms||[]).map(function(m){return {
       fromMe: !!m.fromMe,
       body: String((m.body||m.caption||'')).slice(0,1500),

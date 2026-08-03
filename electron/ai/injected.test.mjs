@@ -41,6 +41,23 @@ function injectedScript(fnName) {
   return new Function('return `' + raw + '`')();
 }
 
+
+// A fake getMessages as strict as the real one. The bundled engine does
+// assertGetChat(firstArg) — hand it anything but a chat-id string and it throws. The
+// scanner shipped broken precisely because the previous fake accepted any shape at all,
+// so the test proved nothing about the call it existed to protect.
+function strictGetMessages(byChat) {
+  return async (chatId, opts) => {
+    if (typeof chatId !== 'string' || !/@(c|g)\.us$/.test(chatId)) {
+      throw new Error('chat not found');           // what assertGetChat does with an object
+    }
+    if (opts !== undefined && (typeof opts !== 'object' || Array.isArray(opts))) {
+      throw new Error('bad options');
+    }
+    return byChat[chatId] || [];
+  };
+}
+
 test('the lead + message-capture script parses', () => {
   const code = injectedScript('applyLeadButton');
   assert.doesNotThrow(() => new vm.Script(code), 'injected script is not valid JavaScript');
@@ -138,11 +155,11 @@ test('the scanner finds a new message without any event firing', async () => {
     on: () => {},                              // registered, but deliberately never fired
     chat: {
       list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 1 }],
-      getMessages: async () => ([{
+      getMessages: strictGetMessages({ '919876543210@c.us': [{
         id: { _serialized: 'SCAN1' }, fromMe: false, body: 'Netflix ka price kya h?',
         t: Math.floor((now + 5000) / 1000), from: { user: '919876543210', server: 'c.us' },
         notifyName: 'Anup',
-      }]),
+      }] }),
     },
   };
   new vm.Script(code).runInContext(ctx);
@@ -175,12 +192,12 @@ test('the scanner ignores the backlog and the owner\'s own messages', async () =
     isReady: true, on: () => {},
     chat: {
       list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 3 }],
-      getMessages: async () => ([
+      getMessages: strictGetMessages({ '919876543210@c.us': [
         { id: { _serialized: 'OLD' }, fromMe: false, body: 'sitting unread since this morning',
           t: Math.floor((now - 3600000) / 1000), from: { user: '919876543210' } },
         { id: { _serialized: 'MINE' }, fromMe: true, body: 'my own reply',
           t: Math.floor((now + 5000) / 1000), from: { user: '919876543210' } },
-      ]),
+      ] }),
     },
   };
   new vm.Script(code).runInContext(ctx);
