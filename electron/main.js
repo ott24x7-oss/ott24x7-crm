@@ -71,6 +71,11 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true, // we embed WhatsApp Web in a <webview>
+      // Chromium throttles timers in a hidden window to roughly once a minute. The renderer
+      // drives the poll that drains incoming messages and hands them to the AI, so a
+      // minimised CRM answered customers a minute late at best. The webviews already opt
+      // out of this; the window that reads them did not.
+      backgroundThrottling: false,
     },
   });
 

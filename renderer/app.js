@@ -296,11 +296,14 @@ async function enterApp() {
   makeDraggable($('#featurePanel'), $('#featurePanel .fp-head'));
 
   accounts = store.get('ott_accounts', []);
-  try { aiInit(); } catch (e) {}
   accounts.forEach(createWebview);
   renderTabs();
+  // aiInit ran here, before switchAccount had set activeId — so it fetched settings for
+  // account "null" and cached the defaults for an account that does not exist. Moved below
+  // the switch so it reads the real account.
   if (accounts.length) switchAccount(accounts[0].id);
   else $('#waEmpty').style.display = 'flex';
+  try { aiInit(); } catch (e) {}
   setInterval(pollTick, 3000); // status + lead/reply/command queues in one IPC round-trip
   setInterval(recheckLicense, 300000); // re-validate license every 5 min (suspend takes effect live)
   startScheduler();
@@ -346,6 +349,9 @@ function createWebview(acc) {
 function switchAccount(id) {
   if (activeId === id) return;            // already active — do nothing
   activeId = id;
+  // Each account has its own AI settings. Without this the cache kept whichever account was
+  // loaded at startup, so switching tabs left the gate reading the wrong account's mode.
+  try { aiInit(); } catch (e) {}
   $('#waEmpty').style.display = 'none';
   // Toggle a class only. Never touch display: hiding a <webview> destroys its GPU
   // surface, so showing it again forces a full WhatsApp repaint (the switching lag).
@@ -385,26 +391,51 @@ return o;})()`;
 let _pollBusy = false;
 async function pollTick() {
   if (_pollBusy) return;                              // never stack round-trips
-  if (document.hidden) return;                        // window minimised/hidden — skip
-  const w = activeWv(); if (!w || !w.dataset.injected) return;
+
+  // Every injected account, not just the visible one.
+  //
+  // This drained only activeWv(), so on a second account the in-page queue grew and was
+  // never read: no leads captured, no invoice commands, and — the one that matters — no AI
+  // replies, until the owner happened to click that tab. Whichever account you were not
+  // looking at was simply not being served.
+  //
+  // There was also a `if (document.hidden) return`, which stopped the whole loop the moment
+  // the window was minimised. An assistant sold as "Auto 24x7" that answers customers
+  // "while you are away" cannot stop working the moment you look away, and minimising is
+  // exactly what someone does when they leave. Nothing here touches the DOM or costs
+  // anything when the queues are empty, so there is no reason to skip a tick.
+  const wvs = [...document.querySelectorAll('#waStage webview')].filter((w) => w.dataset.injected);
+  if (!wvs.length) return;
+
   _pollBusy = true;
-  let info;
-  try { info = await w.executeJavaScript(POLL_EXPR); } catch { info = null; }
-  _pollBusy = false;
-  if (!info) return;
+  try {
+    const results = await Promise.all(wvs.map(async (w) => {
+      try { return { acc: w.dataset.acc, info: await w.executeJavaScript(POLL_EXPR) }; }
+      catch { return null; }
+    }));
 
-  const prev = statusMap[activeId];
-  statusMap[activeId] = info.s;
-  if (prev !== info.s) renderTabs();                  // only redraw tabs on real change
+    let statusChanged = false;
+    for (const r of results) {
+      if (!r || !r.info) continue;
+      const { acc, info } = r;
 
-  if (info.leads && info.leads.length) info.leads.forEach(saveLead);
-  if (info.incoming && info.incoming.length) {
-    markRepliedLeads(info.incoming);
-    // Queued, never awaited: the poll must return promptly whatever the model does.
-    info.incoming.forEach((m) => { try { aiOnIncoming(m); } catch (e) {} });
+      if (statusMap[acc] !== info.s) { statusMap[acc] = info.s; statusChanged = true; }
+
+      if (info.leads && info.leads.length) info.leads.forEach(saveLead);
+      if (info.incoming && info.incoming.length) {
+        markRepliedLeads(info.incoming);
+        // Queued, never awaited: the poll must return promptly whatever the model does.
+        // Tagged with the account it arrived on, so a reply is drafted from that account's
+        // settings and catalogue rather than whichever tab is on screen.
+        info.incoming.forEach((m) => { try { aiOnIncoming({ ...m, accId: acc }); } catch (e) {} });
+      }
+      if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
+      if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
+    }
+    if (statusChanged) renderTabs();                  // only redraw tabs on real change
+  } finally {
+    _pollBusy = false;
   }
-  if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
-  if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
 }
 
 // ================= feature rail + panel =================
@@ -3576,8 +3607,11 @@ async function aiHandle(msg) {
     }
   } catch (e) { /* no history is better than no reply — carry on without it */ }
 
+  // The account the message arrived on, not the tab on screen. Reading activeId meant a
+  // message on account B was answered from account A's settings, catalogue and reply
+  // history the instant the owner had another tab open.
   const r = await ott.ai.generate({
-    accId: activeId, number, name: msg.name, text: msg.body, msgId: msg.msgId,
+    accId: msg.accId || activeId, number, name: msg.name, text: msg.body, msgId: msg.msgId,
     isGroup: !!msg.isGroup, history, products: aiProducts(),
     customer: aiCustomer(number), lastActivityAt: aiLastActivity,
   });
