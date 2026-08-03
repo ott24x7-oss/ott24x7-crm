@@ -376,9 +376,11 @@ function renderTabs() {
 
 // per-account status
 const statusMap = {};
+const hookMap = {};
 // ONE round-trip per tick: connection status + all three in-page queues.
 // (Was two separate executeJavaScript IPC calls every 2.5s.)
-const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[],acts:[]};
+const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[],acts:[],hooked:false};
+try{o.hooked=!!window.__ott_lead_init}catch(e){}
 try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[],d=window.__ott_actq||[];
 window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];window.__ott_actq=[];o.leads=a;o.incoming=b;o.cmds=c;o.acts=d;}catch(e){}
 try{if(typeof WPP==='undefined')return o;
@@ -420,6 +422,9 @@ async function pollTick() {
       const { acc, info } = r;
 
       if (statusMap[acc] !== info.s) { statusMap[acc] = info.s; statusChanged = true; }
+      // Whether this account is actually listening for new messages. Not knowing this
+      // is what made a silently-missing hook impossible to spot from the outside.
+      hookMap[acc] = !!info.hooked;
 
       if (info.leads && info.leads.length) info.leads.forEach(saveLead);
       if (info.incoming && info.incoming.length) {
@@ -1434,21 +1439,45 @@ function applyLeadButton(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const js = `(function(){
     ${PH_RESOLVER}
-    if(!window.__ott_lead_init){window.__ott_lead_init=true;window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];
-      try{WPP.on('chat.new_message',async function(m){try{if(!m)return;var body=(m.body||'');
-        if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});
-          /* An owner reply is the strongest possible signal that they are present. */
-          window.__ott_ownerq=window.__ott_ownerq||[];window.__ott_ownerq.push({to:(m.to&&(m.to._serialized||m.to))||'',ts:Date.now()});return;}
-        var u=m.from&&m.from.user;
-        /* Carry the body and message id too: the AI assistant needs what was said and a
-           stable id to stay idempotent. Lead follow-up only ever reads .number. */
-        var isG=!!(m.from&&(m.from.server==='g.us'||/@g\\.us$/.test(String(m.from._serialized||''))));
-        var num=await _ph(m.from)||u||'';
-        if(u)window.__ott_inq.push({number:num,raw:u,body:body,
-          msgId:(m.id&&(m.id._serialized||m.id))||'',isGroup:isG,
-          name:(m.sender&&(m.sender.pushname||m.sender.name))||m.notifyName||'',ts:Date.now()});}catch(e){}});}catch(e){}
-      setInterval(place,4000);
+    /* The queues exist from the first run; only the listener is retried. */
+    window.__ott_leadq=window.__ott_leadq||[];window.__ott_inq=window.__ott_inq||[];
+    window.__ott_cmdq=window.__ott_cmdq||[];window.__ott_actq=window.__ott_actq||[];
+
+    /* This is the ONLY thing that puts an incoming message in front of the AI, and it used
+       to set __ott_lead_init BEFORE calling WPP.on - then swallow the failure. This code
+       runs the moment the engine is injected, seconds before WhatsApp Web has finished
+       booting wa-js, so WPP was routinely still undefined. The call threw, the empty catch
+       hid it, and the flag was already claimed - so it never ran again for the life of the
+       page. Queues stayed empty, the poll drained nothing, and the panel showed a healthy
+       assistant that had simply never been told a message arrived. A race, so it worked
+       sometimes, which is worse than never working.
+
+       The flag is now claimed only once the listener is genuinely attached, and it keeps
+       trying until it is. */
+    function onMsg(m){(async function(){try{if(!m)return;var body=(m.body||'');
+      if(m.fromMe){if(/^\\/invoice/i.test(body.trim()))window.__ott_cmdq.push({chatId:(m.to&&(m.to._serialized||m.to))||'',body:body});
+        /* An owner reply is the strongest possible signal that they are present. */
+        window.__ott_ownerq=window.__ott_ownerq||[];window.__ott_ownerq.push({to:(m.to&&(m.to._serialized||m.to))||'',ts:Date.now()});return;}
+      var u=m.from&&m.from.user;
+      /* Carry the body and message id too: the AI assistant needs what was said and a
+         stable id to stay idempotent. Lead follow-up only ever reads .number. */
+      var isG=!!(m.from&&(m.from.server==='g.us'||/@g\\.us$/.test(String(m.from._serialized||''))));
+      var num=await _ph(m.from)||u||'';
+      if(u)window.__ott_inq.push({number:num,raw:u,body:body,
+        msgId:(m.id&&(m.id._serialized||m.id))||'',isGroup:isG,
+        name:(m.sender&&(m.sender.pushname||m.sender.name))||m.notifyName||'',ts:Date.now()});}catch(e){}})();}
+
+    function hook(){
+      if(window.__ott_lead_init)return true;
+      try{
+        if(typeof WPP==='undefined'||typeof WPP.on!=='function')return false;
+        WPP.on('chat.new_message',onMsg);
+        window.__ott_lead_init=true;   /* only now that it is really attached */
+        return true;
+      }catch(e){return false;}
     }
+    if(!hook()){var _t=setInterval(function(){if(hook())clearInterval(_t);},1000);}
+    if(!window.__ott_place_init){window.__ott_place_init=true;setInterval(place,4000);}
     async function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(!c)return;var u=await _ph(c.id);if(!u&&c.contact&&c.contact.id)u=await _ph(c.contact.id);var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;var b=document.getElementById('ott-lead-btn');if(!u){if(b){b.textContent='no number';setTimeout(function(){b.textContent='\uFF0B Lead';},1600);}return;}window.__ott_leadq.push({number:u,name:nm});if(b){b.textContent='\u2713 Lead saved';setTimeout(function(){b.textContent='\uFF0B Lead';},1500);}}catch(e){}}
     function place(){var header=document.querySelector('#main header');if(!header||document.getElementById('ott-lead-btn'))return;var b=document.createElement('button');b.id='ott-lead-btn';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:#12b866;color:#fff;border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
     place();
@@ -2193,7 +2222,17 @@ function applyGuard(accId) {
   const cfg = store.get(`ott_guard_${accId}`, { on: false, groups: {} });
   const conf = cfg.on ? { on: true, groups: cfg.groups || {} } : { on: false, groups: {} };
   const js = `window.__ott_guard=${JSON.stringify(conf)};
-    if(!window.__ott_guard_init){window.__ott_guard_init=true;window.__ott_gw={};try{WPP.on('chat.new_message',async(m)=>{try{
+    /* Same race as the lead/AI hook: claiming the flag before WPP.on succeeds meant that if
+       wa-js was not ready yet - the normal case this soon after injection - Group Guard
+       silently never watched anything, with nothing anywhere to say so. */
+    window.__ott_gw=window.__ott_gw||{};
+    function _ghook(){
+      if(window.__ott_guard_init)return true;
+      try{ if(typeof WPP==='undefined'||typeof WPP.on!=='function')return false;
+        WPP.on('chat.new_message',_gOnMsg); window.__ott_guard_init=true; return true;
+      }catch(e){return false;}
+    }
+    function _gOnMsg(m){(async(m)=>{try{
       const g=window.__ott_guard; if(!g||!g.on||!m||m.fromMe)return;
       const chatId=m.from&&(m.from._serialized||m.from); if(!chatId||!String(chatId).endsWith('@g.us'))return;
       const cfg=(g.groups||{})[chatId]; if(!cfg)return;
@@ -2204,7 +2243,8 @@ function applyGuard(accId) {
         try{await WPP.chat.deleteMessage(chatId,[m.id&&(m.id._serialized||m.id)],true,true)}catch(e){}
         if(cfg.warn){const s=m.author&&(m.author._serialized||m.author); if(s){window.__ott_gw[chatId]=window.__ott_gw[chatId]||{};const c=(window.__ott_gw[chatId][s]||0)+1;window.__ott_gw[chatId][s]=c; if(c>=(cfg.max||3)){try{await WPP.group.removeParticipants(chatId,[s])}catch(e){}}}}
       }
-    }catch(e){}});}catch(e){}}`;
+    }catch(e){}})(m);}
+    if(!_ghook()){var _gt=setInterval(function(){if(_ghook())clearInterval(_gt);},1000);}`;
   wv.executeJavaScript(js).catch(() => {});
 }
 
@@ -3793,6 +3833,16 @@ async function aiViewInbox() {
     blockers.push(`It can answer about your ${prodCount} product(s), but nothing else. Questions about delivery, payment or returns get handed to you — add those in “Train the AI”.`);
   }
   if (!s.allowGroups) blockers.push('Group chats are left alone. Only one-to-one chats get replies.');
+
+  // The one that had no symptom at all.
+  //
+  // If the listener that hands incoming messages to the assistant never attached, every
+  // other indicator still reads healthy — connected, model ready, mode active — and not one
+  // message is ever seen. That was invisible from the outside and cost several releases of
+  // guessing. Now it says so.
+  if (hookMap[activeId] === false) {
+    blockers.push('Not listening for new messages on this account yet. If this does not clear within a minute, reload the account tab.');
+  }
 
   // What actually happened to the last message that came in.
   //
