@@ -4352,6 +4352,12 @@ async function aiViewTraining() {
     el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: load }, 'Read conversation')),
     review,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '14px 0 8px' } }),
+    el('b', {}, 'Train from a fill-in file'),
+    aiUploadTemplate(),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '14px 0 8px' } }),
+    el('b', {}, 'Train from your website'),
+    aiImportSitemap(),
+    el('div', { style: { borderTop: '1px solid var(--line)', margin: '14px 0 8px' } }),
     el('b', {}, 'Saved examples (' + saved.length + ')'),
     saved.length
       ? el('div', { className: 'rules', style: { marginTop: '8px' } },
