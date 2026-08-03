@@ -105,6 +105,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     $('#licenseKey').value = saved;
     const r = await safe(() => ott.licenseValidate(saved));
     if (r && r.valid && r.trusted) { trialInfo = { isTrial: saved.startsWith('TRIAL-'), expiresAt: r.expiresAt || null }; return enterApp(); }
+    // Could not reach the server at all. The gate still has to close - an unverifiable
+    // licence is not a valid one - but say what actually happened, because "activate this
+    // device" in front of someone who activated it months ago reads as lost data.
+    if (r && r.netFail) {
+      showGate();
+      const m = $('#gateMsg'); m.className = 'msg err';
+      m.textContent = 'Cannot reach the licence server. Check your internet connection, then press Activate.';
+      return;
+    }
   }
   showGate();
 });
@@ -152,7 +161,12 @@ window.addEventListener('DOMContentLoaded', () => {
 async function startTrial() {
   const m = $('#gateMsg'); m.className = 'msg'; m.textContent = 'Starting free trial…';
   const r = await safe(() => ott.licenseTrial());
-  if (!r) { m.className = 'msg err'; m.textContent = 'Cannot reach license server.'; return; }
+  if (!r) { m.className = 'msg err'; m.textContent = 'Cannot reach the licence server.'; return; }
+  if (r.netFail) {
+    m.className = 'msg err';
+    m.textContent = 'Cannot reach the licence server — check your internet connection and try again.';
+    return;
+  }
   if (r.valid && r.trusted) {
     await ott.licenseSave(r.key);
     trialInfo = { isTrial: true, expiresAt: r.expiresAt || null };
@@ -231,7 +245,13 @@ async function activate() {
   if (!key) { m.className = 'msg err'; m.textContent = 'Enter a license key.'; return; }
   m.className = 'msg'; m.textContent = 'Activating…';
   const r = await safe(() => ott.licenseActivate(key));
-  if (!r) { m.className = 'msg err'; m.textContent = 'Cannot reach license server.'; return; }
+  if (!r) { m.className = 'msg err'; m.textContent = 'Cannot reach the licence server.'; return; }
+  if (r.netFail) {
+    m.className = 'msg err';
+    m.textContent = 'Cannot reach the licence server — check your internet connection and try again. '
+      + 'Your licence key is fine.';
+    return;
+  }
   if (r.valid && r.trusted) { await ott.licenseSave(key); m.className = 'msg ok'; m.textContent = 'Activated!'; setTimeout(enterApp, 350); }
   else { m.className = 'msg err'; m.textContent = 'Activation failed: ' + (r.reason || 'invalid'); }
 }

@@ -51,13 +51,56 @@ function verifySignature(resp) {
   }
 }
 
+// Talk to the licence server, and survive a bad minute of network.
+//
+// This had no timeout and no retry, so a single hiccup threw and the app reported
+// "Cannot reach license server" — or, at boot, dropped a paying customer back to the
+// activation screen. Node's fetch gives up on a slow connect after about ten seconds,
+// and on a phone tether or a congested line that is a normal event, not a fault. The
+// same request through curl succeeded every time it was tried.
+//
+// Failing to REACH the server is reported as netFail and never as an invalid licence.
+// Those are different problems with different fixes, and telling someone their licence
+// is bad when their wifi dropped sends them to support instead of to their router.
+// 12s x 3 is a worst case of about 38 seconds, and only when the connection black-holes
+// entirely. The common failure - a reset or a refused connect - returns immediately, so a
+// blip recovers in a couple of seconds. Longer timeouts would freeze the splash screen for
+// a minute before admitting the user is offline, which is worse than saying so sooner.
+const TIMEOUT_MS = 12000;
+const ATTEMPTS = 3;
+
+async function once(endpoint, body) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${config.LICENSE_SERVER}/api/v1/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    // A 5xx is the server having a moment; a 4xx is an answer and must not be retried.
+    if (res.status >= 500) return { retry: true, err: `server returned ${res.status}` };
+    return { json: await res.json() };
+  } catch (e) {
+    const msg = String((e && (e.cause && e.cause.code)) || (e && e.message) || e);
+    return { retry: true, err: e && e.name === 'AbortError' ? 'timed out' : msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function call(endpoint, body) {
-  const res = await fetch(`${config.LICENSE_SERVER}/api/v1/${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  let last = '';
+  for (let i = 0; i < ATTEMPTS; i++) {
+    const r = await once(endpoint, body);
+    if (r.json) return r.json;
+    last = r.err;
+    if (i < ATTEMPTS - 1) await new Promise((res) => setTimeout(res, 700 * (i + 1)));
+  }
+  // Shaped like a normal reply so every caller keeps working. valid:false keeps the gate
+  // closed — being unable to check a licence can never be treated as a valid one.
+  return { valid: false, reason: 'network', netFail: true, err: last };
 }
 
 async function activate(key, deviceName = os.hostname()) {
