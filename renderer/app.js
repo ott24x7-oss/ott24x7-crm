@@ -3794,6 +3794,21 @@ async function aiViewInbox() {
   }
   if (!s.allowGroups) blockers.push('Group chats are left alone. Only one-to-one chats get replies.');
 
+  // What actually happened to the last message that came in.
+  //
+  // The checks above are predictions — they describe settings, not events. When a real
+  // message is dropped for a reason none of them cover (the owner was mid-conversation, the
+  // reply limit was reached, the number was on an exclude list), the panel still showed a
+  // tidy list that did not mention it, and the Inbox said "Nothing waiting". Reporting the
+  // last decision the assistant actually made ends the guesswork.
+  try {
+    const lg = (await ott.ai.getLogs(activeId).catch(() => null)) || {};
+    const last = (lg.rows || []).filter((r) => r.action === 'skip')[0];
+    if (last && Date.now() - (last.ts || 0) < 6 * 3600000) {
+      blockers.push(`Last message${last.name ? ' from ' + last.name : ''} was skipped: ${last.handoverReason || 'no reason recorded'}.`);
+    }
+  } catch (e) { /* the panel is more useful without this than not at all */ }
+
   if (blockers.length) {
     box.append(el('div', { className: 'fp-note', style: { color: blockers.length ? 'var(--danger)' : '' } },
       el('b', {}, 'Why it is not replying'),

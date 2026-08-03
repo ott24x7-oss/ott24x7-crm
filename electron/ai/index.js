@@ -121,7 +121,28 @@ async function generate(ctx) {
   const s = store.getSettings(accId);
   const number = String(ctx.number || '').replace(/\D/g, '');
 
-  const deny = (reason, extra) => ({ ok: false, action: 'skip', reason, ...extra });
+  // A skip has to leave a trace.
+  //
+  // There are eleven ways a message can be dropped here and every one of them used to
+  // return in silence: nothing in Logs, nothing in the Inbox, no toast. From the owner's
+  // side a customer messaged and the assistant did nothing, with no way to find out why —
+  // which is unanswerable without reading this file. The reason was always known at the
+  // moment of the decision; it was simply thrown away.
+  //
+  // `quiet` is for the duplicate-delivery guard, which fires on ordinary re-polls of a
+  // message already handled and would bury the reasons worth reading.
+  const deny = (reason, extra, quiet) => {
+    if (!quiet) {
+      try {
+        store.addLog(accId, {
+          number, name: ctx.name, customerMessage: ctx.text,
+          action: 'skip', handoverReason: reason, confidence: 0,
+          ms: Date.now() - started,
+        });
+      } catch (e) { /* logging must never be the thing that breaks a reply */ }
+    }
+    return { ok: false, action: 'skip', reason, ...extra };
+  };
 
   if (s.mode === 'off') return deny('AI is disabled');
   if (!s.consentAccepted) return deny('Consent not accepted in AI settings');
@@ -136,7 +157,7 @@ async function generate(ctx) {
 
   // Idempotency: the same WhatsApp message id must never be answered twice, however many
   // times the poller hands it to us.
-  if (ctx.msgId && (cstate.seen || []).includes(ctx.msgId)) return deny('Message already processed');
+  if (ctx.msgId && (cstate.seen || []).includes(ctx.msgId)) return deny('Message already processed', null, true);
 
   if (cstate.takenOver) {
     const mins = Math.max(0, Number(s.takeoverMinutes) || 0);
