@@ -180,7 +180,10 @@ function ollama(cfg) {
 function openaiCompatible(cfg) {
   const base = String(cfg.baseUrl || 'https://heyroute.ai').replace(/\/+$/, '');
   const chatModel = cfg.chatModel || 'gpt-4o-mini';
-  const embedModel = cfg.embedModel || 'text-embedding-3-small';
+  // NOT defaulted. Falling back to a model name when the field is empty meant a gateway
+  // that serves no embeddings was sent a model it does not have, and answered HTTP 400 on
+  // every single customer message. Empty means "this provider has none" and must stay empty.
+  const embedModel = String(cfg.embedModel || '').trim();
   const apiKey = String(cfg.apiKey || '').trim();
   const timeout = Number(cfg.timeoutMs) || DEFAULT_TIMEOUT;
 
@@ -252,6 +255,9 @@ function openaiCompatible(cfg) {
     async embed(input) {
       const texts = Array.isArray(input) ? input : [input];
       if (!texts.length) return { ok: true, vectors: [], dims: 0 };
+      // Not configured is not a failure. Say so quietly instead of calling an endpoint that
+      // cannot work and surfacing its error to the owner on every message.
+      if (!embedModel) return { ok: false, vectors: [], notConfigured: true, err: 'No embedding model set — search uses keyword matching.' };
       if (!apiKey) return { ok: false, err: 'No API key set.', vectors: [] };
       const r = await withRetry(
         () => req(`${v1}/embeddings`, { method: 'POST', headers: headers(),

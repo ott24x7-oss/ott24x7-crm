@@ -135,7 +135,10 @@ async function generate(ctx) {
   let hits = [], exampleHits = [];
   const knowledge = store.getKnowledge(accId);
   const examples = store.getExamples(accId);
-  const q = await p.embed(ctx.text);
+  // Skipped entirely when no embedding model is configured. This ran on every incoming
+  // message regardless, so a chat-only gateway returned HTTP 400 each time - a wasted round
+  // trip on the reply path and an alarming error toast for a working configuration.
+  const q = s.embedModel ? await p.embed(ctx.text) : { ok: false, vectors: [] };
   if (q.ok && q.vectors[0]) {
     hits = rag.search(q.vectors[0], knowledge, { topK: 5 });
     exampleHits = rag.search(q.vectors[0], examples, { topK: 3 });

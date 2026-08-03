@@ -1,6 +1,6 @@
 {
   "name": "ott24x7-crm",
-  "version": "0.36.7",
+  "version": "0.36.8",
   "description": "WA-CRM \u2014 WhatsApp CRM/sender on the open-source WPPConnect engine",
   "author": "WA-CRM",
   "main": "electron/main.js",
