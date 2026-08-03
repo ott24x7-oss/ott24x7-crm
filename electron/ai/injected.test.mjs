@@ -33,7 +33,10 @@ function injectedScript(fnName) {
   // comment turns `x = ${cfg};` into `x = ;`. PH_RESOLVER defines the _ph helper the message
   // handler awaits, so it needs a real stand-in rather than a placeholder.
   const raw = src.slice(start, end)
-    .replace(/\$\{PH_RESOLVER\}/g, 'async function _ph(id){return (id&&id.user)||"";}')
+    // Mirror the real resolver's behaviour: a phone comes back only for @c.us ids. For
+    // @lid it returns '' (the engine lookup is absent in tests), which forces the scanner
+    // down its fallback chain — exactly the path that must never end at lid digits.
+    .replace(/\$\{PH_RESOLVER\}/g, 'async function _ph(id){return (id&&id.server==="c.us"&&id.user)||"";}')
     .replace(/\$\{[^}]*\}/g, '(null)');
   // Let JS resolve the escapes exactly as it does when the template is evaluated — reading
   // the raw source would see \\/ where the running script has \/, and misjudge the regexes.
@@ -154,12 +157,16 @@ test('the scanner finds a new message without any event firing', async () => {
     isReady: true,
     on: () => {},                              // registered, but deliberately never fired
     chat: {
-      list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 1 }],
-      getMessages: strictGetMessages({ '919876543210@c.us': [{
-        id: { _serialized: 'SCAN1' }, fromMe: false, body: 'Netflix ka price kya h?',
-        t: Math.floor((now + 5000) / 1000), from: { user: '919876543210', server: 'c.us' },
-        notifyName: 'Anup',
-      }] }),
+      list: async () => [{
+        id: { _serialized: '64476619493615@lid' }, unreadCount: 1,
+        contact: { name: 'Anup', phoneNumber: { user: '919876543210' } },
+        msgs: { getModelsArray: () => [{
+          id: { _serialized: 'false_64476619493615@lid_SCAN1', fromMe: false },
+          body: 'Netflix ka price kya h?', t: Math.floor((now + 5000) / 1000),
+          from: { user: '64476619493615', server: 'lid' }, notifyName: 'Anup',
+        }] },
+      }],
+      getMessages: strictGetMessages({}),
     },
   };
   new vm.Script(code).runInContext(ctx);
@@ -170,8 +177,12 @@ test('the scanner finds a new message without any event firing', async () => {
 
   assert.strictEqual(win.__ott_inq.length, 1, 'a new unread message was not picked up by scanning');
   assert.strictEqual(win.__ott_inq[0].body, 'Netflix ka price kya h?');
-  assert.strictEqual(win.__ott_inq[0].msgId, 'SCAN1');
+  assert.strictEqual(win.__ott_inq[0].msgId, 'false_64476619493615@lid_SCAN1');
   assert.strictEqual(win.__ott_inq[0].isGroup, false);
+  // The number must come from the contact record — never from the @lid digits, which are
+  // WhatsApp's privacy identifier and would route the reply to a wrong number.
+  assert.strictEqual(win.__ott_inq[0].number, '919876543210',
+    `lid digits leaked through as a phone number: ${win.__ott_inq[0].number}`);
 
   await scan.fn();                             // a second pass must not re-queue it
   assert.strictEqual(win.__ott_inq.length, 1, 'the same message was queued twice');
@@ -191,13 +202,16 @@ test('the scanner ignores the backlog and the owner\'s own messages', async () =
   ctx.WPP = {
     isReady: true, on: () => {},
     chat: {
-      list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 3 }],
-      getMessages: strictGetMessages({ '919876543210@c.us': [
-        { id: { _serialized: 'OLD' }, fromMe: false, body: 'sitting unread since this morning',
-          t: Math.floor((now - 3600000) / 1000), from: { user: '919876543210' } },
-        { id: { _serialized: 'MINE' }, fromMe: true, body: 'my own reply',
-          t: Math.floor((now + 5000) / 1000), from: { user: '919876543210' } },
-      ] }),
+      list: async () => [{
+        id: { _serialized: '919876543210@c.us' }, unreadCount: 3,
+        msgs: { getModelsArray: () => [
+          { id: { _serialized: 'OLD', fromMe: false }, body: 'sitting unread since this morning',
+            t: Math.floor((now - 3600000) / 1000), from: { user: '919876543210', server: 'c.us' } },
+          { id: { _serialized: 'MINE', fromMe: true }, body: 'my own reply',
+            t: Math.floor((now + 5000) / 1000), from: { user: '919876543210', server: 'c.us' } },
+        ] },
+      }],
+      getMessages: strictGetMessages({}),
     },
   };
   new vm.Script(code).runInContext(ctx);
@@ -223,14 +237,17 @@ test('owner messages are skipped even when fromMe only exists on the key', async
   ctx.WPP = {
     isReady: true, on: () => {},
     chat: {
-      list: async () => [{ id: { _serialized: '919876543210@c.us' }, unreadCount: 1 }],
-      getMessages: strictGetMessages({ '919876543210@c.us': [
-        // Model shape: no top-level fromMe anywhere.
-        { id: { _serialized: 'true_919876543210@c.us_AAA', fromMe: true }, body: 'reply I typed myself',
-          t: Math.floor((now + 4000) / 1000), from: { user: '919876543210' } },
-        { id: { _serialized: 'false_919876543210@c.us_BBB', fromMe: false }, body: 'customer question',
-          t: Math.floor((now + 5000) / 1000), from: { user: '919876543210' }, notifyName: 'Anup' },
-      ] }),
+      list: async () => [{
+        id: { _serialized: '919876543210@c.us' }, unreadCount: 1,
+        msgs: { getModelsArray: () => [
+          // Model shape: no top-level fromMe anywhere.
+          { id: { _serialized: 'true_919876543210@c.us_AAA', fromMe: true }, body: 'reply I typed myself',
+            t: Math.floor((now + 4000) / 1000), from: { user: '919876543210', server: 'c.us' } },
+          { id: { _serialized: 'false_919876543210@c.us_BBB', fromMe: false }, body: 'customer question',
+            t: Math.floor((now + 5000) / 1000), from: { user: '919876543210', server: 'c.us' }, notifyName: 'Anup' },
+        ] },
+      }],
+      getMessages: strictGetMessages({}),
     },
   };
   new vm.Script(code).runInContext(ctx);

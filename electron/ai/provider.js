@@ -54,6 +54,9 @@ function friendly(status, body, label, model, hosted) {
   // they do not need, to fix a problem they do not have.
   if (hosted) {
     if (status === 401 || status === 403) return `${label}: the API key was rejected (HTTP ${status}). Check the key and that it has credit.`;
+    // Seen live: HeyRoute answers 402 insufficient_user_quota when the balance is $0. The
+    // key is fine; the account is empty. Say exactly that, or the owner debugs the wrong thing.
+    if (status === 402) return `${label}: your AI provider account is out of credit (HTTP 402). Top up at your provider and replies resume on the next message.`;
     if (status === 404) return `${label}: your provider does not serve this endpoint or model. Check the model name against their published list; if they only serve chat, leave the embedding model empty.`;
     if (status === 429) return `${label}: rate limited by your provider (HTTP 429). Wait a moment, or check your plan's limits.`;
     if (status >= 500) return `${label}: your AI provider returned ${status}. That is their side - try again shortly.`;

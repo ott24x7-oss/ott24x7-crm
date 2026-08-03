@@ -1538,12 +1538,20 @@ function applyLeadButton(accId) {
           var cid=(c.id&&(c.id._serialized||c.id))||'';
           if(!cid)continue;
           var isG=/@g\\.us$/.test(String(cid));
+          /* Read the chat model's own message collection - the same store the WhatsApp UI
+             renders from. WPP.chat.getMessages is broken for @lid chats in this engine
+             build (it dies parsing the id), and this account's chats ARE @lid - both facts
+             verified live over CDP against the running app. The collection needs no id
+             parsing at all, so it works for either address form. getMessages stays only as
+             a fallback for a chat whose collection happens to be empty, called with the
+             chat id FIRST and options second, which is the engine's actual signature. */
           var msgs=[];
-          /* chatId is the FIRST argument; the options object is the second. Passing one
-             object with both meant assertGetChat received {chatId,count} as the id and
-             threw on every chat - and the old catch{continue} hid that completely. */
-          try{msgs=await WPP.chat.getMessages(cid,{count:6})||[];}
-          catch(e){window.__ott_scan_err='getMessages: '+String((e&&e.message)||e);continue;}
+          try{msgs=(c.msgs&&c.msgs.getModelsArray&&c.msgs.getModelsArray())||[];}catch(e){msgs=[];}
+          msgs=msgs.slice(-6);
+          if(!msgs.length){
+            try{msgs=await WPP.chat.getMessages(cid,{count:6})||[];}
+            catch(e){window.__ott_scan_err='getMessages: '+String((e&&e.message)||e);continue;}
+          }
           for(var j=0;j<msgs.length;j++){
             var m=msgs[j];
             /* getMessages returns raw models, and on a model fromMe lives on the KEY -
@@ -1561,11 +1569,19 @@ function applyLeadButton(accId) {
             /* The chat id is already known and is the most reliable source of the number.
                Depending on m.from being shaped a particular way would skip every message
                with no way to see why - the same trap as everything else today. */
+            /* On a @lid chat the raw digits are WhatsApp's privacy identifier, NOT a phone
+               number - falling back to them would send the reply to a wrong or nonexistent
+               number, which is far worse than skipping. Resolver on the sender, resolver on
+               the chat, then the contact record; only a genuine @c.us id may contribute its
+               digits. Verified live over CDP: getPhoneNumber resolves this account's @lid
+               chats to real numbers. */
             var num='';
             try{num=await _ph(m.from)||'';}catch(e){num='';}
-            if(!num)num=(m.from&&m.from.user)||'';
-            if(!num)num=String(cid).replace(/@.*$/,'').replace(/\\D/g,'');
-            if(!num){window.__ott_scan_skip='could not work out the phone number';continue;}
+            if(!num){try{num=await _ph(c.id)||'';}catch(e){}}
+            if(!num&&c.contact&&c.contact.phoneNumber)num=String(c.contact.phoneNumber.user||c.contact.phoneNumber).replace(/@.*$/,'');
+            if(!num&&m.from&&m.from.server==='c.us')num=m.from.user||'';
+            if(!num&&/@c\\.us$/.test(String(cid)))num=String(cid).replace(/@.*$/,'');
+            if(!num||!/^[0-9]{6,}$/.test(num)){window.__ott_scan_skip='could not resolve a real phone for '+String(cid);continue;}
             window.__ott_inq.push({number:num,raw:num,body:body,msgId:mid,isGroup:isG,
               name:(m.sender&&(m.sender.pushname||m.sender.name))||m.notifyName||'',ts:ts});
             window.__ott_evt=(window.__ott_evt||0)+1;window.__ott_evt_at=Date.now();
@@ -3509,7 +3525,7 @@ window.__ottOnMenu=window.__ottOnMenu||function(fn){
   document.addEventListener('keydown',fire,true);
 };`;
 
-const PH_RESOLVER = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
+const PH_RESOLVER = "async function _ph(id){try{if(!id)return '';if(id.server==='c.us')return id.user||'';if(id.server==='lid'){var f=(self.WPP&&WPP.whatsapp&&WPP.whatsapp.functions)||{};var names=['getPhoneNumber','getPnForLid','getCusFromLid','getUserFromLid','getPnFromLid'];for(var j=0;j<names.length;j++){var fn=f[names[j]];if(typeof fn==='function'){try{var r=await fn(id);if(r){if(r.user&&/^[0-9]+$/.test(r.user))return r.user;if(typeof r==='string'&&r.indexOf('@')>0){var u=r.split('@')[0];if(/^[0-9]+$/.test(u))return u;}}}catch(e){}}}return '';}return (id.user&&/^[0-9]+$/.test(id.user))?id.user:'';}catch(e){return '';}}";
 
 // ================= tiny utils =================
 function chk(checked) { return el('input', { type: 'checkbox', checked }); }
