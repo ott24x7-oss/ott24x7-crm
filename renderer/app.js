@@ -381,8 +381,8 @@ const hookMap = {};
 // (Was two separate executeJavaScript IPC calls every 2.5s.)
 const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[],acts:[],hooked:false};
 try{o.hooked=!!window.__ott_lead_init}catch(e){}
-try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[],d=window.__ott_actq||[],ow=window.__ott_ownerq||[];
-window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];window.__ott_actq=[];window.__ott_ownerq=[];o.leads=a;o.incoming=b;o.cmds=c;o.acts=d;o.owner=ow;}catch(e){}
+try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[],d=window.__ott_actq||[];
+window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];window.__ott_actq=[];window.__ott_ownerq=[];o.leads=a;o.incoming=b;o.cmds=c;o.acts=d;}catch(e){}
 try{if(typeof WPP==='undefined')return o;
 var au=await WPP.conn.isAuthenticated();if(!au){o.s='qr';return o;}
 try{o.me=WPP.conn.getMyUserId()&&WPP.conn.getMyUserId().user}catch(_){}
@@ -433,15 +433,6 @@ async function pollTick() {
         // Tagged with the account it arrived on, so a reply is drafted from that account's
         // settings and catalogue rather than whichever tab is on screen.
         info.incoming.forEach((m) => { try { aiOnIncoming({ ...m, accId: acc }); } catch (e) {} });
-      }
-      if (info.owner && info.owner.length && window.ott && ott.ai) {
-        // The owner replied to these chats from their phone or this screen. Mark each as
-        // taken over so the assistant stands back for takeoverMinutes - without this, an
-        // owner mid-conversation got "helped" by a second, automated voice.
-        for (const o2 of info.owner) {
-          const n2 = digits(String(o2.number || ''));
-          if (n2) ott.ai.setConvoState(acc, n2, { takenOver: true, lastOwnerAt: o2.ts || Date.now() }).catch(() => {});
-        }
       }
       if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
       if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
@@ -1566,23 +1557,7 @@ function applyLeadButton(accId) {
             /* getMessages returns raw models, and on a model fromMe lives on the KEY -
                m.id.fromMe - not at the top level. Checking only m.fromMe let the owner's
                own outbound messages through, and the assistant must never answer those. */
-            if(!m)continue;
-            if(m.fromMe||(m.id&&m.id.fromMe)){
-              /* The owner replying IS the takeover signal. This queue existed for months and
-                 nothing ever drained it, so in always-on mode the assistant answered chats
-                 the owner was visibly handling themselves - two replies to one customer. */
-              var omid=(m.id&&(m.id._serialized||String(m.id)))||'';
-              var ots=(m.t||0)*1000;
-              if(omid&&!window.__ott_seen_ids[omid]&&ots&&ots>=window.__ott_scan_from){
-                window.__ott_seen_ids[omid]=1;
-                var onum='';
-                try{onum=await _ph(m.to)||'';}catch(e){}
-                if(!onum){try{onum=await _ph(c.id)||'';}catch(e){}}
-                if(!onum&&c.contact&&c.contact.phoneNumber)onum=String(c.contact.phoneNumber.user||c.contact.phoneNumber).replace(/@.*$/,'');
-                if(onum&&/^[0-9]{6,}$/.test(onum)){window.__ott_ownerq=window.__ott_ownerq||[];window.__ott_ownerq.push({number:onum,ts:ots});}
-              }
-              continue;
-            }
+            if(!m||m.fromMe||(m.id&&m.id.fromMe))continue;
             var mid=(m.id&&(m.id._serialized||m.id))||'';
             if(!mid||window.__ott_seen_ids[mid])continue;
             var ts=(m.t||0)*1000;
@@ -1591,6 +1566,8 @@ function applyLeadButton(accId) {
             window.__ott_seen_ids[mid]=1;
             var body=(m.body||m.caption||'');
             if(!body){window.__ott_scan_skip='message had no text (image, sticker or reaction)';continue;}
+            if(/^\\s*(\\/9j\\/|data:)/.test(body)||/^[A-Za-z0-9+\\/=\\s]{160,}$/.test(body)){
+              window.__ott_scan_skip='photo or media thumbnail, not typed text';continue;}
             /* The chat id is already known and is the most reliable source of the number.
                Depending on m.from being shaped a particular way would skip every message
                with no way to see why - the same trap as everything else today. */

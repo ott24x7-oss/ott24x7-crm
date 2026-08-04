@@ -255,3 +255,31 @@ test('owner messages are skipped even when fromMe only exists on the key', async
   assert.strictEqual(win.__ott_inq.length, 1, 'exactly the customer message, never the owner\'s own');
   assert.strictEqual(win.__ott_inq[0].body, 'customer question');
 });
+
+test('a photo thumbnail is never treated as something the customer typed', async () => {
+  const code = injectedScript('applyLeadButton');
+  const timers = [];
+  const win = {
+    document: { querySelector: () => null, getElementById: () => null, createElement: () => ({ style: {} }) },
+    setInterval: (fn, ms) => timers.push({ fn, ms }), clearInterval: () => {}, setTimeout: () => 1,
+  };
+  win.window = win;
+  const ctx = vm.createContext(win);
+  const now = Date.now();
+  ctx.WPP = {
+    isReady: true, on: () => {},
+    chat: { list: async () => [{
+      id: { _serialized: '919876543210@c.us' }, unreadCount: 2,
+      msgs: { getModelsArray: () => [
+        { id: { _serialized: 'IMG1', fromMe: false }, body: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAFA3PEY8MkY',
+          t: Math.floor((now + 4000) / 1000), from: { user: '919876543210', server: 'c.us' } },
+        { id: { _serialized: 'TXT1', fromMe: false }, body: 'want prime video',
+          t: Math.floor((now + 5000) / 1000), from: { user: '919876543210', server: 'c.us' } },
+      ] } }],
+      getMessages: strictGetMessages({}) },
+  };
+  new vm.Script(code).runInContext(ctx);
+  await timers.find((t) => t.ms === 3000).fn();
+  assert.strictEqual(win.__ott_inq.length, 1, 'the base64 blob must be dropped, the real text kept');
+  assert.strictEqual(win.__ott_inq[0].body, 'want prime video');
+});
