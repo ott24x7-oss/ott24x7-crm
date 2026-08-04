@@ -304,7 +304,9 @@ async function generate(ctx) {
     validation: validation.problems, language, intent: intent.intent,
     delayMs: s.replyDelayMs, logId: log.id,
     ownerOnline: avail.online, ownerReason: avail.reason,
-    waitText: action === 'handover' ? waitAck(s, accId, number, language) : null,
+    // A suggest is a draft on the owner's desk — from the customer's side it is silence
+    // until approved, so it earns the same acknowledgement a handover does.
+    waitText: (action === 'handover' || action === 'suggest') ? waitAck(s, accId, number, language) : null,
   };
 }
 
@@ -314,8 +316,10 @@ async function generate(ctx) {
 // messages in a row must produce one "please wait", not three. Suppressed entirely while
 // the owner has the chat, since a human is already talking.
 const WAIT_TEXTS = {
-  en: 'Thanks for your message! Our team will reply to you shortly. 🙏',
-  hi: 'Aapke message ke liye dhanyavad! Hamari team jaldi hi reply karegi. 🙏',
+  en: ['Thanks for your message! Our team will reply to you shortly. 🙏',
+       'Our team has been informed — you will hear back very soon. 🙏'],
+  hi: ['Aapke message ke liye dhanyavad! Hamari team jaldi hi reply karegi. 🙏',
+       'Team ko bata diya hai — bas thoda sa intezaar kariye. 🙏'],
 };
 WAIT_TEXTS.hinglish = WAIT_TEXTS.hi;
 
@@ -323,10 +327,18 @@ function waitAck(s, accId, number, language) {
   if (s.waitReplyEnabled === false) return null;
   const c = store.convo(accId, number);
   if (c.takenOver) return null;
-  if (Date.now() - (c.waitAckAt || 0) < 6 * 3600000) return null;
-  store.setConvo(accId, number, { waitAckAt: Date.now() });
+  // Burst guard only. The first cut throttled this to once per six hours, and the owner
+  // caught what that really meant: every low-confidence message after the first was pure
+  // silence, the one outcome they said is never acceptable. Three messages inside a
+  // confused minute still get one ack, but a customer who comes back keeps hearing a
+  // voice — with the wording rotated so it does not read like a machine stuck in a loop.
+  if (Date.now() - (c.waitAckAt || 0) < 3 * 60000) return null;
+  const n = (c.waitCount || 0) + 1;
+  store.setConvo(accId, number, { waitAckAt: Date.now(), waitCount: n });
   const custom = String(s.waitReplyText || '').trim();
-  return custom || WAIT_TEXTS[language] || WAIT_TEXTS.en;
+  if (custom) return custom;
+  const list = WAIT_TEXTS[language] || WAIT_TEXTS.en;
+  return list[(n - 1) % list.length];
 }
 
 // Called by the renderer once a reply has actually gone out, so the conversation's reply

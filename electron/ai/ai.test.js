@@ -389,6 +389,38 @@ t('a runaway exchange still hits the brake', async () => {
 });
 
 
+
+// ---------- silence never lasts ----------
+t('a customer who comes back after a few minutes is acknowledged again', async () => {
+  const NS='nosilence';
+  store.saveSettings(NS, { mode: 'always', consentAccepted: true, provider: 'heyroute',
+    apiKey: 'k', chatModel: 'm' });
+  const r1 = await generate({ accId: NS, number: '919333333333', name: 'R',
+    text: 'refund my money', products: [], history: [] });
+  assert.ok(r1.waitText, 'first stumped message must be acknowledged');
+  // Within the burst window: quiet, so three rapid messages get one ack.
+  const r2 = await generate({ accId: NS, number: '919333333333', name: 'R',
+    text: 'refund now please', products: [], history: [] });
+  assert.ok(!r2.waitText, 'a burst must not triple-ack');
+  // Four minutes later the customer is still waiting - never silence.
+  store.setConvo(NS, '919333333333', { waitAckAt: Date.now() - 4 * 60000 });
+  const r3 = await generate({ accId: NS, number: '919333333333', name: 'R',
+    text: 'refund my money bhai', products: [], history: [] });
+  assert.ok(r3.waitText, 'the six-hour throttle was silence by another name');
+  assert.notStrictEqual(r3.waitText, r1.waitText, 'wording rotates so it does not read like a stuck machine');
+});
+
+t('the prompt carries the buying and QR script', () => {
+  const p = rag.buildSystemPrompt({ settings: { ...S, supportWhatsApp: '919000000000' },
+    language: 'en', knowledge: [], examples: [], products: PRODUCTS, productHits: [], customer: {} });
+  assert.match(p, /BUYING/);
+  assert.match(p, /Buy here/);
+  assert.match(p, /QR code, UPI id or account number/);
+  assert.match(p, /NEVER type out payment details/);
+  assert.match(p, /human support team/i);
+});
+
+
 Promise.all(_pending).then(() => {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);

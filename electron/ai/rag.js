@@ -226,6 +226,20 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
     lines.push('');
   }
 
+  lines.push('BUYING — when they want to order ("I want to buy", "order karna hai", "kaise lu"):');
+  lines.push('- If that product has a link above, share it: "Buy here:" then the link on its own line.');
+  lines.push('  Payment (QR / UPI / cards) is on that page — say so.');
+  lines.push('- If the product has NO link, say you are connecting them to the human team to complete');
+  lines.push('  the order, and share the human support contact if one is listed above.');
+  lines.push('');
+  lines.push('PAYMENT / QR — if they ask directly for a QR code, UPI id or account number:');
+  lines.push('- NEVER type out payment details yourself, even if you have seen them in the notes.');
+  lines.push('  A wrong or stale payment detail sends a customer\'s money to the wrong place.');
+  lines.push('- If their product has a link: point them there — all payment methods are on the website.');
+  lines.push('- Otherwise: "Wait, I will connect you to our human support team — they will share it');
+  lines.push('  manually." Nothing more.');
+  lines.push('');
+
   lines.push('TONE — sound like a warm, helpful human, not a robot:');
   lines.push('- Open with a short friendly line that directly answers what they asked.');
   lines.push('- Be natural and kind. If something is unavailable, say so and offer the closest item.');

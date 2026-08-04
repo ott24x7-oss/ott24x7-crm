@@ -856,6 +856,7 @@ RENDER.quick = (b) => {
   const cost = el('input', { type: 'number', min: '0', placeholder: 'What it costs you' });
   const att = attachControl('*'); att.node.style.display = 'none';
   const chipChk = chk(false);
+  const buyLink = el('input', { placeholder: 'https://yourshop.com/product', spellcheck: false });
   mtype.onchange = () => { att.node.style.display = mtype.value === 'text' ? 'none' : 'flex'; };
 
   const list = el('div', { className: 'rules' });
@@ -1071,6 +1072,7 @@ RENDER.quick = (b) => {
     lbl('Product / offer name', title),
     el('div', { className: 'row' }, lbl('Category', category), lbl('Type', mtype)),
     el('div', { className: 'row' }, lbl('Selling rate ₹', sell), lbl('Purchase rate ₹', cost)),
+    lbl('Buy link — the assistant sends this when a customer wants to order', buyLink),
     el('div', { className: 'fp-note', style: { margin: '-2px 0 0' } },
       'Optional. Fill these in and “Deal done” will pick them up for you — the difference becomes your profit in Sales & Expenses.'),
     lbl('Caption / message', text), att.node,
@@ -1079,8 +1081,8 @@ RENDER.quick = (b) => {
       const f = att.get();
       if (!title.value.trim() && !text.value.trim() && !f) return toast('Add a name, caption, or file', 'err');
       const qs = store.get('ott_quick', []);
-      qs.push({ title: title.value.trim() || deriveTitle(text.value), category: category.value.trim(), text: text.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked, sell: Number(sell.value) || 0, cost: Number(cost.value) || 0 });
-      if (store.set('ott_quick', qs)) { title.value = text.value = category.value = sell.value = cost.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
+      qs.push({ title: title.value.trim() || deriveTitle(text.value), category: category.value.trim(), text: text.value.trim(), url: buyLink.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined, pinned: chipChk.checked, sell: Number(sell.value) || 0, cost: Number(cost.value) || 0 });
+      if (store.set('ott_quick', qs)) { title.value = text.value = category.value = sell.value = cost.value = buyLink.value = ''; mtype.value = 'text'; att.node.style.display = 'none'; chipChk.checked = false; drawFilters(); draw(); refreshChips(); toast('Product saved'); }
     } }, '＋ Save product / offer'),
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '8px 0' } }),
     el('div', { className: 'fp-note' },
@@ -3896,6 +3898,8 @@ async function aiHandle(msg) {
   if (r.action === 'suggest') {
     aiAddSuggestion({ accId: acc, number, name: msg.name, incoming: msg.body, text: r.text,
       confidence: r.confidence, sources: r.sources, validation: r.validation, logId: r.logId });
+    // A draft waiting for the owner's approval is still silence from the customer's side.
+    if (r.waitText) await sendTextOn(acc, number, r.waitText).catch(() => {});
     return;
   }
 
