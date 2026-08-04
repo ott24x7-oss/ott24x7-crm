@@ -3822,13 +3822,25 @@ async function aiHandle(msg) {
     isGroup: !!msg.isGroup, history, products: aiProducts(),
     customer: aiCustomer(number), lastActivityAt: aiLastActivity,
   });
-  if (!r || !r.ok) { if (r && r.action === 'error') aiNotify('AI error: ' + r.err, 'err'); return; }
+  if (!r || !r.ok) {
+    if (r && r.action === 'error') {
+      aiNotify('AI error: ' + r.err, 'err');
+      // A dead provider is exactly when the customer most needs to hear a human is coming.
+      if (r.waitText) await sendTextOn(acc, number, r.waitText).catch(() => {});
+    }
+    return;
+  }
   if (r.action === 'skip') return;
 
   if (r.action === 'handover') {
     aiAddSuggestion({ accId: acc, number, name: msg.name, incoming: msg.body, text: '', handover: true,
       reason: r.reason, confidence: 0, sources: [], logId: r.logId });
     aiNotify((msg.name || number) + ' needs you — ' + aiReasonLabel(r.reason), 'err');
+    // The customer hears "a human will reply shortly" instead of nothing. generate()
+    // decides IF this goes (throttled per chat, off while you hold the conversation);
+    // this only delivers it. Deliberately not markSent: an acknowledgement must not eat
+    // into the real-reply budget for the conversation.
+    if (r.waitText) await sendTextOn(acc, number, r.waitText).catch(() => {});
     return;
   }
 
@@ -4310,6 +4322,9 @@ async function aiViewSettings() {
   const bizName = el('input', { value: s.businessName || '', placeholder: 'e.g. OTT24x7', maxLength: 60 });
   const supWa = el('input', { value: s.supportWhatsApp || '', placeholder: '919812345678' });
   const supTg = el('input', { value: s.supportTelegram || '', placeholder: 'yourhandle (no @)' });
+  const waitOn = chk(s.waitReplyEnabled !== false);
+  const waitTxt = el('input', { value: s.waitReplyText || '',
+    placeholder: 'Thanks for your message! Our team will reply to you shortly.' });
   const business = el('textarea', { value: s.businessInstructions || '',
     placeholder: 'How you want the assistant to talk about your business. Anything it must always say, or never say.' });
   const minConf = el('input', { type: 'number', min: '0', max: '100', value: String(Math.round(s.minConfidence * 100)) });
@@ -4387,6 +4402,8 @@ async function aiViewSettings() {
     el('b', {}, 'How it behaves'),
     lbl('Business name (the assistant introduces itself as this)', bizName),
     el('div', { className: 'row' }, lbl('Human support WhatsApp', supWa), lbl('Human support Telegram', supTg)),
+    chkRow(waitOn, 'When it cannot answer, tell the customer a human will reply'),
+    lbl('That wait message (leave empty for the built-in Hindi/English one)', waitTxt),
     el('div', { className: 'fp-note', style: { margin: '-2px 0 0' } },
       'When the assistant cannot help, it shares these so the customer reaches a person instead of waiting.'),
     lbl('Business instructions', business),
@@ -4410,6 +4427,7 @@ async function aiViewSettings() {
         embedModel: embedModel.value.trim(), businessInstructions: business.value,
         businessName: bizName.value.trim(),
         supportWhatsApp: digits(supWa.value), supportTelegram: supTg.value.trim().replace(/^@/, ''),
+        waitReplyEnabled: waitOn.checked, waitReplyText: waitTxt.value.trim(),
         minConfidence: Math.max(0, Math.min(1, Number(minConf.value) / 100)),
         replyDelayMs: Math.max(0, Number(delay.value) * 1000),
         maxRepliesPerConversation: Math.max(1, Number(maxReplies.value) || 5),

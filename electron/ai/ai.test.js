@@ -10,14 +10,27 @@ const path = require('node:path');
 
 const rag = require('./rag');
 const store = require('./store');
-const { ownerAvailability } = require('./index');
+const { ownerAvailability, generate } = require('./index');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wacrm-ai-test-'));
 store.init(dir);
 
 let pass = 0, fail = 0;
+// A harness that does not await an async test prints PASS before the assertions have run,
+// and the process.exit at the bottom then kills them entirely - green with zero coverage.
+// A returned promise is tracked, and the summary waits for every one.
+const _pending = [];
 function t(name, fn) {
-  try { fn(); console.log(`  PASS  ${name}`); pass++; }
+  try {
+    const r = fn();
+    if (r && typeof r.then === 'function') {
+      _pending.push(r
+        .then(() => { console.log(`  PASS  ${name}`); pass++; })
+        .catch((e) => { console.log(`  FAIL  ${name}\n        ${e.message}`); fail++; }));
+      return;
+    }
+    console.log(`  PASS  ${name}`); pass++;
+  }
   catch (e) { console.log(`  FAIL  ${name}\n        ${e.message}`); fail++; }
 }
 
@@ -304,6 +317,57 @@ t('forced handovers outrank the small-talk floor', () => {
     'refund wording must force a human whatever the intent detector says');
 });
 
-try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
-console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);
-process.exit(fail ? 1 : 0);
+
+// ---------- the customer never faces silence ----------
+// When the assistant cannot answer it says a human is coming - once. Forced handover
+// short-circuits before any network call, so these run the real generate() end to end.
+const WACC = 'waitacc';
+store.saveSettings(WACC, { mode: 'always', consentAccepted: true, provider: 'heyroute',
+  apiKey: 'k', chatModel: 'm', businessName: 'OTT24x7' });
+
+t('a stumped reply tells the customer a human will answer', async () => {
+  const r = await generate({ accId: WACC, number: '919000000001', name: 'R',
+    text: 'refund my money now', products: [], history: [] });
+  assert.strictEqual(r.action, 'handover');
+  assert.ok(r.waitText && /team|reply/i.test(r.waitText), 'no wait message: ' + r.waitText);
+});
+
+t('the second confused message does not repeat it', async () => {
+  const r = await generate({ accId: WACC, number: '919000000001', name: 'R',
+    text: 'refund my money today', products: [], history: [] });
+  assert.strictEqual(r.action, 'handover');
+  assert.strictEqual(r.waitText, null, 'three confused messages must produce one please-wait, not three');
+});
+
+t('hindi customers hear it in hindi', async () => {
+  const r = await generate({ accId: WACC, number: '919000000002', name: 'R',
+    text: 'paisa wapas karo bhai', products: [], history: [] });
+  assert.ok(r.waitText && /dhanyavad|team/i.test(r.waitText), 'got: ' + r.waitText);
+});
+
+t('a chat the owner holds gets no wait message', async () => {
+  store.setConvo(WACC, '919000000003', { takenOver: true, lastOwnerAt: Date.now() });
+  const r = await generate({ accId: WACC, number: '919000000003', name: 'R',
+    text: 'refund my money', products: [], history: [] });
+  assert.strictEqual(r.waitText, undefined === r.waitText ? r.waitText : null,
+    'owner is talking - a bot ack on top is noise');
+  assert.ok(!r.waitText);
+});
+
+t('the owner can turn it off or reword it', async () => {
+  store.saveSettings(WACC, { ...store.getSettings(WACC), waitReplyText: 'Ruko zara, sabar karo.' });
+  const r = await generate({ accId: WACC, number: '919000000004', name: 'R',
+    text: 'refund my money', products: [], history: [] });
+  assert.strictEqual(r.waitText, 'Ruko zara, sabar karo.');
+  store.saveSettings(WACC, { ...store.getSettings(WACC), waitReplyEnabled: false });
+  const r2 = await generate({ accId: WACC, number: '919000000005', name: 'R',
+    text: 'refund my money', products: [], history: [] });
+  assert.ok(!r2.waitText, 'disabled means disabled');
+});
+
+
+Promise.all(_pending).then(() => {
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+  console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);
+  process.exit(fail ? 1 : 0);
+});

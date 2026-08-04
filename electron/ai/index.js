@@ -187,7 +187,8 @@ async function generate(ctx) {
       number, name: ctx.name, customerMessage: ctx.text, language, intent: intent.intent,
       action: 'handover', handoverReason: forced, confidence: 0, ms: Date.now() - started,
     });
-    return { ok: true, action: 'handover', reason: forced, language, logId: log.id };
+    return { ok: true, action: 'handover', reason: forced, language, logId: log.id,
+      waitText: waitAck(s, accId, number, language) };
   }
 
   const p = providerFor(s);
@@ -257,7 +258,8 @@ async function generate(ctx) {
       number, name: ctx.name, customerMessage: ctx.text, language, intent: intent.intent,
       action: 'error', error: out.err, ms: Date.now() - started,
     });
-    return { ok: false, action: 'error', err: out.err, logId: log.id };
+    return { ok: false, action: 'error', err: out.err, logId: log.id,
+      waitText: waitAck(s, accId, number, language) };
   }
 
   const validation = rag.validate(out.text, { settings: s, products: ctx.products || [], language });
@@ -291,7 +293,29 @@ async function generate(ctx) {
     validation: validation.problems, language, intent: intent.intent,
     delayMs: s.replyDelayMs, logId: log.id,
     ownerOnline: avail.online, ownerReason: avail.reason,
+    waitText: action === 'handover' ? waitAck(s, accId, number, language) : null,
   };
+}
+
+// A customer whose question stumped the assistant must not face silence. This is the one
+// line it may say WITHOUT understanding the message: an acknowledgement that a human will
+// answer. Throttled hard - once per conversation per six hours - because three confused
+// messages in a row must produce one "please wait", not three. Suppressed entirely while
+// the owner has the chat, since a human is already talking.
+const WAIT_TEXTS = {
+  en: 'Thanks for your message! Our team will reply to you shortly. 🙏',
+  hi: 'Aapke message ke liye dhanyavad! Hamari team jaldi hi reply karegi. 🙏',
+};
+WAIT_TEXTS.hinglish = WAIT_TEXTS.hi;
+
+function waitAck(s, accId, number, language) {
+  if (s.waitReplyEnabled === false) return null;
+  const c = store.convo(accId, number);
+  if (c.takenOver) return null;
+  if (Date.now() - (c.waitAckAt || 0) < 6 * 3600000) return null;
+  store.setConvo(accId, number, { waitAckAt: Date.now() });
+  const custom = String(s.waitReplyText || '').trim();
+  return custom || WAIT_TEXTS[language] || WAIT_TEXTS.en;
 }
 
 // Called by the renderer once a reply has actually gone out, so the conversation's reply
