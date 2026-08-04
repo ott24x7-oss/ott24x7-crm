@@ -33,7 +33,7 @@ const wv = (acc, injected, info) => ({
   executeJavaScript: async () => info,
 });
 
-const emptyInfo = (over) => ({ s: 'connected', leads: [], incoming: [], cmds: [], acts: [], ...over });
+const emptyInfo = (over) => ({ s: 'connected', leads: [], incoming: [], cmds: [], acts: [], owner: [], ...over });
 
 // Overrides must be applied before the function is built — it closes over these by value.
 function harness(webviews, overrides = {}) {
@@ -49,6 +49,10 @@ function harness(webviews, overrides = {}) {
     handleChatAction: async () => {},
     renderTabs: () => {},
     activeId: 'accA',
+    hookMap: {},
+    digits: (x) => String(x || '').replace(/\D/g, ''),
+    window: { ott: { ai: {} } },
+    ott: { ai: { setConvoState: async () => {} } },
     _pollBusy: false,
     ...overrides,
   };
@@ -115,4 +119,16 @@ test('tabs redraw only when a status actually changes', async () => {
   views[0].executeJavaScript = async () => emptyInfo({ s: 'qr' });
   await tick();
   assert.strictEqual(redraws, 2, 'a real change must repaint');
+});
+
+test('an owner reply marks that chat as taken over on its own account', async () => {
+  const taken = [];
+  const { tick, env } = harness([
+    wv('accB', true, emptyInfo({ owner: [{ number: '919876543210', ts: 1234 }] })),
+  ]);
+  env.ott.ai.setConvoState = async (acc, num, st) => { taken.push({ acc, num, st }); };
+  await tick();
+  assert.strictEqual(taken.length, 1, 'the owner queue was drained by nobody for months - it must reach convo state now');
+  assert.deepStrictEqual({ acc: taken[0].acc, num: taken[0].num, takenOver: taken[0].st.takenOver },
+    { acc: 'accB', num: '919876543210', takenOver: true });
 });
