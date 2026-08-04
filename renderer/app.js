@@ -169,6 +169,10 @@ try {
 } catch (_) {}
 // Click the version pill to check for updates manually.
 window.addEventListener('DOMContentLoaded', () => {
+  // The stylesheet's :root fallbacks are the old dark chrome; the licence gate renders
+  // before enterApp applies the saved palette, so without this the first screen flashes
+  // dark and then snaps light. Theme first, everything else after.
+  try { applyTheme(store.get('ott_theme', 'emerald'), false); } catch (e) {}
   const v = document.querySelector('.ver');
   if (v) {
     v.style.cursor = 'pointer'; v.title = 'Check for updates';
