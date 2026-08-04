@@ -4,7 +4,7 @@
 // or a product silently dropped is a real business error. The fixtures below are the shapes
 // actually seen on the owner's live shop plus the common storefront variations.
 import assert from 'node:assert';
-import { normaliseUrl, ldBlocks, fromProductLd, fromOg, filterProductish, availToStock } from './catalog.js';
+import { normaliseUrl, ldBlocks, fromProductLd, fromProductPage, pageText, fromOg, filterProductish, availToStock } from './catalog.js';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -125,6 +125,69 @@ t('strips zero-width characters and trims', () => {
 });
 t('leaves a correct address untouched', () => {
   assert.strictEqual(normaliseUrl('https://ott24x7.com/plans'), 'https://ott24x7.com/plans');
+});
+
+// ---------- the whole page, and every plan ----------
+// "It is sending description only" — the owner. Two causes: offers[0] dropped every plan
+// but the first, and only the one-line meta description was ever read. These pin the fix.
+
+
+t('a product with three plans becomes three purchasable rows', () => {
+  const rows = fromProductPage({
+    '@type': 'Product', name: 'Netflix Premium',
+    description: 'Watch in 4K on any device.',
+    offers: [
+      { name: '1 Month', price: '99', availability: 'InStock' },
+      { name: '6 Month', price: '449', availability: 'InStock' },
+      { name: '12 Month', price: '799', availability: 'OutOfStock' },
+    ],
+  }, 'https://shop.test/netflix');
+  assert.strictEqual(rows.length, 3, 'offers[0] alone loses every other plan');
+  assert.deepStrictEqual(rows.map((r) => r.title),
+    ['Netflix Premium — 1 Month', 'Netflix Premium — 6 Month', 'Netflix Premium — 12 Month']);
+  assert.deepStrictEqual(rows.map((r) => r.price), [99, 449, 799]);
+  assert.strictEqual(rows[2].stock, false, 'per-plan availability must survive the split');
+});
+
+t('an AggregateOffer wrapping real offers also splits', () => {
+  const rows = fromProductPage({
+    '@type': 'Product', name: 'Spotify',
+    offers: { '@type': 'AggregateOffer', lowPrice: '59', offers: [
+      { name: 'Individual', price: '59' }, { name: 'Family', price: '179' },
+    ] },
+  }, 'https://shop.test/spotify');
+  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows[1].title, 'Spotify — Family');
+});
+
+t('a single-offer product stays one row, unchanged', () => {
+  const rows = fromProductPage({ '@type': 'Product', name: 'Canva Pro', offers: { price: '299' } }, 'https://x/c');
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].title, 'Canva Pro');
+});
+
+t('the page body reaches details — plans, warranty, delivery, all of it', () => {
+  const html = `<html><head><script>junk()</script></head><body>
+    <nav>Home Shop Contact</nav>
+    <main><h1>Netflix Premium</h1>
+      <p>4K Ultra HD. Works on TV, phone and laptop.</p>
+      <p>Full warranty for the whole validity. Replacement within 24 hours if it stops working.</p>
+      <p>Delivery: credentials arrive on WhatsApp within 10 minutes of payment.</p>
+    </main>
+    <footer>© shop</footer></body></html>`;
+  const rows = fromProductPage({ '@type': 'Product', name: 'Netflix Premium',
+    description: 'Watch in 4K.', offers: { price: '99' } }, 'https://x/n', html);
+  const d = rows[0].details;
+  assert.ok(d.includes('Replacement within 24 hours'), 'warranty text missing: ' + d);
+  assert.ok(d.includes('within 10 minutes of payment'), 'delivery text missing');
+  assert.ok(!d.includes('junk()'), 'script text leaked in');
+  assert.ok(!d.includes('Home Shop Contact'), 'navigation leaked in');
+  assert.ok(d.length <= 3500);
+});
+
+t('pageText survives a page with no main element', () => {
+  const txt = pageText('<body><div class="product-description">Valid for 12 months.</div></body>');
+  assert.ok(txt.includes('Valid for 12 months'));
 });
 
 console.log(fail ? `\n  ${fail} failing` : `\n  all ${pass} passing`);

@@ -3786,6 +3786,9 @@ function aiProducts() {
       category: q.category || '',
       stock: q.stock !== false,
       url: q.url || '',
+      // A short slice of the product's own text rides along so a matched product can be
+      // described, not just priced. The full page text lives in knowledge.
+      text: String(q.text || '').replace(/\s+/g, ' ').trim().slice(0, 260),
     }))
     .filter((p) => p.title);
 }
@@ -5106,10 +5109,14 @@ async function aiImportWebsite() {
     // deliberately left out — it is read live from the catalog at reply time.
     let notes = 0;
     for (const p of found) {
-      if (!p.description || !p.title) continue;
+      // details is the page's own text — plans, validity, warranty, delivery steps. The
+      // one-line meta description was all customers ever heard; now the assistant knows
+      // everything the page says. Prices still come only from the live catalogue.
+      const body = p.details || p.description;
+      if (!body || !p.title) continue;
       await ott.ai.saveKnowledgeRow(activeId, {
         kind: 'product', title: p.title,
-        body: `${p.title}${p.category ? ' (' + p.category + ')' : ''}. ${p.description}`,
+        body: `${p.title}${p.category ? ' (' + p.category + ')' : ''}. ${body}`,
         tags: ['website'],
       });
       notes++;

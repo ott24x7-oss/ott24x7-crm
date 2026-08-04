@@ -85,6 +85,56 @@ function fromProductLd(o, pageUrl) {
   };
 }
 
+// ---------- the whole page, not just the meta ----------
+// "It is sending description only" - the owner, correctly. A product page carries plans,
+// validity, warranty and delivery steps in its body; the JSON-LD description is one
+// polished sentence of it. This reads the page's own text so the assistant can answer
+// about everything the page says, not everything the meta tag admits.
+function pageText(html) {
+  let h = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<(nav|header|footer|svg)[^>]*>[\s\S]*?<\/>/gi, ' ');
+  const grab = (re) => { const m = re.exec(h); return m ? m[1] : ''; };
+  const core = grab(/<main[^>]*>([\s\S]*?)<\/main>/i) || grab(/<article[^>]*>([\s\S]*?)<\/article>/i);
+  const desc = grab(/<[^>]+(?:class|id)=["'][^"']*(?:description|product-det|details|specs)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|section)>/i);
+  const src = ((core || '') + ' ' + (desc || '')).trim() || h;
+  return src.replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&#?\w+;/g, ' ')
+    .replace(/\s+/g, ' ').trim().slice(0, 3500);
+}
+
+// A product with an offers ARRAY is several purchasable things - 1 month, 6 months, a
+// year - and taking offers[0] imported exactly one of them. Each priced offer becomes its
+// own catalogue row, named by the offer, so "6 month wala?" has data behind it.
+function fromProductPage(o, pageUrl, html) {
+  const raw = o && o.offers;
+  let list = Array.isArray(raw) ? raw
+    : raw && Array.isArray(raw.offers) ? raw.offers   // AggregateOffer wrapping real offers
+    : raw ? [raw] : [];
+  list = list.filter((x) => x && money(x.price != null ? x.price : x.lowPrice));
+
+  let rows;
+  if (list.length > 1) {
+    const name = String((o && o.name) || '').trim();
+    rows = list.map((of) => {
+      const one = fromProductLd({ ...o, offers: of }, pageUrl);
+      const label = String(of.name || of.sku || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      one.title = (name + ' — ' + (label || '₹' + one.price)).slice(0, 120);
+      return one;
+    });
+  } else {
+    rows = [fromProductLd(o || {}, pageUrl)];
+  }
+
+  const details = [
+    String((o && o.description) || '').replace(/\s+/g, ' ').trim(),
+    html ? pageText(html) : '',
+  ].filter(Boolean).join(' — ').slice(0, 3500);
+  if (rows[0] && details) rows[0].details = details;
+  return rows;
+}
+
 // ---------- OpenGraph fallback ----------
 function fromOg(html, pageUrl) {
   const meta = (prop) => {
@@ -189,7 +239,22 @@ async function tryJsonEndpoint(entry, token) {
       activation: String(p.activation_guide || '').replace(/\s+/g, ' ').trim().slice(0, 800),
       url: p.url || url, image: p.image_file || p.image || '',
     })).filter((p) => p.title && p.price);
-    if (products.length) return { products, via: 'json:' + url };
+    // A feed row with priced variants is several purchasable things too.
+    const spread = [];
+    rows.forEach((p, i) => {
+      const base = products.find((x) => x.title === String(p.name || p.title || '').trim().slice(0, 120));
+      if (!base) return;
+      base.details = String(p.description || p.body_html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 3500);
+      const vars = Array.isArray(p.variants) ? p.variants.filter((v) => money(v.price)) : [];
+      if (vars.length > 1) {
+        vars.forEach((v) => spread.push({ ...base,
+          title: (base.title + ' — ' + String(v.title || v.name || ('₹' + money(v.price))).slice(0, 40)).slice(0, 120),
+          price: money(v.price), details: undefined }));
+      } else spread.push(base);
+    });
+    if (spread.length && spread[0]) spread[0].details = spread[0].details || (products[0] && products[0].details);
+    const outRows = spread.length ? spread : products;
+    if (outRows.length) return { products: outRows, via: 'json:' + url };
   }
   return null;
 }
@@ -229,7 +294,7 @@ async function importCatalog({ url, token, limit, onProgress }) {
   if (!first.ok) return { ok: false, err: first.err };
 
   const blocks = ldBlocks(first.body);
-  const direct = blocks.filter((b) => typeOf(b).includes('Product')).map((b) => fromProductLd(b, entry));
+  const direct = blocks.filter((b) => typeOf(b).includes('Product')).flatMap((b) => fromProductPage(b, entry, first.body));
   const listed = productUrlsFromLd(blocks, entry).filter(Boolean);
 
   // 3. Always consult the sitemap as well, not only when the page yields nothing.
@@ -267,7 +332,7 @@ async function importCatalog({ url, token, limit, onProgress }) {
       if (!r.ok) continue;
       const lds = ldBlocks(r.body);
       const prod = lds.find((b) => typeOf(b).includes('Product'));
-      if (prod) { products.push(fromProductLd(prod, u)); continue; }
+      if (prod) { products.push(...fromProductPage(prod, u, r.body)); continue; }
       const og = fromOg(r.body, u);
       if (og) products.push(og);
     }
@@ -287,4 +352,4 @@ async function importCatalog({ url, token, limit, onProgress }) {
   return { ok: true, via: 'jsonld:crawl', products: unique.slice(0, cap), scanned: urls.length, total };
 }
 
-module.exports = { importCatalog, normaliseUrl, ldBlocks, fromProductLd, fromOg, filterProductish, availToStock };
+module.exports = { importCatalog, normaliseUrl, ldBlocks, fromProductLd, fromProductPage, pageText, fromOg, filterProductish, availToStock };

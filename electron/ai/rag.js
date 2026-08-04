@@ -186,11 +186,16 @@ function buildSystemPrompt({ settings, language, business, knowledge, examples, 
       ...products.filter((p) => matchedTitles.has(p.title)),
       ...products.filter((p) => !matchedTitles.has(p.title)),
     ];
-    for (const p of ordered.slice(0, 25)) {
+    ordered.slice(0, 25).forEach((p, i) => {
       lines.push(`- ${p.title}${p.price ? ` | price ₹${p.price}` : ' | price not listed'}` +
         `${p.stock === false ? ' | OUT OF STOCK' : ''}${p.category ? ` | ${p.category}` : ''}` +
-        `${p.url ? ` | link ${p.url}` : ''}`);
-    }
+        `${p.url ? ` | link ${p.url}` : ''}` +
+        // The first few rows are the matched ones (reordered above). They carry a slice of
+        // their own description so the reply can say what the thing IS - the owner's exact
+        // complaint was replies with nothing behind the price. All 25 would bloat every
+        // request; the matched handful is what the customer is actually asking about.
+        `${i < 6 && p.text ? ` | ${String(p.text).slice(0, 200)}` : ''}`);
+    });
     lines.push('');
   }
 
