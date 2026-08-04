@@ -259,10 +259,34 @@ async function generate(ctx) {
       role: m.fromMe ? 'assistant' : 'user', content: String(m.text || '').slice(0, 800),
     }));
 
-  const out = await p.chat({
+  const chatArgs = {
     system, messages: [...history, { role: 'user', content: String(ctx.text || '').slice(0, 2000) }],
     temperature: 0.3, maxTokens: Math.ceil((s.maxResponseChars || 600) / 2),
-  });
+  };
+  let out = await p.chat(chatArgs);
+
+  // A backup brain. The primary gateway answering 503 - or 402, or timing out - used to be
+  // the end of it: error logged, customer acked, sale waiting. With a backup configured the
+  // SAME request goes straight to the second provider, and the log records which one
+  // actually answered. Any OpenAI-compatible endpoint works; the customer never knows.
+  const fbUrl = String(s.fallbackBaseUrl || '').trim();
+  const fbKey = String(s.fallbackApiKey || '').trim();
+  const fbModel = String(s.fallbackChatModel || '').trim();
+  // A local address is an Ollama on this machine or LAN: no key exists or is needed.
+  // Anything else is an OpenAI-compatible endpoint (OpenRouter, Groq, OpenAI...) with one.
+  const fbLocal = /^https?:\/\/(127\.|localhost|0\.0\.0\.0|192\.168\.|10\.)/i.test(fbUrl);
+  if (!out.ok && fbUrl && (fbKey || fbLocal)) {
+    const fb = createProvider(fbLocal
+      ? { provider: 'ollama', baseUrl: fbUrl, chatModel: fbModel || 'qwen2.5:7b', timeoutMs: s.timeoutMs }
+      : { provider: 'heyroute', baseUrl: fbUrl, apiKey: fbKey, chatModel: fbModel || s.chatModel, timeoutMs: s.timeoutMs });
+    const second = await fb.chat(chatArgs);
+    if (second.ok) {
+      second.model = 'backup: ' + (fbModel || (fbLocal ? 'qwen2.5:7b' : s.chatModel));
+      out = second;
+    } else {
+      out.err = String(out.err || '') + ' — the backup provider also failed: ' + String(second.err || '');
+    }
+  }
 
   if (!out.ok) {
     const log = store.addLog(accId, {

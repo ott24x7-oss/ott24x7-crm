@@ -91,6 +91,9 @@ const DEFAULT_SETTINGS = {
   excludeContacts: [],
   paused: false,                   // temporary global pause
   ownerManualStatus: 'auto',       // auto | online | offline
+  fallbackBaseUrl: '',             // backup AI: any OpenAI-compatible URL, or a local Ollama
+  fallbackApiKey: '',              // blank is fine for a local Ollama backup
+  fallbackChatModel: '',           // blank = same model name as the primary
   waitReplyEnabled: true,          // when it cannot answer, tell the customer a human will
   waitReplyText: '',               // custom wait message; empty = built-in per-language text
   takeoverMinutes: 15,             // hand a chat back this long after the owner last touched it (0 = never)

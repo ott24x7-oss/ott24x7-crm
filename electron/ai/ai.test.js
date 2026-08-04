@@ -421,6 +421,59 @@ t('the prompt carries the buying and QR script', () => {
 });
 
 
+
+// ---------- the backup brain ----------
+// A 503 from the primary gateway used to end the conversation: error logged, customer
+// acked, sale waiting. With a backup configured the same request goes straight there.
+// One t() on purpose: these stub global.fetch, and the harness starts async tests
+// together - three parallel stubs of one global was the flaky mess you would expect.
+t('backup brain: hosted failover, keyless local Ollama, no wasted calls', async () => {
+  const oldFetch = global.fetch;
+  try {
+    // 1. Primary 503 -> hosted backup answers, log names the brain that did.
+    store.saveSettings('fb1', { mode: 'always', consentAccepted: true, provider: 'heyroute',
+      baseUrl: 'https://primary.test', apiKey: 'k1', chatModel: 'gpt-5.6-luna',
+      fallbackBaseUrl: 'https://openrouter.ai/api/v1', fallbackApiKey: 'sk-or-x',
+      fallbackChatModel: 'meta-llama/llama-3.3-70b-instruct:free' });
+    let calls = [];
+    global.fetch = async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('primary.test')) return { ok: false, status: 503, text: async () => 'down' };
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Haan bhai, batao?' } }] }) };
+    };
+    let r = await generate({ accId: 'fb1', number: '919444444444', name: 'R', text: 'hello', products: [], history: [] });
+    assert.notStrictEqual(r.action, 'error', 'backup must save the reply: ' + (r.err || ''));
+    assert.ok(calls.some((u) => u.includes('openrouter.ai/api/v1/chat/completions')), 'backup URL wrong: ' + calls.join(' | '));
+    assert.match(String(store.getLogs('fb1')[0].model || ''), /^backup: /, 'log must say which brain answered');
+
+    // 2. Local Ollama backup: no key needed, /api/chat endpoint.
+    store.saveSettings('fb2', { mode: 'always', consentAccepted: true, provider: 'heyroute',
+      baseUrl: 'https://primary.test', apiKey: 'k1', chatModel: 'gpt-5.6-luna',
+      fallbackBaseUrl: 'http://127.0.0.1:11434', fallbackChatModel: 'qwen2.5:7b' });
+    calls = [];
+    global.fetch = async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('primary.test')) return { ok: false, status: 503, text: async () => 'down' };
+      return { ok: true, status: 200, json: async () => ({ message: { content: 'Yes hai!' } }) };
+    };
+    r = await generate({ accId: 'fb2', number: '919555555555', name: 'R', text: 'hello', products: [], history: [] });
+    assert.notStrictEqual(r.action, 'error', 'keyless local backup rejected: ' + (r.err || ''));
+    assert.ok(calls.some((u) => u.includes('127.0.0.1:11434/api/chat')), 'ollama endpoint not used: ' + calls.join(' | '));
+
+    // 3. Healthy primary: the backup is never woken.
+    store.saveSettings('fb3', { mode: 'always', consentAccepted: true, provider: 'heyroute',
+      baseUrl: 'https://primary.test', apiKey: 'k1', chatModel: 'gpt-5.6-luna',
+      fallbackBaseUrl: 'https://backup.test', fallbackApiKey: 'k2' });
+    calls = [];
+    global.fetch = async (url) => {
+      calls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) };
+    };
+    await generate({ accId: 'fb3', number: '919666666666', name: 'R', text: 'hello', products: [], history: [] });
+    assert.ok(!calls.some((u) => u.includes('backup.test')), 'backup called for no reason - twice the cost');
+  } finally { global.fetch = oldFetch; }
+});
+
 Promise.all(_pending).then(() => {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);

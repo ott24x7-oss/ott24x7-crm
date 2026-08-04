@@ -4411,6 +4411,9 @@ async function aiViewSettings() {
     accountsBox.append(chkRow(c, a.name + (a.id === activeId ? ' (this tab)' : '')));
   }));
 
+  const fbUrl = el('input', { value: s.fallbackBaseUrl || '', placeholder: 'https://openrouter.ai/api/v1  or  http://127.0.0.1:11434', spellcheck: false });
+  const fbKey = el('input', { type: 'password', value: s.fallbackApiKey || '', placeholder: 'sk-or-…  (leave empty for local Ollama)', spellcheck: false });
+  const fbModel = el('input', { value: s.fallbackChatModel || '', placeholder: 'meta-llama/llama-3.3-70b-instruct:free  or  qwen2.5:7b', spellcheck: false });
   const waitOn = chk(s.waitReplyEnabled !== false);
   const waitTxt = el('input', { value: s.waitReplyText || '',
     placeholder: 'Thanks for your message! Our team will reply to you shortly.' });
@@ -4485,6 +4488,13 @@ async function aiViewSettings() {
     lbl('AI engine', provider),
     lbl('Address', baseUrl),
     keyRow,
+    el('div', { className: 'fp-note' },
+      el('b', {}, 'Backup AI (optional)'),
+      el('div', { className: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } },
+        'If the main provider errors, the same request goes here instead — the customer never notices. '
+        + 'OpenRouter free models or a local Ollama both work.')),
+    lbl('Backup address', fbUrl),
+    el('div', { className: 'row' }, lbl('Backup API key', fbKey), lbl('Backup model', fbModel)),
     el('div', { className: 'row' }, lbl('Chat model', chatModel), lbl('Embedding model', embedModel)),
     el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: test }, 'Test connection')),
     status, cmds,
@@ -4518,6 +4528,8 @@ async function aiViewSettings() {
         businessName: bizName.value.trim(),
         supportWhatsApp: digits(supWa.value), supportTelegram: supTg.value.trim().replace(/^@/, ''),
         waitReplyEnabled: waitOn.checked, waitReplyText: waitTxt.value.trim(),
+        fallbackBaseUrl: fbUrl.value.trim(), fallbackApiKey: fbKey.value.trim(),
+        fallbackChatModel: fbModel.value.trim(),
         minConfidence: Math.max(0, Math.min(1, Number(minConf.value) / 100)),
         replyDelayMs: Math.max(0, Number(delay.value) * 1000),
         maxRepliesPerConversation: Math.max(1, Number(maxReplies.value) || 15),
