@@ -37,7 +37,9 @@ const config = {
   directories: { output: 'release' },
   afterPack: 'build/afterPack.js',
   compression: 'maximum',
-  files: ['electron/**', 'renderer/**', 'assets/**', 'config.js', 'brand.js', 'brands/**'],
+  files: ['electron/**', 'renderer/**', 'assets/**', 'config.js', 'brand.js', 'brands/**',
+    // The suites guard the source; customers do not run them.
+    '!electron/**/*.test.js', '!electron/**/*.test.mjs'],
   win: {
     icon: `assets/${brand.icon}`,
     target: ['nsis'],

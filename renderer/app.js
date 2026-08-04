@@ -1586,8 +1586,17 @@ function applyLeadButton(accId) {
 
     async function scan(){
       if(window.__ott_scan_busy)return;   /* getMessages can outlast the 3s interval */
+      /* This runs on WhatsApp's own main thread. When a pass measures slow - huge account,
+         busy moment - skip every other tick instead of stacking onto a thread the user is
+         typing on. Replies arrive 3s later in the worst case; jank is forever. */
+      window.__ott_scan_tick=(window.__ott_scan_tick||0)+1;
+      /* Every other tick, always: a 6-second pickup is invisible next to the typing lag a
+         3-second full pass was causing. A pass that measures slow drops to every fourth. */
+      if(window.__ott_scan_tick%2===0)return;
+      if((window.__ott_scan_ms||0)>200&&(window.__ott_scan_tick%4!==1))return;
       window.__ott_scan_busy=true;
-      try{ await _scan(); }finally{ window.__ott_scan_busy=false; }
+      var t0=Date.now();
+      try{ await _scan(); }finally{ window.__ott_scan_ms=Date.now()-t0; window.__ott_scan_busy=false; }
     }
     async function _scan(){
       /* Instrumented at every step. Three times today a check reported a stage healthy when
