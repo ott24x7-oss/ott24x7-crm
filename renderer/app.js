@@ -107,6 +107,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (r && r.valid && r.trusted) {
       trialInfo = { isTrial: saved.startsWith('TRIAL-'), expiresAt: r.expiresAt || null };
       store.set('ott_lic_ok', Date.now());          // last time the server actually said yes
+      store.set('ott_lic_exp', r.expiresAt || '');  // shown when the Licensed pill is clicked
       return enterApp();
     }
     // Unreachable, but this licence verified recently. Let them work. Requiring the server
@@ -169,7 +170,13 @@ try {
 // Click the version pill to check for updates manually.
 window.addEventListener('DOMContentLoaded', () => {
   const v = document.querySelector('.ver');
-  if (v) { v.style.cursor = 'pointer'; v.title = 'Check for updates'; v.addEventListener('click', () => { _updChecking = true; toast('Checking for updates…'); try { ott.checkUpdate && ott.checkUpdate(); } catch (_) {} }); }
+  if (v) {
+    v.style.cursor = 'pointer'; v.title = 'Check for updates';
+    // It was always clickable — nothing said so, and nobody guessed. Now it reads as a button.
+    if (!v.textContent.includes('⟳')) v.textContent = v.textContent + ' ⟳';
+    v.style.textDecoration = 'underline dotted';
+    v.addEventListener('click', () => { _updChecking = true; toast('Checking for updates…'); try { ott.checkUpdate && ott.checkUpdate(); } catch (_) {} });
+  }
 });
 
 // Start (or resume) a device-bound 7-day free trial.
@@ -212,8 +219,42 @@ async function recheckLicense() {
   // locking a running app out mid-session on any blip, which is the app appearing to
   // deactivate itself. A verdict has to come from the server to revoke access.
   if (r && r.netFail) return;
+  if (r && r.valid && r.trusted) { store.set('ott_lic_ok', Date.now()); store.set('ott_lic_exp', r.expiresAt || ''); }
   if (r && (r.valid === false || r.trusted === false)) lockApp(r.reason);
 }
+// The Licensed pill answers the question it always begged: licensed until when?
+async function showLicenceInfo() {
+  const key = await ott.licenseLoad().catch(() => null);
+  const exp = store.get('ott_lic_exp', '');
+  const okAt = Number(store.get('ott_lic_ok', 0)) || 0;
+  const lines = [];
+  if (trialInfo.isTrial) {
+    const days = trialInfo.expiresAt ? Math.max(0, Math.ceil((new Date(trialInfo.expiresAt) - Date.now()) / 86400000)) : 0;
+    lines.push('Free trial — ' + (days === 1 ? '1 day' : days + ' days') + ' left');
+  } else if (exp) {
+    const days = Math.max(0, Math.ceil((new Date(exp) - Date.now()) / 86400000));
+    lines.push('Valid until ' + new Date(exp).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' })
+      + ' (' + (days === 1 ? '1 day' : days + ' days') + ' left)');
+  } else {
+    lines.push('Lifetime licence — no expiry');
+  }
+  if (key) lines.push('Key ending in …' + String(key).slice(-6));
+  if (okAt) lines.push('Last verified ' + Math.max(1, Math.round((Date.now() - okAt) / 60000)) + ' min ago');
+  const done = () => scrim.remove();
+  const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) done(); } },
+    el('div', { className: 'modal-box', style: { width: '380px', textAlign: 'left' } },
+      el('b', {}, 'Your licence'),
+      el('div', { style: { marginTop: '8px', lineHeight: '1.8' } }, ...lines.map((l) => el('div', {}, l))),
+      el('div', { className: 'row', style: { marginTop: '10px' } },
+        el('button', { className: 'btn small primary', onclick: done }, 'Close'),
+        el('button', { className: 'btn small ghost', onclick: async (e) => {
+          e.target.textContent = 'Checking…';
+          await recheckLicense();
+          done(); showLicenceInfo();
+        } }, 'Re-check now'))));
+  document.body.append(scrim);
+}
+
 function lockApp(reason) {
   $('#app').classList.add('hidden'); $('#gate').classList.remove('hidden');
   $('#trialBanner')?.classList.add('hidden');
@@ -293,6 +334,8 @@ async function enterApp() {
   $('#themeBtn').onclick = openThemePicker;
   $('#deactivateBtn').onclick = async () => { if (confirm('Deactivate this device? You will need the key again.')) { await ott.licenseClear(); location.reload(); } };
   $('#fpClose').onclick = closeFeature;
+  const licPill = document.querySelector('.lic-pill');
+  if (licPill) { licPill.style.cursor = 'pointer'; licPill.title = 'Licence details'; licPill.onclick = showLicenceInfo; }
   makeDraggable($('#featurePanel'), $('#featurePanel .fp-head'));
 
   accounts = store.get('ott_accounts', []);
@@ -363,11 +406,40 @@ function switchAccount(id) {
 function activeWv() { return activeId ? document.querySelector(`webview[data-acc="${activeId}"]`) : null; }
 async function waExec(expr) { const w = activeWv(); if (!w) throw new Error('No active account'); return w.executeJavaScript(expr); }
 
+// A small input dialog in the app's own modal style — window.prompt does not exist in
+// Electron, and renaming should not need a settings screen.
+function promptModal(title, value) {
+  return new Promise((resolve) => {
+    const done = (v) => { scrim.remove(); resolve(v); };
+    const inp = el('input', { value: value || '', maxLength: 30 });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value); if (e.key === 'Escape') done(null); });
+    const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) done(null); } },
+      el('div', { className: 'modal-box', style: { width: '360px', textAlign: 'left' } },
+        el('b', {}, title), el('div', { style: { marginTop: '8px' } }, inp),
+        el('div', { className: 'row', style: { marginTop: '10px' } },
+          el('button', { className: 'btn small primary', onclick: () => done(inp.value) }, 'Save'),
+          el('button', { className: 'btn small ghost', onclick: () => done(null) }, 'Cancel'))));
+    document.body.append(scrim);
+    inp.focus(); inp.select();
+  });
+}
+
+async function renameAccount(a) {
+  const nn = await promptModal('Rename this account', a.name);
+  if (nn == null) return;
+  const clean = nn.trim().slice(0, 30);
+  if (!clean || clean === a.name) return;
+  a.name = clean;
+  store.set('ott_accounts', accounts);
+  renderTabs();
+  toast('Renamed to ' + clean);
+}
+
 function renderTabs() {
   const tabs = $('#tabs'); tabs.innerHTML = '';
   accounts.forEach(a => {
-    const t = el('div', { className: 'tab' + (a.id === activeId ? ' active' : '') + (statusMap[a.id] === 'connected' ? ' on' : ''), onclick: () => switchAccount(a.id) },
-      el('span', { className: 'st' }), a.name,
+    const t = el('div', { className: 'tab' + (a.id === activeId ? ' active' : '') + (statusMap[a.id] === 'connected' ? ' on' : ''), title: 'Double-click to rename', ondblclick: (e) => { e.stopPropagation(); renameAccount(a); }, onclick: () => switchAccount(a.id) },
+      el('span', { className: 'st', title: 'Double-click to rename' }), a.name,
       el('span', { className: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeAccount(a.id); } }, '✕'));
     tabs.append(t);
   });
@@ -4299,6 +4371,26 @@ async function aiViewSettings() {
   const bizName = el('input', { value: s.businessName || '', placeholder: 'e.g. OTT24x7', maxLength: 60 });
   const supWa = el('input', { value: s.supportWhatsApp || '', placeholder: '919812345678' });
   const supTg = el('input', { value: s.supportTelegram || '', placeholder: 'yourhandle (no @)' });
+  // Which accounts the assistant runs on. Settings were always per-account, but switching
+  // tabs to flip each one off is not a control anyone discovers — this is the one list.
+  const accountsBox = el('div', { className: 'fp-note' },
+    el('b', {}, 'Assistant replies on these accounts'));
+  Promise.all(accounts.map(async (a) => {
+    const r = await ott.ai.getSettings(a.id).catch(() => null);
+    return { a, on: !!(r && r.settings && r.settings.mode !== 'off') };
+  })).then((rows) => rows.forEach(({ a, on }) => {
+    const c = chk(on);
+    c.onchange = async () => {
+      const cur = ((await ott.ai.getSettings(a.id).catch(() => null)) || {}).settings || {};
+      // Enabling an account that was off starts it in always-on; an account already in
+      // suggest/offline mode keeps its mode. Disabling is just mode off.
+      await ott.ai.saveSettings(a.id, { mode: c.checked ? (cur.mode && cur.mode !== 'off' ? cur.mode : 'always') : 'off' });
+      if (a.id === activeId) { aiInit(); mode.value = c.checked ? (cur.mode && cur.mode !== 'off' ? cur.mode : 'always') : 'off'; }
+      toast((c.checked ? 'Assistant ON for ' : 'Assistant OFF for ') + a.name);
+    };
+    accountsBox.append(chkRow(c, a.name + (a.id === activeId ? ' (this tab)' : '')));
+  }));
+
   const waitOn = chk(s.waitReplyEnabled !== false);
   const waitTxt = el('input', { value: s.waitReplyText || '',
     placeholder: 'Thanks for your message! Our team will reply to you shortly.' });
@@ -4367,6 +4459,7 @@ async function aiViewSettings() {
   box.append(
     privacy,
     lbl('Mode', mode),
+    accountsBox,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '10px 0' } }),
     el('b', {}, 'Connection'),
     lbl('AI engine', provider),
@@ -4407,7 +4500,7 @@ async function aiViewSettings() {
         waitReplyEnabled: waitOn.checked, waitReplyText: waitTxt.value.trim(),
         minConfidence: Math.max(0, Math.min(1, Number(minConf.value) / 100)),
         replyDelayMs: Math.max(0, Number(delay.value) * 1000),
-        maxRepliesPerConversation: Math.max(1, Number(maxReplies.value) || 5),
+        maxRepliesPerConversation: Math.max(1, Number(maxReplies.value) || 15),
         ownerIdleMinutes: Math.max(1, Number(idle.value) || 10),
         maxResponseChars: Math.max(100, Number(maxChars.value) || 600),
         tone: tone.value,

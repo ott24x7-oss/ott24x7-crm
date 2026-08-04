@@ -366,6 +366,29 @@ t('the owner can turn it off or reword it', async () => {
 });
 
 
+
+// ---------- the reply cap brakes loops, not relationships ----------
+t('a quiet spell resets the reply cap instead of muting a customer forever', async () => {
+  const CAP='capacc';
+  store.saveSettings(CAP, { mode: 'always', consentAccepted: true, provider: 'heyroute',
+    apiKey: 'k', chatModel: 'm' });
+  // Yesterday's conversation used the whole budget; the customer comes back today.
+  store.setConvo(CAP, '919111111111', { replies: 99, lastAiAt: Date.now() - 5 * 3600000 });
+  const r = await generate({ accId: CAP, number: '919111111111', name: 'R',
+    text: 'refund my money', products: [], history: [] });
+  assert.strictEqual(r.action, 'handover', 'an old conversation must not block a new one: ' + r.reason);
+});
+
+t('a runaway exchange still hits the brake', async () => {
+  const CAP='capacc';
+  store.setConvo(CAP, '919222222222', { replies: 99, lastAiAt: Date.now() - 60000 });
+  const r = await generate({ accId: CAP, number: '919222222222', name: 'R',
+    text: 'refund my money', products: [], history: [] });
+  assert.strictEqual(r.action, 'skip');
+  assert.match(String(r.reason || ''), /Reply limit/i);
+});
+
+
 Promise.all(_pending).then(() => {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   console.log(fail ? `\n  ${fail} failing, ${pass} passing` : `\n  all ${pass} passing`);

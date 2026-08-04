@@ -168,7 +168,18 @@ async function generate(ctx) {
     // Long enough since the owner last touched it — hand it back.
     store.setConvo(accId, number, { takenOver: false });
   }
-  if (cstate.replies >= (s.maxRepliesPerConversation || 5)) return deny('Reply limit reached for this conversation');
+  // The cap exists to stop a runaway loop with another bot, but it counted for the LIFETIME
+  // of the conversation — a regular customer spent their five replies and the assistant went
+  // permanently silent on them, logged as "Reply limit reached" forever after. A quiet spell
+  // is the end of a conversation: after four hours without an AI reply the count starts
+  // fresh, so the cap only ever brakes a runaway exchange, never a relationship.
+  if (cstate.replies && Date.now() - (cstate.lastAiAt || 0) > 4 * 3600000) {
+    store.setConvo(accId, number, { replies: 0 });
+    cstate.replies = 0;
+  }
+  if (cstate.replies >= (s.maxRepliesPerConversation || 15)) {
+    return deny('Reply limit reached for this conversation (protects against message loops — resets after a few quiet hours)');
+  }
 
   const avail = ownerAvailability(s, { lastActivityAt: ctx.lastActivityAt });
   if (s.mode === 'offline' && avail.online) return deny(`Owner is online — ${avail.reason}`);

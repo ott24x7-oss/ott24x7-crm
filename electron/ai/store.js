@@ -67,7 +67,7 @@ const DEFAULT_SETTINGS = {
   minConfidence: 0.62,             // at or above -> may send automatically
   suggestConfidence: 0.35,         // between the two -> save as a suggestion
   replyDelayMs: 4000,              // look human, and leave room to cancel
-  maxRepliesPerConversation: 5,
+  maxRepliesPerConversation: 15,   // per conversation SESSION; the counter resets after 4 quiet hours
   ownerIdleMinutes: 10,
   workingHours: { enabled: false, start: '10:00', end: '20:00', days: [1, 2, 3, 4, 5, 6] },
 
@@ -111,6 +111,13 @@ const getSettings = (accId) => {
   if (out.provider !== 'ollama' && LOCAL_EMBED.test(String(out.embedModel || '').trim())) {
     out.embedModel = '';
     try { write('settings', accId, out); } catch (e) { /* read-only disk — still correct in memory */ }
+  }
+  // 5 was the old default reply cap, chosen when the counter never reset — it silenced real
+  // customers for good. Installs that never touched the setting carry the literal 5; lift
+  // them to the new default. An owner who deliberately set any other value keeps theirs.
+  if (out.maxRepliesPerConversation === 5) {
+    out.maxRepliesPerConversation = 15;
+    try { write('settings', accId, out); } catch (e) {}
   }
   return out;
 };
