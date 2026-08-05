@@ -134,7 +134,18 @@ async function once(endpoint, body) {
     });
     // A 5xx is the server having a moment; a 4xx is an answer and must not be retried.
     if (res.status >= 500) return { retry: true, err: `server returned ${res.status}` };
-    return { json: await res.json() };
+    const j = await res.json();
+    // A licence verdict has a `valid` field, always. A body without one is not the licence
+    // server speaking - it is whatever sits in front of it: Railway's "Application not
+    // found" when the service is down, a CDN error page, a captive portal. The night the
+    // hosting account lapsed, that JSON reached the verdict path, failed the signature
+    // check as any non-verdict would, and LOCKED OUT every running customer in under five
+    // minutes - when the 7-day offline grace existed precisely for this. Infrastructure
+    // noise is a network-class failure, never a revocation.
+    if (!j || typeof j.valid === 'undefined') {
+      return { retry: true, err: `the licence server did not answer (${String(j && (j.message || j.error) || 'unrecognised reply').slice(0, 80)})` };
+    }
+    return { json: j };
   } catch (e) {
     const msg = String((e && (e.cause && e.cause.code)) || (e && e.message) || e);
     return { retry: true, err: e && e.name === 'AbortError' ? 'timed out' : msg };
