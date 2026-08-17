@@ -1,0 +1,1223 @@
+/* WA-CRM overlay.
+ *
+ * Two deliberate material languages:
+ *   GLASS      — every surface that floats above WhatsApp: panel, header, tab bar,
+ *                toolbars, modals, toast. Translucent + backdrop blur + a single
+ *                light-catching top border.
+ *   SKEUOMORPH — every control the user acts on: buttons, tabs, toggles, sliders.
+ *                Bevelled edges, a real gradient body, a contact shadow, and a press
+ *                state that physically sinks.
+ *
+ * Everything is prefixed and scoped so it cannot disturb WhatsApp's own UI, and every
+ * value is a token so the two languages stay internally consistent.
+ */
+
+#wacrm-panel, #wacrm-toast {
+  /* ---- glass ----
+   * Alpha is high on purpose. backdrop-filter is not guaranteed to composite here (it
+   * silently no-ops in several embedding situations), and when it does not, a low alpha
+   * leaves WhatsApp's own text legible straight through the panel. The frosted look has
+   * to come from the tint, border and sheen — never from letting content bleed through. */
+  --gl-bg: rgba(11, 19, 22, .96);
+  --gl-bg-solid: #0d1619;               /* fallback when backdrop-filter is unavailable */
+  --gl-bar: rgba(17, 27, 31, .94);
+  --gl-blur: blur(28px) saturate(165%);
+  --gl-brd: rgba(255, 255, 255, .13);
+  --gl-brd-soft: rgba(255, 255, 255, .08);
+  --gl-sheen: inset 0 1px 0 rgba(255, 255, 255, .10);
+
+  /* ---- skeuomorphic controls ---- */
+  --sk-face: linear-gradient(180deg, #2c3d43 0%, #1f2c31 52%, #182428 100%);
+  --sk-face-hi: linear-gradient(180deg, #35484f 0%, #26343a 52%, #1d2a2f 100%);
+  --sk-brd: rgba(255, 255, 255, .11);
+  --sk-raise:
+    inset 0 1px 0 rgba(255, 255, 255, .20),
+    inset 0 -1px 0 rgba(0, 0, 0, .45),
+    0 1px 2px rgba(0, 0, 0, .34),
+    0 6px 14px -6px rgba(0, 0, 0, .55);
+  --sk-sink:
+    inset 0 2px 5px rgba(0, 0, 0, .55),
+    inset 0 -1px 0 rgba(255, 255, 255, .05);
+
+  --sk-go: linear-gradient(180deg, #3bef8c 0%, #1cbc64 46%, #109a4f 100%);
+  --sk-go-hi: linear-gradient(180deg, #4ff59a 0%, #23c86d 46%, #14a557 100%);
+  --sk-go-raise:
+    inset 0 1px 0 rgba(255, 255, 255, .45),
+    inset 0 -1px 0 rgba(0, 0, 0, .28),
+    0 1px 2px rgba(0, 0, 0, .3),
+    0 8px 18px -6px rgba(18, 160, 84, .55);
+
+  /* ---- ink ---- */
+  --ink: #e9f2ec;
+  --ink-2: #9db3ab;
+  --ink-3: #71877f;
+  --accent: #34e07f;
+  --accent-ink: #7ff0b0;
+  --danger: #ff8f8f;
+  --warn: #f5c37b;
+
+  /* ---- rhythm (dense: this is a working panel, not a landing page) ---- */
+  --r-sm: 8px; --r-md: 11px; --r-lg: 15px; --r-xl: 20px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 22px;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+  --dur: .2s;
+
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* ===================================================================
+   Scrim + panel — glass layers
+   =================================================================== */
+/* No scrim. This is a side panel, not a modal — WhatsApp must stay fully readable and
+ * clickable while it is open, exactly like a browser side panel. Close via the X, the
+ * launcher, or Escape. */
+#wacrm-panel {
+  position: fixed; top: 0; right: 0; height: 100vh; height: 100dvh;
+  width: 460px; max-width: 96vw; z-index: 2147483001;
+  display: flex; flex-direction: column;
+  color: var(--ink); font-size: 14px; line-height: 1.5;
+  background: var(--gl-bg);
+  backdrop-filter: var(--gl-blur); -webkit-backdrop-filter: var(--gl-blur);
+  border-left: 1px solid var(--gl-brd);
+  box-shadow: var(--gl-sheen), -28px 0 70px rgba(0, 0, 0, .55);
+  transform: translateX(102%);
+  transition: transform .28s var(--ease);
+}
+#wacrm-panel.open { transform: none; }
+
+/* Blur is a progressive enhancement — without it, fall back to an opaque surface so
+   text contrast never depends on whatever WhatsApp is rendering underneath. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #wacrm-panel { background: var(--gl-bg-solid); }
+  .wacrm-head, .wacrm-tabs { background: #101c20; }
+  #wacrm-toast { background: #16232a; }
+}
+
+/* ---- header: glass toolbar ---- */
+.wacrm-head {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--gl-bar);
+  backdrop-filter: var(--gl-blur); -webkit-backdrop-filter: var(--gl-blur);
+  border-bottom: 1px solid var(--gl-brd-soft);
+  box-shadow: var(--gl-sheen);
+  flex: none;
+}
+.wacrm-brand { font-weight: 800; font-size: 17px; letter-spacing: -.35px; }
+.wacrm-brand b { color: var(--accent); font-weight: 800; }
+.wacrm-status {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+  padding: 4px 10px 4px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; color: var(--ink-2);
+  background: rgba(255, 255, 255, .05); border: 1px solid var(--gl-brd-soft);
+}
+.wacrm-status i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .05);
+}
+.wacrm-status.on { color: var(--accent-ink); }
+.wacrm-status.on i { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.wacrm-status.wait i { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+
+.wacrm-x {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  border-radius: var(--r-sm); cursor: pointer; color: var(--ink-2);
+  background: var(--sk-face); border: 1px solid var(--sk-brd); box-shadow: var(--sk-raise);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.wacrm-x svg { width: 15px; height: 15px; }
+.wacrm-x:hover { color: var(--ink); background: var(--sk-face-hi); }
+.wacrm-x:active { box-shadow: var(--sk-sink); transform: translateY(1px); }
+.wacrm-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ===================================================================
+   Feature tabs — each one a separate physical key on a glass rail
+   =================================================================== */
+.wacrm-tabs {
+  position: relative; flex: none;
+  display: flex; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  overflow-x: auto; scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  background: var(--gl-bar);
+  backdrop-filter: var(--gl-blur); -webkit-backdrop-filter: var(--gl-blur);
+  border-bottom: 1px solid var(--gl-brd-soft);
+}
+.wacrm-tabs::-webkit-scrollbar { display: none; }
+
+.wacrm-tab {
+  flex: none; scroll-snap-align: start; cursor: pointer;
+  min-width: 78px; min-height: 62px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  padding: 9px 10px; border-radius: var(--r-md);
+  font: 600 11px Inter, system-ui, sans-serif; letter-spacing: .1px;
+  color: var(--ink-2); text-align: center;
+  background: var(--sk-face); border: 1px solid var(--sk-brd);
+  box-shadow: var(--sk-raise);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.wacrm-tab svg { width: 19px; height: 19px; }
+.wacrm-tab:hover { color: var(--ink); background: var(--sk-face-hi); }
+.wacrm-tab:active { transform: translateY(1px); box-shadow: var(--sk-sink); }
+.wacrm-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Selected reads as a key held down — sunken, lit, and colour-shifted. Depth and
+   colour both carry the state, so it is not colour alone. */
+.wacrm-tab[aria-selected="true"] {
+  color: #052d18;
+  background: var(--sk-go);
+  border-color: rgba(255, 255, 255, .3);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, .28),
+    inset 0 1px 0 rgba(255, 255, 255, .4),
+    0 4px 14px -6px rgba(18, 160, 84, .8);
+  transform: translateY(1px);
+}
+.wacrm-tab[aria-selected="true"] svg { stroke-width: 2.2; }
+
+/* ===================================================================
+   Body + per-view header
+   =================================================================== */
+.wacrm-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.wacrm-body::-webkit-scrollbar { width: 9px; }
+.wacrm-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .13); border-radius: 9px;
+  border: 3px solid transparent; background-clip: content-box;
+}
+.wacrm-pad { padding: var(--sp-4); }
+
+.wacrm-view-head {
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+  border-bottom: 1px solid var(--gl-brd-soft);
+}
+.wacrm-view-head h3 { margin: 0 0 3px; font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+.wacrm-view-head p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+
+/* Headings used by screens that render their own block (the licence gate) */
+#wacrm-panel h3 { margin: 0 0 5px; font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
+.wacrm-sub { color: var(--ink-2); font-size: 13px; margin: 0 0 var(--sp-4); line-height: 1.55; }
+
+.wacrm-loading, .wacrm-empty {
+  padding: 34px 22px; color: var(--ink-2); text-align: center; font-size: 13.5px;
+}
+.wacrm-empty b { display: block; color: var(--ink); font-size: 14.5px; margin-bottom: 4px; }
+
+.wacrm-note {
+  background: rgba(255, 255, 255, .045); border: 1px solid var(--gl-brd-soft);
+  border-radius: var(--r-md); padding: 11px 13px;
+  color: var(--ink-2); font-size: 12.5px; line-height: 1.55; margin-bottom: var(--sp-3);
+}
+.wacrm-note.warn {
+  background: rgba(245, 158, 11, .09); border-color: rgba(245, 158, 11, .3); color: var(--warn);
+}
+
+/* ===================================================================
+   Inputs — recessed, the inverse of a raised control
+   =================================================================== */
+#wacrm-panel label:not(.wacrm-toggle) {
+  display: block; font-size: 11.5px; font-weight: 600; letter-spacing: .3px;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px;
+}
+.wacrm-in {
+  width: 100%; box-sizing: border-box; margin-bottom: var(--sp-3);
+  background: rgba(4, 9, 11, .55); color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, .1); border-radius: var(--r-md);
+  padding: 10px 12px; font: 14px Inter, system-ui, sans-serif; outline: none;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .45), inset 0 -1px 0 rgba(255, 255, 255, .05);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.wacrm-in::placeholder { color: var(--ink-3); }
+.wacrm-in:focus {
+  border-color: var(--accent);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .45), 0 0 0 3px rgba(52, 224, 127, .2);
+}
+.wacrm-in.small { width: 78px; margin-bottom: 0; }
+.wacrm-in.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; min-height: 112px; resize: vertical; }
+textarea.wacrm-in { min-height: 82px; resize: vertical; }
+select.wacrm-in { padding: 8px 10px; font-size: 12.5px; }
+.wacrm-file { width: 100%; color: var(--ink-2); font-size: 12px; margin-bottom: var(--sp-3); }
+
+/* ===================================================================
+   Buttons — skeuomorphic keys
+   =================================================================== */
+.wacrm-btn {
+  cursor: pointer; min-height: 40px; padding: 10px 16px;
+  border-radius: var(--r-md); border: 1px solid var(--sk-brd);
+  font: 600 13.5px Inter, system-ui, sans-serif; color: var(--ink);
+  background: var(--sk-face); box-shadow: var(--sk-raise);
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+              transform var(--dur) var(--ease);
+}
+.wacrm-btn:hover:not(:disabled) { background: var(--sk-face-hi); }
+.wacrm-btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--sk-sink); }
+.wacrm-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wacrm-btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: var(--sk-sink); }
+
+.wacrm-btn.primary {
+  color: #04240f; font-weight: 700; border-color: rgba(255, 255, 255, .26);
+  background: var(--sk-go); box-shadow: var(--sk-go-raise);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .25);
+}
+.wacrm-btn.primary:hover:not(:disabled) { background: var(--sk-go-hi); }
+.wacrm-btn.danger { color: var(--danger); }
+.wacrm-btn.small { min-height: 32px; padding: 6px 11px; font-size: 12px; }
+
+.wacrm-row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-3); }
+.wacrm-col { display: flex; flex-direction: column; gap: 6px; }
+.wacrm-grow { flex: 1; min-width: 0; }
+.wacrm-or {
+  display: flex; align-items: center; gap: 10px; margin: var(--sp-3) 0;
+  color: var(--ink-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px;
+}
+.wacrm-or::before, .wacrm-or::after { content: ''; flex: 1; height: 1px; background: var(--gl-brd-soft); }
+
+/* ===================================================================
+   Toggle — a physical switch
+   =================================================================== */
+#wacrm-panel .wacrm-toggle, #wacrm-modal .wacrm-toggle, .wacrm-toggle {
+  display: flex !important; align-items: center; gap: 12px; cursor: pointer;
+  min-height: 46px; padding: 6px 2px; user-select: none;
+  font: 400 13.5px Inter, system-ui, sans-serif; letter-spacing: normal;
+  text-transform: none; color: var(--ink); margin: 0 0 6px;
+}
+.wacrm-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.wacrm-track {
+  position: relative; flex: 0 0 46px; width: 46px; height: 26px; border-radius: 999px;
+  display: block; box-sizing: border-box;
+  background: linear-gradient(180deg, #26343a 0%, #33454c 100%);
+  border: 1px solid rgba(255, 255, 255, .22);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, .45), inset 0 -1px 0 rgba(255, 255, 255, .10);
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.wacrm-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f4faf7 0%, #cfdcd6 55%, #b3c3bc 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 3px 6px rgba(0, 0, 0, .35),
+              inset 0 1px 0 rgba(255, 255, 255, .9);
+  transition: transform var(--dur) var(--ease);
+}
+.wacrm-toggle input:checked + .wacrm-track {
+  background: var(--sk-go);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, .3), inset 0 1px 0 rgba(255, 255, 255, .35),
+              0 0 12px -2px rgba(28, 188, 100, .6);
+}
+.wacrm-toggle input:checked + .wacrm-track::after { transform: translateX(20px); }
+.wacrm-toggle input:focus-visible + .wacrm-track { outline: 2px solid var(--accent); outline-offset: 3px; }
+.wacrm-toggle-txt {
+  font: 600 13.5px Inter, system-ui, sans-serif; color: var(--ink);
+  text-transform: none; letter-spacing: normal; min-width: 0;
+}
+.wacrm-toggle-txt small {
+  display: block; margin-top: 2px; color: var(--ink-3);
+  font: 400 11.5px Inter, system-ui, sans-serif; text-transform: none; letter-spacing: normal;
+  line-height: 1.45;
+}
+
+/* ===================================================================
+   Slider — a machined track and knob
+   =================================================================== */
+.wacrm-slider { margin-bottom: var(--sp-3); }
+.wacrm-slider-head {
+  display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 9px;
+}
+.wacrm-slider-val {
+  font: 600 12.5px ui-monospace, Consolas, monospace; color: var(--accent-ink);
+}
+.wacrm-range {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 24px;
+  background: transparent; cursor: pointer; margin: 0; display: block;
+}
+.wacrm-range::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 999px;
+  background: linear-gradient(180deg, #0a1214 0%, #16232a 100%);
+  border: 1px solid rgba(255, 255, 255, .07);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .7);
+}
+.wacrm-range::-moz-range-track {
+  height: 8px; border-radius: 999px;
+  background: linear-gradient(180deg, #0a1214 0%, #16232a 100%);
+  border: 1px solid rgba(255, 255, 255, .07);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .7);
+}
+.wacrm-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; border-radius: 50%; margin-top: -8px;
+  background: linear-gradient(180deg, #f6fbf8 0%, #d3e0da 52%, #b0c0b9 100%);
+  border: 1px solid rgba(0, 0, 0, .35);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 4px 9px rgba(0, 0, 0, .4),
+              inset 0 1px 0 rgba(255, 255, 255, .95);
+  transition: transform var(--dur) var(--ease);
+}
+.wacrm-range::-moz-range-thumb {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: linear-gradient(180deg, #f6fbf8 0%, #d3e0da 52%, #b0c0b9 100%);
+  border: 1px solid rgba(0, 0, 0, .35);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 4px 9px rgba(0, 0, 0, .4),
+              inset 0 1px 0 rgba(255, 255, 255, .95);
+}
+.wacrm-range:active::-webkit-slider-thumb { transform: scale(1.12); }
+.wacrm-range:focus-visible { outline: none; }
+.wacrm-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(52, 224, 127, .35); }
+.wacrm-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px rgba(52, 224, 127, .35); }
+
+/* ===================================================================
+   Cards, lists, log, progress
+   =================================================================== */
+.wacrm-list { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-3) 0; }
+.wacrm-card {
+  display: flex; gap: 12px; align-items: flex-start; padding: 12px;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, .045); border: 1px solid var(--gl-brd-soft);
+  box-shadow: var(--gl-sheen);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.wacrm-card:hover { background: rgba(255, 255, 255, .07); border-color: var(--gl-brd); }
+.wacrm-thumb { width: 46px; height: 46px; border-radius: var(--r-sm); object-fit: cover; flex: none; }
+.wacrm-thumb.ph {
+  display: grid; place-items: center; background: rgba(52, 224, 127, .12);
+  color: var(--accent-ink); font-size: 18px;
+}
+.wacrm-card b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+.wacrm-dim { color: var(--ink-2); font-size: 12px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; }
+.wacrm-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; margin-left: 6px;
+  background: rgba(52, 224, 127, .14); color: var(--accent-ink);
+  font-size: 10px; font-weight: 700; letter-spacing: .2px;
+}
+
+.wacrm-acc { border-top: 1px solid var(--gl-brd-soft); padding-top: var(--sp-3); margin-top: var(--sp-2); }
+.wacrm-acc summary {
+  cursor: pointer; color: var(--accent-ink); font-weight: 600; font-size: 13px;
+  margin-bottom: var(--sp-3); list-style: none; display: flex; align-items: center; gap: 6px;
+}
+.wacrm-acc summary::-webkit-details-marker { display: none; }
+.wacrm-acc summary::before { content: '+'; font-size: 15px; line-height: 1; }
+.wacrm-acc[open] summary::before { content: '−'; }
+
+.wacrm-log {
+  background: rgba(4, 9, 11, .6); border: 1px solid var(--gl-brd-soft);
+  border-radius: var(--r-md); padding: 10px;
+  font: 12px ui-monospace, Menlo, Consolas, monospace; color: var(--ink-2);
+  max-height: 220px; overflow: auto; white-space: pre-wrap;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, .5);
+}
+.wacrm-bar {
+  height: 8px; border-radius: 999px; overflow: hidden; margin-bottom: var(--sp-3);
+  background: rgba(4, 9, 11, .6);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .6);
+}
+.wacrm-bar i {
+  display: block; height: 100%; width: 0;
+  background: var(--sk-go);
+  box-shadow: 0 0 10px rgba(28, 188, 100, .7), inset 0 1px 0 rgba(255, 255, 255, .35);
+  transition: width .25s var(--ease);
+}
+
+.wacrm-msg { font-size: 12.5px; min-height: 17px; margin-top: 9px; color: var(--accent-ink); }
+.wacrm-msg.bad { color: var(--danger); }
+.wacrm-link {
+  display: block; margin-top: var(--sp-4); text-align: center;
+  color: var(--accent-ink); font-size: 13px; text-decoration: none;
+}
+.wacrm-link:hover { text-decoration: underline; }
+
+/* Trial ribbon — glass, sits above the content it qualifies */
+.wacrm-trial {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  margin: var(--sp-3) var(--sp-4) 0; padding: 10px 12px;
+  border-radius: var(--r-md); font-size: 12.5px; font-weight: 600;
+  color: var(--accent-ink);
+  background: rgba(52, 224, 127, .1); border: 1px solid rgba(52, 224, 127, .28);
+  box-shadow: var(--gl-sheen);
+}
+.wacrm-trial a {
+  padding: 5px 13px; border-radius: 999px; text-decoration: none; font-weight: 700;
+  color: #04240f; background: var(--sk-go); box-shadow: var(--sk-go-raise);
+}
+
+/* ===================================================================
+   Toast — glass, above everything
+   =================================================================== */
+#wacrm-toast {
+  position: fixed; bottom: 90px; right: 20px; z-index: 2147483500;
+  padding: 11px 16px; border-radius: var(--r-md);
+  font: 500 13px Inter, system-ui, sans-serif; color: var(--ink);
+  background: var(--gl-bar);
+  backdrop-filter: var(--gl-blur); -webkit-backdrop-filter: var(--gl-blur);
+  border: 1px solid var(--gl-brd);
+  box-shadow: var(--gl-sheen), 0 14px 38px rgba(0, 0, 0, .55);
+  opacity: 0; transform: translateY(10px); pointer-events: none;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+#wacrm-toast.show { opacity: 1; transform: none; }
+#wacrm-toast.bad { border-color: rgba(239, 68, 68, .45); color: var(--danger); }
+
+/* ===================================================================
+   Narrow viewports
+   =================================================================== */
+@media (max-width: 520px) {
+  #wacrm-panel { width: 100vw; max-width: 100vw; border-left: none; }
+  .wacrm-tab { min-width: 70px; }
+}
+
+/* ===================================================================
+   Motion and contrast preferences
+   =================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  #wacrm-panel, #wacrm-toast,
+  .wacrm-tab, .wacrm-btn, .wacrm-track, .wacrm-track::after, .wacrm-bar i, .wacrm-card {
+    transition-duration: .01ms !important;
+  }
+  .wacrm-btn:active, .wacrm-tab:active, .wacrm-rail-btn:active { transform: none; }
+}
+@media (prefers-contrast: more) {
+  #wacrm-panel { background: var(--gl-bg-solid); }
+  .wacrm-head, .wacrm-tabs { background: #101c20; }
+  #wacrm-panel { --ink-2: #c3d4cc; --ink-3: #9db3ab; }
+}
+
+/* ===================================================================
+   DOCKED SHELL — a left icon rail and a lead-stage bar wired into
+   WhatsApp's own chrome, rather than a floating button.
+   =================================================================== */
+#wacrm-rail, #wacrm-topbar, #wacrm-modal {
+  --gl-bar: rgba(17, 27, 31, .96);
+  --gl-brd: rgba(255, 255, 255, .13);
+  --gl-brd-soft: rgba(255, 255, 255, .08);
+  --gl-blur: blur(28px) saturate(165%);
+  --gl-sheen: inset 0 1px 0 rgba(255, 255, 255, .10);
+  --sk-face: linear-gradient(180deg, #2c3d43 0%, #1f2c31 52%, #182428 100%);
+  --sk-face-hi: linear-gradient(180deg, #35484f 0%, #26343a 52%, #1d2a2f 100%);
+  --sk-go: linear-gradient(180deg, #3bef8c 0%, #1cbc64 46%, #109a4f 100%);
+  --sk-brd: rgba(255, 255, 255, .11);
+  --sk-raise: inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(0,0,0,.45),
+              0 1px 2px rgba(0,0,0,.34), 0 6px 14px -6px rgba(0,0,0,.55);
+  --sk-sink: inset 0 2px 5px rgba(0,0,0,.55), inset 0 -1px 0 rgba(255,255,255,.05);
+  --ink: #e9f2ec; --ink-2: #9db3ab; --ink-3: #71877f;
+  --accent: #34e07f; --accent-ink: #7ff0b0;
+  --ease: cubic-bezier(.2, 0, 0, 1); --dur: .2s;
+  font-family: Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
+  box-sizing: border-box;
+}
+#wacrm-rail *, #wacrm-topbar *, #wacrm-modal * { box-sizing: border-box; }
+
+/* ---- left rail ---- */
+#wacrm-rail {
+  position: fixed; left: 0; top: 0; bottom: 0; width: 56px; z-index: 2147482990;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 0; overflow-y: auto; scrollbar-width: none;
+  background: var(--gl-bar);
+  backdrop-filter: var(--gl-blur); -webkit-backdrop-filter: var(--gl-blur);
+  border-right: 1px solid var(--gl-brd);
+  box-shadow: var(--gl-sheen), 4px 0 24px rgba(0, 0, 0, .35);
+}
+#wacrm-rail::-webkit-scrollbar { display: none; }
+.wacrm-rail-mark {
+  width: 38px; height: 38px; flex: none; border-radius: 11px; display: grid; place-items: center;
+  font: 800 12px Inter, sans-serif; color: #04240f; letter-spacing: -.2px;
+  background: var(--sk-go); box-shadow: var(--sk-raise); margin-bottom: 6px;
+}
+.wacrm-rail-btn {
+  position: relative; width: 40px; height: 40px; flex: none; cursor: pointer;
+  display: grid; place-items: center; border-radius: 11px; color: var(--ink-2);
+  background: var(--sk-face); border: 1px solid var(--sk-brd); box-shadow: var(--sk-raise);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.wacrm-rail-btn svg { width: 19px; height: 19px; }
+.wacrm-rail-btn:hover { color: var(--ink); background: var(--sk-face-hi); }
+.wacrm-rail-btn:active { transform: translateY(1px); box-shadow: var(--sk-sink); }
+.wacrm-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wacrm-rail-btn.on {
+  color: #052d18; background: var(--sk-go); border-color: rgba(255, 255, 255, .3);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.4),
+              0 4px 14px -6px rgba(18, 160, 84, .8);
+  transform: translateY(1px);
+}
+/* tooltip — the rail is icon-only, so every button names itself on hover/focus */
+.wacrm-rail-btn::after {
+  content: attr(data-tip); position: absolute; left: 50px; top: 50%; transform: translateY(-50%);
+  padding: 6px 10px; border-radius: 8px; white-space: nowrap; pointer-events: none;
+  font: 600 12px Inter, sans-serif; color: var(--ink);
+  background: rgba(10, 17, 20, .97); border: 1px solid var(--gl-brd);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .5);
+  opacity: 0; transition: opacity var(--dur) var(--ease); z-index: 5;
+}
+.wacrm-rail-btn:hover::after, .wacrm-rail-btn:focus-visible::after { opacity: 1; }
+.wacrm-rail-sep { width: 24px; height: 1px; background: var(--gl-brd-soft); flex: none; margin: 4px 0; }
+
+/* ---- lead-stage bar ---- */
+#wacrm-topbar {
+  position: fixed; top: 0; left: 56px; right: 0; height: 46px; z-index: 2147482989;
+  display: flex; align-items: center; gap: 7px; padding: 0 12px;
+  overflow-x: auto; scrollbar-width: none;
+  background: var(--gl-bar);
+  backdrop-filter: var(--gl-blur); -webkit-backdrop-filter: var(--gl-blur);
+  border-bottom: 1px solid var(--gl-brd);
+  box-shadow: var(--gl-sheen);
+}
+#wacrm-topbar::-webkit-scrollbar { display: none; }
+.wacrm-stage {
+  flex: none; cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 12px; border-radius: 999px;
+  font: 600 12.5px Inter, sans-serif; color: var(--ink-2);
+  background: var(--sk-face); border: 1px solid var(--sk-brd); box-shadow: var(--sk-raise);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.wacrm-stage:hover { color: var(--ink); background: var(--sk-face-hi); }
+.wacrm-stage:active { box-shadow: var(--sk-sink); transform: translateY(1px); }
+.wacrm-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wacrm-stage b {
+  min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px;
+  display: inline-grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: rgba(0, 0, 0, .38); color: var(--ink-2);
+}
+.wacrm-stage.on { color: #052d18; background: var(--sk-go); border-color: rgba(255,255,255,.3); }
+.wacrm-stage.on b { background: rgba(255, 255, 255, .34); color: #04240f; }
+
+/* When the rail is docked, push WhatsApp's own root aside instead of covering it. */
+html.wacrm-docked #app {
+  left: 56px !important; top: 46px !important;
+  width: calc(100% - 56px) !important; height: calc(100% - 46px) !important;
+}
+
+/* ===================================================================
+   Modal — glass overlay for Menu Manager, funnels, flows
+   =================================================================== */
+#wacrm-modal {
+  position: fixed; inset: 0; z-index: 2147483100;
+  display: grid; place-items: center; padding: 24px;
+  background: rgba(4, 9, 11, .62);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.wacrm-sheet {
+  width: 580px; max-width: 100%; max-height: 88vh; display: flex; flex-direction: column;
+  border-radius: 18px; color: var(--ink); font-size: 14px;
+  background: rgba(11, 19, 22, .98);
+  border: 1px solid var(--gl-brd);
+  box-shadow: var(--gl-sheen), 0 30px 80px rgba(0, 0, 0, .65);
+  animation: wacrm-rise .22s var(--ease);
+}
+@keyframes wacrm-rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+.wacrm-sheet-head {
+  display: flex; align-items: flex-start; gap: 12px; padding: 15px 18px; flex: none;
+  border-bottom: 1px solid var(--gl-brd-soft); box-shadow: var(--gl-sheen);
+}
+.wacrm-sheet-head .g { flex: 1; min-width: 0; }
+.wacrm-sheet-head h3 { margin: 0; font-size: 16.5px; font-weight: 700; }
+.wacrm-sheet-head p { margin: 3px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+.wacrm-sheet-body { padding: 16px 18px; overflow-y: auto; }
+.wacrm-sheet-foot {
+  display: flex; justify-content: flex-end; gap: 9px; padding: 13px 18px; flex: none;
+  border-top: 1px solid var(--gl-brd-soft);
+}
+
+/* Menu Manager rows */
+.wacrm-menu-row {
+  display: flex; align-items: center; gap: 12px; padding: 9px 11px; border-radius: 11px;
+  transition: background var(--dur) var(--ease);
+}
+.wacrm-menu-row:hover { background: rgba(255, 255, 255, .05); }
+.wacrm-menu-row > svg { width: 18px; height: 18px; color: var(--accent-ink); flex: none; }
+.wacrm-menu-row .t { flex: 1; min-width: 0; }
+.wacrm-menu-row .t b { display: block; font-size: 13.5px; font-weight: 600; }
+.wacrm-menu-row .t span { color: var(--ink-3); font-size: 11.5px; }
+.wacrm-menu-row.locked { opacity: .5; }
+
+/* Funnel / flow step cards */
+.wacrm-step {
+  border-radius: 12px; border: 1px solid var(--gl-brd-soft);
+  background: rgba(255, 255, 255, .045); margin-bottom: 9px; overflow: hidden;
+}
+.wacrm-step-head {
+  display: flex; align-items: center; gap: 9px; padding: 11px 12px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+}
+.wacrm-step-head .n {
+  width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; flex: none;
+  font-size: 11px; font-weight: 700; color: #04240f; background: var(--sk-go);
+}
+.wacrm-step-head .k { flex: 1; color: var(--ink-3); font-weight: 500; text-align: right; }
+.wacrm-step-body { padding: 0 12px 12px; }
+.wacrm-arrow { text-align: center; color: var(--ink-3); font-size: 16px; line-height: 1; margin: -4px 0 5px; }
+
+/* Guide steps */
+.wacrm-steps { margin: 0 0 12px; padding-left: 20px; color: var(--ink-2); font-size: 13px; line-height: 1.65; }
+.wacrm-steps li { margin-bottom: 5px; }
+.wacrm-steps li::marker { color: var(--accent-ink); font-weight: 700; }
+.wacrm-acc + .wacrm-acc { margin-top: 0; }
+
+/* ===================================================================
+   Tooltip — lives on <body>, because the rail scrolls and an overflow
+   container clips anything sticking out past its 56px width.
+   =================================================================== */
+#wacrm-tip {
+  position: fixed; z-index: 2147483200; pointer-events: none;
+  padding: 7px 11px; border-radius: 9px; white-space: nowrap;
+  font: 600 12px Inter, system-ui, sans-serif; color: #e9f2ec;
+  background: rgba(10, 17, 20, .98); border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .55);
+  opacity: 0; transition: opacity .14s cubic-bezier(.2, 0, 0, 1);
+}
+#wacrm-tip.show { opacity: 1; }
+/* the CSS-only tooltip is retired now that the JS one cannot be clipped */
+.wacrm-rail-btn::after { content: none; }
+
+/* ===================================================================
+   In-chat quick actions — a floating column over the conversation
+   =================================================================== */
+
+/* ===================================================================
+   Top bar — two rows: chat filters, then lead stages
+   =================================================================== */
+#wacrm-topbar {
+  height: auto; flex-direction: column; align-items: stretch;
+  gap: 0; padding: 6px 12px; overflow: visible;
+}
+.wacrm-bar-row {
+  display: flex; align-items: center; gap: 7px;
+  padding: 4px 0; overflow-x: auto; scrollbar-width: none;
+}
+.wacrm-bar-row::-webkit-scrollbar { display: none; }
+.wacrm-bar-lbl {
+  flex: none; font: 700 10px Inter, sans-serif; letter-spacing: .6px;
+  text-transform: uppercase; color: #71877f; width: 46px;
+}
+html.wacrm-docked #app { top: 84px !important; height: calc(100% - 84px) !important; }
+
+@media (max-width: 900px) {
+  
+  .wacrm-bar-lbl { display: none; }
+}
+
+/* ===================================================================
+   Alarm — the same card the desktop app shows, ported over
+   =================================================================== */
+.wacrm-alarm-scrim {
+  /* This node lives on <body>, outside #wacrm-panel, so it must carry the tokens its
+     children (.wacrm-btn, .wacrm-dim) rely on — otherwise the snooze buttons render
+     with no background at all. */
+  --sk-face: linear-gradient(180deg, #2c3d43 0%, #1f2c31 52%, #182428 100%);
+  --sk-face-hi: linear-gradient(180deg, #35484f 0%, #26343a 52%, #1d2a2f 100%);
+  --sk-brd: rgba(255, 255, 255, .11);
+  --sk-raise: inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(0,0,0,.45),
+              0 1px 2px rgba(0,0,0,.34), 0 6px 14px -6px rgba(0,0,0,.55);
+  --sk-sink: inset 0 2px 5px rgba(0,0,0,.55), inset 0 -1px 0 rgba(255,255,255,.05);
+  --sk-go: linear-gradient(180deg, #3bef8c 0%, #1cbc64 46%, #109a4f 100%);
+  --sk-go-hi: linear-gradient(180deg, #4ff59a 0%, #23c86d 46%, #14a557 100%);
+  --sk-go-raise: inset 0 1px 0 rgba(255,255,255,.45), 0 8px 18px -6px rgba(18,160,84,.55);
+  --ink: #e9f2ec; --ink-2: #9db3ab; --ink-3: #71877f;
+  --accent: #34e07f; --accent-ink: #7ff0b0; --danger: #ff8f8f;
+  --r-sm: 8px; --r-md: 11px;
+  --ease: cubic-bezier(.2, 0, 0, 1); --dur: .2s;
+
+  position: fixed; inset: 0; z-index: 2147483300; display: grid; place-items: center; padding: 24px;
+  background: rgba(4, 9, 11, .72);
+  backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+  animation: wacrm-alarm-in .22s cubic-bezier(.2, 0, 0, 1);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@keyframes wacrm-alarm-in { from { opacity: 0; } }
+.wacrm-alarm-card {
+  width: 380px; max-width: 94vw; text-align: center; padding: 30px 28px 24px;
+  border-radius: 22px; color: #e9f2ec;
+  background: rgba(13, 22, 26, .99);
+  border: 1px solid rgba(255, 255, 255, .13);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .7), inset 0 1px 0 rgba(255, 255, 255, .10),
+              0 0 60px -18px rgba(52, 224, 127, .6);
+  animation: wacrm-alarm-pop .26s cubic-bezier(.2, 0, 0, 1);
+}
+@keyframes wacrm-alarm-pop { from { transform: scale(.94) translateY(8px); } }
+.wacrm-alarm-ring {
+  width: 76px; height: 76px; margin: 0 auto 16px; border-radius: 50%;
+  display: grid; place-items: center; color: #04240f;
+  background: linear-gradient(180deg, #4ff59a 0%, #1cbc64 55%, #109a4f 100%);
+  border: 1px solid rgba(0, 0, 0, .35);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -2px 4px rgba(0, 0, 0, .28),
+              0 8px 20px -6px rgba(28, 188, 100, .65);
+  animation: wacrm-alarm-shake 1.6s ease-in-out infinite;
+}
+.wacrm-alarm-ring svg { width: 34px; height: 34px; stroke-width: 2; }
+@keyframes wacrm-alarm-shake {
+  0%, 62%, 100% { transform: rotate(0); }
+  66% { transform: rotate(13deg); } 72% { transform: rotate(-11deg); }
+  78% { transform: rotate(8deg); }  84% { transform: rotate(-6deg); }
+  90% { transform: rotate(3deg); }
+}
+.wacrm-alarm-time {
+  font-size: 42px; font-weight: 800; letter-spacing: -1.6px; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.wacrm-alarm-date { color: #9db3ab; font-size: 13px; margin-top: 5px; }
+.wacrm-alarm-note {
+  margin-top: 18px; color: #e9f2ec; font-size: 15px; line-height: 1.55; text-align: left;
+  background: rgba(4, 9, 11, .6); border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 12px; padding: 13px 15px;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, .5);
+  white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
+}
+.wacrm-alarm-snooze {
+  display: flex; gap: 8px; justify-content: center; align-items: center;
+  margin: 20px 0 14px; flex-wrap: wrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wacrm-alarm-scrim, .wacrm-alarm-card, .wacrm-alarm-ring { animation: none; }
+}
+
+/* ===================================================================
+   Date + time field. color-scheme:dark makes Chrome render the native
+   picker and its calendar glyph for a dark surface instead of a white one.
+   =================================================================== */
+#wacrm-panel, #wacrm-modal, .wacrm-alarm-scrim { color-scheme: dark; }
+.wacrm-when { margin-bottom: 12px; }
+.wacrm-when .wacrm-in { margin-bottom: 8px; cursor: pointer; }
+.wacrm-when-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wacrm-when-chips .wacrm-btn { min-height: 30px; padding: 5px 10px; font-size: 11.5px; }
+
+/* ===================================================================
+   Labelled rail. Every feature says its own name, under a heading that
+   says which job it belongs to — an icon-only strip was unreadable.
+   =================================================================== */
+#wacrm-rail {
+  width: 186px; align-items: stretch; padding: 12px 10px 18px; gap: 2px;
+}
+.wacrm-rail-head {
+  display: flex; align-items: center; gap: 9px; padding: 2px 4px 12px; flex: none;
+}
+.wacrm-rail-mark {
+  width: 30px; height: 30px; flex: none; border-radius: 9px; display: grid; place-items: center;
+  font: 800 11px Inter, sans-serif; color: #04240f; letter-spacing: -.2px;
+  background: var(--sk-go); box-shadow: var(--sk-raise); margin: 0;
+}
+.wacrm-rail-name { font: 800 15px Inter, sans-serif; letter-spacing: -.3px; color: var(--ink); }
+.wacrm-rail-name b { color: var(--accent); font-weight: 800; }
+
+.wacrm-rail-grp {
+  flex: none; padding: 14px 6px 6px;
+  font: 700 9.5px Inter, sans-serif; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.wacrm-rail-sep { width: auto; margin: 12px 6px 6px; }
+
+.wacrm-rail-btn {
+  width: 100%; height: auto; min-height: 38px; flex: none;
+  display: flex; align-items: center; gap: 10px; justify-content: flex-start;
+  padding: 8px 10px; border-radius: 10px; text-align: left;
+  font: 600 12.5px Inter, system-ui, sans-serif; letter-spacing: -.05px;
+  color: var(--ink-2);
+  background: transparent; border: 1px solid transparent; box-shadow: none;
+}
+.wacrm-rail-btn svg { width: 17px; height: 17px; flex: none; }
+.wacrm-rail-btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wacrm-rail-btn:hover {
+  color: var(--ink); background: rgba(255, 255, 255, .06); border-color: var(--gl-brd-soft);
+}
+.wacrm-rail-btn:active { transform: translateY(1px); }
+.wacrm-rail-btn.on {
+  color: #04240f; background: var(--sk-go); border-color: rgba(255, 255, 255, .28);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 4px 14px -6px rgba(18, 160, 84, .8);
+  transform: none;
+}
+.wacrm-rail-btn.on svg { stroke-width: 2.2; }
+
+/* the rail is wider now, so WhatsApp shifts further right */
+html.wacrm-docked #app { left: 186px !important; width: calc(100% - 186px) !important; }
+#wacrm-topbar { left: 186px; }
+
+/* Quick bar is positioned against #main by script; these are the looks only. */
+
+
+@media (max-width: 1100px) {
+  #wacrm-rail { width: 156px; }
+  html.wacrm-docked #app { left: 156px !important; width: calc(100% - 156px) !important; }
+  #wacrm-topbar { left: 156px; }
+}
+
+/* Chat rows in a filtered list — tap to open that chat in WhatsApp */
+.wacrm-chatrow {
+  display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: 11px; color: var(--ink); font: 400 13.5px Inter, sans-serif;
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--gl-brd-soft);
+  transition: background .18s var(--ease), border-color .18s var(--ease);
+}
+.wacrm-chatrow:hover { background: rgba(255, 255, 255, .085); border-color: var(--gl-brd); }
+.wacrm-chatrow:active { transform: translateY(1px); }
+.wacrm-chatrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wacrm-chatav {
+  width: 34px; height: 34px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  font: 700 13px Inter, sans-serif; color: #04240f; background: var(--sk-go);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.4);
+}
+.wacrm-chatrow b { display: block; font-size: 13.5px; font-weight: 600; }
+.wacrm-chatrow .wacrm-dim { display: block; font-size: 11.5px; }
+.wacrm-unread {
+  flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  display: grid; place-items: center; font: 700 11px Inter, sans-serif; font-style: normal;
+  color: #04240f; background: var(--accent);
+}
+
+/* ===================================================================
+   Multi-select row. A toggle says on/off; picking many things out of a
+   list is a different job, so it gets a different, far more visible control.
+   =================================================================== */
+.wacrm-pick {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer;
+  padding: 11px 13px; border-radius: 12px; color: var(--ink);
+  font: 400 13.5px Inter, system-ui, sans-serif;
+  background: rgba(255, 255, 255, .05); border: 1px solid var(--gl-brd-soft);
+  transition: background .18s var(--ease), border-color .18s var(--ease);
+}
+.wacrm-pick:hover { background: rgba(255, 255, 255, .09); border-color: var(--gl-brd); }
+.wacrm-pick:active { transform: translateY(1px); }
+.wacrm-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wacrm-pick b { display: block; font-size: 13.5px; font-weight: 600; }
+.wacrm-pick .wacrm-dim { display: block; font-size: 11.5px; }
+
+.wacrm-tick {
+  width: 24px; height: 24px; flex: none; border-radius: 7px;
+  display: grid; place-items: center; color: transparent;
+  background: linear-gradient(180deg, #1b272c 0%, #131e22 100%);
+  border: 1.5px solid rgba(255, 255, 255, .3);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .5);
+  transition: background .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease);
+}
+.wacrm-tick svg { width: 15px; height: 15px; stroke-width: 3; }
+
+/* Selected changes the whole row, not just the box — impossible to miss. */
+.wacrm-pick.on {
+  background: rgba(52, 224, 127, .14); border-color: rgba(52, 224, 127, .5);
+}
+.wacrm-pick.on .wacrm-tick {
+  color: #04240f; border-color: rgba(255, 255, 255, .45);
+  background: var(--sk-go);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 2px 8px -2px rgba(28, 188, 100, .8);
+}
+
+/* Date + time built from selects — always visible, no native picker needed */
+.wacrm-when-grid {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;
+}
+.wacrm-when-sel {
+  margin: 0; padding: 9px 8px; font-size: 13.5px; min-height: 40px;
+  background: rgba(4, 9, 11, .55); cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, .16);
+}
+.wacrm-when-sel.d { width: 62px; }
+.wacrm-when-sel.m { width: 74px; }
+.wacrm-when-sel.y { width: 82px; }
+.wacrm-when-sel.t { width: 62px; }
+.wacrm-when-at { color: var(--ink-3); font-size: 12px; padding: 0 2px; }
+.wacrm-when-colon { color: var(--ink-2); font-weight: 700; }
+.wacrm-when-sum {
+  font: 600 12.5px Inter, sans-serif; color: var(--accent-ink); margin-bottom: 9px;
+}
+.wacrm-when-sum.bad { color: var(--danger); }
+
+.wacrm-alarm-title { font-size: 19px; font-weight: 700; margin: 18px 0 0; letter-spacing: -.3px; }
+.wacrm-alarm-title + .wacrm-alarm-note { margin-top: 10px; }
+.wacrm-alarm-sent { margin-top: 10px; font-size: 12.5px; color: var(--accent-ink); }
+
+/* ===================================================================
+   Alarm card, redesigned. Self-contained: every value is literal, so it
+   cannot lose its styling by sitting outside a token scope again.
+   =================================================================== */
+.wacrm-al-top { display: grid; place-items: center; gap: 10px; margin-bottom: 18px; }
+.wacrm-al-kicker {
+  font: 700 10.5px Inter, system-ui, sans-serif; letter-spacing: 2px;
+  text-transform: uppercase; color: #7ff0b0;
+}
+.wacrm-alarm-ring { margin: 0 auto; position: relative; }
+/* a soft pulse behind the bell, so the card reads as "ringing" at a glance */
+.wacrm-alarm-ring::before {
+  content: ''; position: absolute; inset: -10px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(52, 224, 127, .34), transparent 68%);
+  animation: wacrm-al-pulse 1.8s ease-in-out infinite;
+}
+@keyframes wacrm-al-pulse { 0%, 100% { opacity: .45; transform: scale(.94); } 50% { opacity: 1; transform: scale(1.08); } }
+
+.wacrm-alarm-time { font-size: 46px; font-weight: 800; letter-spacing: -2px; }
+.wacrm-alarm-date { color: #9db3ab; font-size: 13.5px; margin-top: 6px; }
+.wacrm-alarm-title {
+  font-size: 20px; font-weight: 700; margin: 20px 0 0; letter-spacing: -.3px; color: #ffffff;
+}
+.wacrm-alarm-sent {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  margin-top: 12px; font-size: 12.5px; color: #7ff0b0;
+}
+.wacrm-alarm-sent svg { width: 14px; height: 14px; stroke-width: 2.6; }
+
+.wacrm-al-snoozerow { margin: 22px 0 16px; }
+.wacrm-al-snoozelbl {
+  display: block; margin-bottom: 9px;
+  font: 600 10.5px Inter, system-ui, sans-serif; letter-spacing: 1.4px;
+  text-transform: uppercase; color: #71877f;
+}
+.wacrm-al-snoozes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.wacrm-al-snooze {
+  cursor: pointer; padding: 11px 6px; border-radius: 13px;
+  display: grid; place-items: center; gap: 1px; color: #e9f2ec;
+  background: linear-gradient(180deg, #2c3d43 0%, #1f2c31 52%, #182428 100%);
+  border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(0,0,0,.45),
+              0 2px 4px rgba(0,0,0,.35);
+  transition: background .16s cubic-bezier(.2,0,0,1), transform .16s cubic-bezier(.2,0,0,1);
+}
+.wacrm-al-snooze b { font: 800 17px Inter, system-ui, sans-serif; line-height: 1; }
+.wacrm-al-snooze span { font: 500 10.5px Inter, system-ui, sans-serif; color: #9db3ab; }
+.wacrm-al-snooze:hover { background: linear-gradient(180deg, #35484f 0%, #26343a 52%, #1d2a2f 100%); }
+.wacrm-al-snooze:active { transform: translateY(1px); box-shadow: inset 0 2px 5px rgba(0,0,0,.55); }
+.wacrm-al-snooze:focus-visible { outline: 2px solid #34e07f; outline-offset: 2px; }
+
+.wacrm-al-dismiss {
+  width: 100%; cursor: pointer; min-height: 48px; padding: 13px;
+  border-radius: 14px; color: #04240f;
+  font: 700 15px Inter, system-ui, sans-serif;
+  background: linear-gradient(180deg, #3bef8c 0%, #1cbc64 46%, #109a4f 100%);
+  border: 1px solid rgba(255, 255, 255, .28);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 8px 20px -6px rgba(18,160,84,.6);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .25);
+  transition: filter .16s cubic-bezier(.2,0,0,1), transform .16s cubic-bezier(.2,0,0,1);
+}
+.wacrm-al-dismiss:hover { filter: brightness(1.08); }
+.wacrm-al-dismiss:active { transform: translateY(1px); }
+.wacrm-al-dismiss:focus-visible { outline: 2px solid #34e07f; outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) { .wacrm-alarm-ring::before { animation: none; } }
+
+/* ===================================================================
+   In-chat widget. One handle by default; the actions fan out on click
+   and fold away again, so the conversation stays clean.
+   =================================================================== */
+/* z-index 101, deliberately modest. At 2147482995 this sat above WhatsApp's own attach and
+   emoji menus, so a click meant for Document or Photos landed on us instead and WhatsApp
+   closed the menu as a click-outside. Sitting in WhatsApp's own band lets its popups render
+   on top and take their own clicks, with no guessing about their markup. pointer-events on
+   the container means the gaps around the handle never intercept anything. */
+#wacrm-quick {
+  position: fixed; z-index: 101; pointer-events: none;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+}
+#wacrm-quick .wacrm-q-handle { pointer-events: auto; }
+#wacrm-quick.open .wacrm-q-actions { pointer-events: auto; }
+
+.wacrm-q-actions {
+  display: flex; flex-direction: column; gap: 7px;
+  pointer-events: none; opacity: 0;
+  transform: translateY(10px) scale(.96); transform-origin: bottom left;
+  transition: opacity .18s cubic-bezier(.2,0,0,1), transform .18s cubic-bezier(.2,0,0,1);
+}
+#wacrm-quick.open .wacrm-q-actions { pointer-events: auto; opacity: 1; transform: none; }
+
+/* Each action is a labelled pill once open — an unlabelled icon told nobody anything. */
+.wacrm-q {
+  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  height: 38px; padding: 0 14px 0 11px; border-radius: 19px; color: #12a054;
+  font: 600 12.5px Inter, system-ui, -apple-system, sans-serif; white-space: nowrap;
+  background: linear-gradient(180deg, #ffffff 0%, #f2f6f4 100%);
+  border: 1px solid rgba(9, 30, 22, .12);
+  box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(11, 20, 26, .18),
+              0 6px 16px -6px rgba(11, 20, 26, .35);
+  transition: color .16s cubic-bezier(.2,0,0,1), background .16s cubic-bezier(.2,0,0,1),
+              transform .16s cubic-bezier(.2,0,0,1);
+}
+.wacrm-q svg { width: 17px; height: 17px; stroke-width: 2; flex: none; }
+.wacrm-q-lbl { line-height: 1; }
+.wacrm-q:hover {
+  color: #ffffff; transform: translateX(3px);
+  background: linear-gradient(180deg, #2ee178 0%, #12a054 100%);
+  border-color: rgba(9, 30, 22, .2);
+}
+.wacrm-q:active { transform: translateY(1px); }
+.wacrm-q:focus-visible { outline: 2px solid #12a054; outline-offset: 2px; }
+
+/* stagger the reveal so it reads as one motion, not six */
+#wacrm-quick.open .wacrm-q { animation: wacrm-q-in .22s cubic-bezier(.2,0,0,1) backwards; }
+#wacrm-quick.open .wacrm-q:nth-child(1) { animation-delay: .02s; }
+#wacrm-quick.open .wacrm-q:nth-child(2) { animation-delay: .05s; }
+#wacrm-quick.open .wacrm-q:nth-child(3) { animation-delay: .08s; }
+#wacrm-quick.open .wacrm-q:nth-child(4) { animation-delay: .11s; }
+#wacrm-quick.open .wacrm-q:nth-child(5) { animation-delay: .14s; }
+#wacrm-quick.open .wacrm-q:nth-child(6) { animation-delay: .17s; }
+@keyframes wacrm-q-in { from { opacity: 0; transform: translateX(-8px); } }
+
+/* The handle: a WA mark, becoming a close cross when open. */
+.wacrm-q-handle {
+  position: relative; width: 44px; height: 44px; flex: none; cursor: pointer;
+  display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(180deg, #3bef8c 0%, #1cbc64 46%, #109a4f 100%);
+  border: 1px solid rgba(255, 255, 255, .3); color: #04240f;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 2px 4px rgba(11,20,26,.28),
+              0 10px 24px -8px rgba(18, 160, 84, .7);
+  transition: transform .2s cubic-bezier(.2,0,0,1), box-shadow .2s cubic-bezier(.2,0,0,1);
+}
+.wacrm-q-handle:hover { transform: translateY(-2px); }
+.wacrm-q-handle:active { transform: translateY(1px); }
+.wacrm-q-handle:focus-visible { outline: 2px solid #12a054; outline-offset: 3px; }
+.wacrm-q-mark { font: 800 13px Inter, system-ui, sans-serif; letter-spacing: -.3px; }
+.wacrm-q-handle svg {
+  position: absolute; width: 18px; height: 18px; stroke-width: 2.6;
+  opacity: 0; transform: rotate(-90deg); transition: opacity .18s, transform .18s;
+}
+#wacrm-quick.open .wacrm-q-mark { opacity: 0; }
+#wacrm-quick.open .wacrm-q-handle svg { opacity: 1; transform: none; }
+#wacrm-quick.open .wacrm-q-handle { transform: rotate(0); }
+
+/* ===================================================================
+   Quick replies — a strip flush above the message box
+   =================================================================== */
+/* See the note on #wacrm-quick: a modest z-index keeps WhatsApp's own menus clickable. */
+#wacrm-qr {
+  position: fixed; z-index: 100; pointer-events: none;
+  display: flex; align-items: center; gap: 6px;
+  overflow-x: auto; scrollbar-width: none; padding: 2px 0;
+}
+.wacrm-qr-chip, .wacrm-qr-add { pointer-events: auto; }
+#wacrm-qr::-webkit-scrollbar { display: none; }
+.wacrm-qr-chip, .wacrm-qr-add {
+  flex: none; cursor: pointer; height: 30px; padding: 0 13px; border-radius: 15px;
+  display: inline-flex; align-items: center; gap: 6px; color: #12a054;
+  font: 600 12px Inter, system-ui, -apple-system, sans-serif; white-space: nowrap;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  background: rgba(255, 255, 255, .96);
+  border: 1px solid rgba(9, 30, 22, .14);
+  box-shadow: 0 1px 2px rgba(11, 20, 26, .14), 0 4px 12px -6px rgba(11, 20, 26, .3);
+  transition: background .16s cubic-bezier(.2,0,0,1), color .16s cubic-bezier(.2,0,0,1),
+              transform .16s cubic-bezier(.2,0,0,1);
+}
+.wacrm-qr-chip:hover, .wacrm-qr-add:hover {
+  color: #ffffff; background: linear-gradient(180deg, #2ee178 0%, #12a054 100%);
+  transform: translateY(-1px);
+}
+.wacrm-qr-chip:active, .wacrm-qr-add:active { transform: translateY(1px); }
+.wacrm-qr-chip:focus-visible, .wacrm-qr-add:focus-visible { outline: 2px solid #12a054; outline-offset: 2px; }
+.wacrm-qr-add { padding: 0 11px; }
+.wacrm-qr-add svg { width: 14px; height: 14px; stroke-width: 2.6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wacrm-q-actions, .wacrm-q, .wacrm-q-handle, .wacrm-qr-chip, .wacrm-qr-add { transition: none; animation: none; }
+}
+
+/* ===================================================================
+   Books dashboard — KPI tiles, hand-drawn SVG chart, category bars
+   =================================================================== */
+.wacrm-kpis {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0;
+}
+.wacrm-kpi {
+  padding: 11px 12px; border-radius: 12px; min-width: 0;
+  background: rgba(255, 255, 255, .045); border: 1px solid var(--gl-brd-soft);
+  box-shadow: var(--gl-sheen);
+}
+.wacrm-kpi .k-lab {
+  display: block; font: 600 10px Inter, sans-serif; letter-spacing: .7px;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 5px;
+}
+.wacrm-kpi b {
+  display: block; font: 800 18px Inter, sans-serif; letter-spacing: -.4px;
+  font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.wacrm-kpi .k-hint { display: block; margin-top: 3px; font-size: 10.5px; color: var(--ink-3); line-height: 1.35; }
+.wacrm-kpi.good b { color: var(--accent-ink); }
+.wacrm-kpi.bad b { color: var(--danger); }
+.wacrm-kpi.warn b { color: var(--warn); }
+
+.wacrm-chart-wrap {
+  padding: 12px; border-radius: 12px; margin-bottom: 14px;
+  background: rgba(4, 9, 11, .45); border: 1px solid var(--gl-brd-soft);
+}
+.wacrm-chart { width: 100%; height: auto; display: block; }
+.wacrm-chart .bin { fill: var(--accent); }
+.wacrm-chart .bout { fill: #6f8880; }
+.wacrm-chart .clab { fill: #71877f; font: 9px Inter, sans-serif; }
+.wacrm-legend { display: flex; gap: 14px; margin-bottom: 8px; font-size: 11px; color: var(--ink-3); }
+.wacrm-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.wacrm-legend .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.wacrm-legend .sw.in { background: var(--accent); }
+.wacrm-legend .sw.out { background: #6f8880; }
+
+.wacrm-bars { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+.wacrm-catrow { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.wacrm-catrow .c-name { width: 108px; flex: none; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wacrm-catrow .c-bar { flex: 1; height: 8px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; }
+.wacrm-catrow .c-bar i { display: block; height: 100%; background: var(--sk-go); border-radius: 999px; }
+.wacrm-catrow .c-val { width: 78px; text-align: right; flex: none; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+.wacrm-kind {
+  width: 26px; height: 26px; flex: none; border-radius: 8px; display: grid; place-items: center;
+  font: 800 12px Inter, sans-serif; color: #04240f;
+}
+.wacrm-kind.sale { background: var(--sk-go); }
+.wacrm-kind.purchase { background: #7aa7bd; }
+.wacrm-kind.expense { background: #e0a35a; }
+.wacrm-amt { flex: none; font: 700 13.5px Inter, sans-serif; font-variant-numeric: tabular-nums; }
+.wacrm-amt.in { color: var(--accent-ink); }
+.wacrm-amt.out { color: var(--ink-2); }
+
+@media (max-width: 520px) { .wacrm-kpis { grid-template-columns: repeat(2, 1fr); } }
+
+/* ===================================================================
+   Deals & Renewals
+   =================================================================== */
+/* Four tiles rather than three — active / expiring / expired / value. */
+.wacrm-kpis.four { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 620px) { .wacrm-kpis.four { grid-template-columns: repeat(2, 1fr); } }
+
+.wacrm-deals { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.wacrm-deal {
+  padding: 11px 12px; border-radius: 12px;
+  background: rgba(255, 255, 255, .045); border: 1px solid var(--gl-brd-soft);
+  box-shadow: var(--gl-sheen);
+}
+.wacrm-deal .d-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wacrm-deal .d-top b { font: 700 13.5px Inter, sans-serif; color: var(--ink); }
+.wacrm-deal .d-amt {
+  font: 700 12px Inter, sans-serif; font-variant-numeric: tabular-nums; color: var(--accent-ink);
+}
+/* Time-left is the one thing worth scanning down the list for, so it anchors right. */
+.wacrm-deal .d-when { margin-left: auto; font: 700 11.5px Inter, sans-serif; }
+.wacrm-deal .d-when.ok { color: var(--accent-ink); }
+.wacrm-deal .d-when.soon { color: var(--warn); }
+.wacrm-deal .d-when.gone { color: var(--danger); }
+.wacrm-deal .d-sub { margin-top: 3px; font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+.wacrm-deal .wacrm-row { margin-top: 9px; flex-wrap: wrap; }
+
+/* Settings collapse so the dashboard stays the focus. The default disclosure marker is
+   replaced with a chevron that matches the panel. */
+.wacrm-fold {
+  margin-top: 14px; border-radius: 12px;
+  background: rgba(255, 255, 255, .03); border: 1px solid var(--gl-brd-soft);
+}
+.wacrm-fold > summary {
+  cursor: pointer; list-style: none; padding: 11px 12px;
+  font: 700 12.5px Inter, sans-serif; color: var(--ink-2);
+  display: flex; align-items: center; gap: 8px;
+}
+.wacrm-fold > summary::-webkit-details-marker { display: none; }
+.wacrm-fold > summary::before {
+  content: ''; width: 7px; height: 7px; flex: none;
+  border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3);
+  transform: rotate(-45deg); transition: transform .16s cubic-bezier(.2, 0, 0, 1);
+}
+.wacrm-fold[open] > summary::before { transform: rotate(45deg); }
+.wacrm-fold > summary:hover { color: var(--ink); }
+.wacrm-fold-body { padding: 0 12px 12px; }
+.wacrm-fold-body > div { margin-bottom: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wacrm-fold > summary::before { transition: none; }
+}
+
+/* Rate chips on a catalog product and on a deal card: selling rate, purchase rate, and
+   the profit between them, so the numbers are scannable without opening anything. */
+.wacrm-rate {
+  flex: none; font: 700 11px Inter, sans-serif; font-variant-numeric: tabular-nums;
+  border-radius: 10px; padding: 1px 8px; white-space: nowrap;
+  color: var(--accent-ink); background: rgba(45, 212, 137, .13);
+}
+.wacrm-rate.cost { color: var(--ink-3); background: rgba(255, 255, 255, .06); }
+.wacrm-rate.margin { color: #04240f; background: var(--accent-ink); }
+.wacrm-rate.loss { color: #2a0b0b; background: var(--danger); }

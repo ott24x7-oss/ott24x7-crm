@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  body{width:300px;margin:0;background:#0e1518;color:#eaf3ee;font:14px Inter,system-ui,sans-serif;padding:16px}
+  h1{font-size:17px;font-weight:800;margin:0 0 3px}
+  h1 b{color:#25d366}
+  p.lede{color:#8ba39c;font-size:12.5px;margin:0 0 14px;line-height:1.5}
+  .s{background:#141f23;border:1px solid rgba(255,255,255,.09);border-radius:9px;padding:11px;font-size:12.5px;margin-bottom:11px}
+  .k{color:#7ff0b0;font-family:ui-monospace,Consolas,monospace;font-size:11px;word-break:break-all;margin-top:6px}
+  .ok{color:#7ff0b0}
+  .no{color:#ffb3b3}
+  .warn{color:#f5c37b}
+  .bar{height:5px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden;margin-top:8px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,#12a054,#2ee178)}
+  a.btn,button.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:none;cursor:pointer;
+    background:linear-gradient(180deg,#2ee178,#12a054);color:#04140b;
+    font:700 13.5px Inter,system-ui,sans-serif;padding:10px;border-radius:9px;text-decoration:none;margin-bottom:8px}
+  button.ghost{background:none;border:1px solid rgba(255,255,255,.16);color:#eaf3ee;font-weight:600}
+  input{width:100%;box-sizing:border-box;background:#0a1113;border:1px solid rgba(255,255,255,.14);color:#eaf3ee;
+    border-radius:9px;padding:9px 10px;font:13px ui-monospace,Consolas,monospace;margin-bottom:8px;outline:none}
+  input:focus{border-color:#25d366;box-shadow:0 0 0 3px rgba(37,211,102,.16)}
+  #msg{font-size:12px;min-height:16px;margin-bottom:6px;color:#7ff0b0}
+  #msg.bad{color:#ff8a8a}
+  .hide{display:none}
+</style>
+</head>
+<body>
+  <h1>WA<b>-CRM</b></h1>
+  <p class="lede">Open <b>web.whatsapp.com</b> and click the green WA button at the bottom-right.</p>
+
+  <div class="s" id="st">Checking license…</div>
+
+  <button class="btn ghost" id="toggleKey">I already have a license key</button>
+
+  <div id="keyBox" class="hide">
+    <input id="key" placeholder="WA-XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+    <div id="msg"></div>
+    <button class="btn" id="act">Activate</button>
+  </div>
+
+  <a class="btn" id="buy" href="https://wa-crm.in/#pricing" target="_blank" rel="noopener">Buy a license</a>
+  <button class="btn ghost hide" id="release">Release this device</button>
+  <p class="lede" style="margin:8px 0 0;font-size:11.5px">Frees your key so you can use it on another computer.</p>
+  <script src="popup.js"></script>
+</body>
+</html>
