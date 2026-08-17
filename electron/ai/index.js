@@ -5,6 +5,7 @@
 // facts with each request — this module never reaches into CRM storage for a price.
 
 const rag = require('./rag');
+const shop = require('./shop');
 const { importCatalog } = require('./catalog');
 const store = require('./store');
 const { createProvider } = require('./provider');
@@ -244,8 +245,10 @@ async function generate(ctx) {
     { topK: 4 });
 
   const system = rag.buildSystemPrompt({
-    settings: s, language, business: s.businessInstructions,
-    knowledge: hits, examples: exampleHits,
+    settings: s, language,
+    // Full knowledge feeds SHOP FACTS (FAQs/policies). Product rows stay in the live catalog.
+    knowledge: knowledge.map((r) => ({ row: r })),
+    examples: exampleHits,
     products: ctx.products || [], productHits, customer: ctx.customer || {},
   });
 
@@ -316,15 +319,18 @@ async function generate(ctx) {
   else if (score >= s.minConfidence && (s.mode === 'always' || (s.mode === 'offline' && !avail.online))) action = 'send';
   else if (score < s.suggestConfidence) action = 'handover';
 
+  // railway_final: models emit markdown; WhatsApp needs *bold* and bare URLs.
+  const text = shop.mdToWhatsApp(out.text);
+
   const log = store.addLog(accId, {
-    number, name: ctx.name, customerMessage: ctx.text, generated: out.text,
+    number, name: ctx.name, customerMessage: ctx.text, generated: text,
     language, intent: intent.intent, confidence: score, sources,
     validation: validation.problems, action, model: out.model,
     ms: Date.now() - started, ownerOnline: avail.online, ownerReason: avail.reason,
   });
 
   return {
-    ok: true, action, text: out.text, confidence: score, sources,
+    ok: true, action, text, confidence: score, sources,
     validation: validation.problems, language, intent: intent.intent,
     delayMs: s.replyDelayMs, logId: log.id,
     ownerOnline: avail.online, ownerReason: avail.reason,

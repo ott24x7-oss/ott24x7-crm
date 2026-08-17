@@ -478,10 +478,11 @@ const statusMap = {};
 const hookMap = {};
 // ONE round-trip per tick: connection status + all three in-page queues.
 // (Was two separate executeJavaScript IPC calls every 2.5s.)
-const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[],acts:[],hooked:false};
+const POLL_EXPR = `(async()=>{var o={s:'load',me:null,leads:[],incoming:[],cmds:[],acts:[],owners:[],hooked:false};
 try{o.hooked=!!window.__ott_lead_init}catch(e){}
-try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[],d=window.__ott_actq||[];
-window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];window.__ott_actq=[];window.__ott_ownerq=[];o.leads=a;o.incoming=b;o.cmds=c;o.acts=d;}catch(e){}
+try{var a=window.__ott_leadq||[],b=window.__ott_inq||[],c=window.__ott_cmdq||[],d=window.__ott_actq||[],ow=window.__ott_ownerq||[];
+window.__ott_leadq=[];window.__ott_inq=[];window.__ott_cmdq=[];window.__ott_actq=[];window.__ott_ownerq=[];
+o.leads=a;o.incoming=b;o.cmds=c;o.acts=d;o.owners=ow;}catch(e){}
 try{if(typeof WPP==='undefined')return o;
 var au=await WPP.conn.isAuthenticated();if(!au){o.s='qr';return o;}
 try{o.me=WPP.conn.getMyUserId()&&WPP.conn.getMyUserId().user}catch(_){}
@@ -532,6 +533,17 @@ async function pollTick() {
         // Tagged with the account it arrived on, so a reply is drafted from that account's
         // settings and catalogue rather than whichever tab is on screen.
         info.incoming.forEach((m) => { try { aiOnIncoming({ ...m, accId: acc }); } catch (e) {} });
+      }
+      // Owner typed in WhatsApp → stand the assistant down on that chat (railway_final
+      // identity handoff). Without this, __ott_ownerq was drained and thrown away.
+      if (info.owners && info.owners.length && window.ott && ott.ai) {
+        info.owners.forEach((o) => {
+          try {
+            const num = digits(String((o.to || '').split('@')[0].split(':')[0] || ''));
+            if (!num) return;
+            ott.ai.setConvoState(acc, num, { takenOver: true, lastOwnerAt: o.ts || Date.now() });
+          } catch (e) {}
+        });
       }
       if (info.cmds && info.cmds.length) info.cmds.forEach(processInvoiceCommand);
       if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
@@ -4173,10 +4185,13 @@ RENDER.ai = (b) => {
     .forEach(([k, lab]) => tabs.append(el('button', { className: 'btn small', onclick: () => { tab = k; draw(); } }, lab)));
 
   b.append(el('div', { className: 'fp-note' },
-    'A sales assistant that reads your catalog and knowledge base, drafts replies in English, Hindi or Hinglish, '
-    + 'and — once you switch it on — answers customers while you are away. It never invents a price and never '
-    + 'confirms a payment. Open “Train the AI” to teach it your business: type entries, learn from a past chat, '
-    + 'fill in a text file, or read your website.'),
+    el('b', {}, 'How this works (same model as your Railway WhatsApp AI)'),
+    el('div', { style: { marginTop: '6px', lineHeight: '1.55' } },
+      'Every customer message rebuilds a live catalog from Products + shop facts from Knowledge. '
+      + 'The model may only sell what is listed — with real Buy links — and never invents prices or keys. '
+      + 'Setup: 1) Settings → API key + business name + website URL · 2) Knowledge → Import from website '
+      + '(loads your catalog) · 3) Mode → Suggestions, then Auto when ready. '
+      + 'When you type in a chat yourself, the assistant stands down on that chat.')),
     tabs, wrap);
   draw();
 };
@@ -4448,6 +4463,7 @@ async function aiViewSettings() {
         + 'and no data is sent when the assistant is off.';
   };
   const bizName = el('input', { value: s.businessName || '', placeholder: 'e.g. OTT24x7', maxLength: 60 });
+  const shopSite = el('input', { value: s.shopSiteUrl || '', placeholder: 'https://ott24x7.com', spellcheck: false });
   const supWa = el('input', { value: s.supportWhatsApp || '', placeholder: '919812345678' });
   const supTg = el('input', { value: s.supportTelegram || '', placeholder: 'yourhandle (no @)' });
   // Which accounts the assistant runs on. Settings were always per-account, but switching
@@ -4560,6 +4576,7 @@ async function aiViewSettings() {
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '10px 0' } }),
     el('b', {}, 'How it behaves'),
     lbl('Business name (the assistant introduces itself as this)', bizName),
+    lbl('Shop website URL (for /account + /reseller facts)', shopSite),
     el('div', { className: 'row' }, lbl('Human support WhatsApp', supWa), lbl('Human support Telegram', supTg)),
     chkRow(waitOn, 'When it cannot answer, tell the customer a human will reply'),
     lbl('That wait message (leave empty for the built-in Hindi/English one)', waitTxt),
@@ -4585,6 +4602,7 @@ async function aiViewSettings() {
         apiKey: apiKey.value.trim(), chatModel: chatModel.value.trim(),
         embedModel: embedModel.value.trim(), businessInstructions: business.value,
         businessName: bizName.value.trim(),
+        shopSiteUrl: shopSite.value.trim().replace(/\/$/, ''),
         supportWhatsApp: digits(supWa.value), supportTelegram: supTg.value.trim().replace(/^@/, ''),
         waitReplyEnabled: waitOn.checked, waitReplyText: waitTxt.value.trim(),
         fallbackBaseUrl: fbUrl.value.trim(), fallbackApiKey: fbKey.value.trim(),
@@ -5175,11 +5193,18 @@ async function aiImportWebsite() {
     for (const p of found) {
       if (!p.title || !p.price) continue;
       const existing = qs.find((q) => (q.title || '').toLowerCase() === p.title.toLowerCase());
-      if (existing) { existing.sell = p.price; existing.category = p.category || existing.category; existing.stock = p.stock; updated++; }
-      else {
+      if (existing) {
+        existing.sell = p.price;
+        existing.category = p.category || existing.category;
+        existing.stock = p.stock;
+        if (p.url) existing.url = p.url;
+        if (p.description) existing.text = p.description;
+        updated++;
+      } else {
         // pinned:false — an imported catalog of 50 items must not carpet the chat bar with chips.
         qs.push({ title: p.title, category: p.category || '', text: p.description || '',
-          sell: p.price, cost: 0, stock: p.stock, pinned: false, source: 'website' });
+          sell: p.price, cost: 0, stock: p.stock, pinned: false, source: 'website',
+          url: p.url || '' });
         added++;
       }
     }

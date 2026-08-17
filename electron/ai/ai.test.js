@@ -87,7 +87,6 @@ t('rejects an over-long reply', () => {
 for (const [msg, label] of [
   ['I want a refund now', 'refund'],
   ['I paid but payment not received', 'payment problem'],
-  ['give me best price discount', 'discount'],
   ['this is a fraud, worst service', 'angry'],
   ['I will go to consumer court', 'legal'],
 ]) {
@@ -95,6 +94,10 @@ for (const [msg, label] of [
 }
 t('does not hand over a plain product question', () => {
   assert.strictEqual(rag.forcedHandover('Netflix ka price kya hai?', S), null);
+});
+// Discount / reseller is answered from SHOP FACTS (railway_final), not forced handover.
+t('does not force-handover a discount ask (shop facts explain reseller)', () => {
+  assert.strictEqual(rag.forcedHandover('give me best price discount', S), null);
 });
 
 // ---- language ----
@@ -410,14 +413,18 @@ t('a customer who comes back after a few minutes is acknowledged again', async (
   assert.notStrictEqual(r3.waitText, r1.waitText, 'wording rotates so it does not read like a stuck machine');
 });
 
-t('the prompt carries the buying and QR script', () => {
-  const p = rag.buildSystemPrompt({ settings: { ...S, supportWhatsApp: '919000000000' },
-    language: 'en', knowledge: [], examples: [], products: PRODUCTS, productHits: [], customer: {} });
-  assert.match(p, /BUYING/);
-  assert.match(p, /Buy here/);
-  assert.match(p, /QR code, UPI id or account number/);
-  assert.match(p, /NEVER type out payment details/);
-  assert.match(p, /human support team/i);
+t('the prompt carries the live catalog and shop facts (railway_final style)', () => {
+  const p = rag.buildSystemPrompt({
+    settings: { ...S, supportWhatsApp: '919000000000', shopSiteUrl: 'https://ott24x7.com', businessName: 'OTT24x7' },
+    language: 'en', knowledge: [], examples: [], products: PRODUCTS, productHits: [], customer: {},
+  });
+  assert.match(p, /LIVE CATALOG/);
+  assert.match(p, /SHOP FACTS/);
+  assert.match(p, /Buy:/);
+  assert.match(p, /wa\.me\/919000000000/);
+  assert.match(p, /reseller/i);
+  assert.match(p, /\*single asterisks\*/);
+  assert.match(p, /NEED_HUMAN/);
 });
 
 

@@ -73,11 +73,13 @@ const DEFAULT_SETTINGS = {
 
   languages: ['en', 'hi', 'hinglish'],
   handoverKeywords: ['refund', 'complaint', 'legal', 'lawyer', 'police', 'fraud', 'cheat',
-    'scam', 'chargeback', 'discount', 'manager', 'owner', 'human', 'call me',
+    'scam', 'chargeback', 'manager', 'owner', 'human', 'call me',
     'paisa wapas', 'shikayat', 'dhokha'],
   // Named, so the assistant introduces itself as the business rather than as "a small
   // business" - the Telegram bot opens with the brand and it reads completely differently.
   businessName: '',
+  // Shop homepage — used in SHOP FACTS for /account and /reseller links (railway_final style).
+  shopSiteUrl: '',
   // Real humans to hand off to. The bot shares these when it cannot help; without them
   // the CRM could only say "someone will get back to you" and leave the customer waiting.
   supportWhatsApp: '',             // digits only, e.g. 919812345678
