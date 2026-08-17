@@ -104,9 +104,12 @@ jobs:
 
       # Cross-repo upload needs a PAT with `contents: write` on ott24x7-crm-releases,
       # stored as the RELEASES_TOKEN secret. Without it this step is skipped, and the
-      # build is still downloadable from the workflow artifacts above.
+      # build is still downloadable from the staging release / workflow artifacts above.
+      #
+      # Do not gate on env.GH_TOKEN in the `if:` — step env is not visible there, so a
+      # present RELEASES_TOKEN was still skipping this step (v0.40.0 Mac attach).
       - name: Attach to the release
-        if: ${{ inputs.tag != '' && env.GH_TOKEN != '' }}
+        if: ${{ inputs.tag != '' && secrets.RELEASES_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
