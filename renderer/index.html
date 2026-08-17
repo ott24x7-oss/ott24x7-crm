@@ -12,6 +12,7 @@
       <img class="gate-logo" src="../assets/logo-mark.png" alt="" />
       <h1 class="gate-title" id="gateTitle"></h1>
       <p class="muted">Enter your license key to activate this device</p>
+      <label class="gate-label" for="licenseKey">License key</label>
       <input id="licenseKey" placeholder="WA-XXXX-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off" />
       <button id="activateBtn" class="btn primary block">Activate</button>
       <div class="gate-or"><span>or</span></div>
@@ -23,7 +24,7 @@
 
   <!-- FREE-TRIAL BANNER (shown inside the app while on trial) -->
   <div id="trialBanner" class="trial-banner hidden">
-    <span>🎁 Free trial — <b id="trialDays">7 days</b> left</span>
+    <span>Free trial — <b id="trialDays">7 days</b> left</span>
     <button id="trialBuyBtn" class="tb-buy">Buy license</button>
   </div>
 
@@ -43,7 +44,7 @@
         <button id="themeBtn" class="icon-btn" title="Change colour theme" aria-label="Change colour theme">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.2"/><circle cx="17.5" cy="10.5" r="1.2"/><circle cx="8.5" cy="7.5" r="1.2"/><circle cx="6.5" cy="12.5" r="1.2"/><path d="M12 2a10 10 0 1 0 0 20 2 2 0 0 0 1.6-3.2 2 2 0 0 1 1.6-3.2h1.9A5 5 0 0 0 22 10.6C22 5.9 17.5 2 12 2z"/></svg>
         </button>
-        <button id="deactivateBtn" class="icon-btn" title="Deactivate this device">⏻</button>
+        <button id="deactivateBtn" class="icon-btn" title="Deactivate this device" aria-label="Deactivate this device">⏻</button>
       </div>
     </header>
 

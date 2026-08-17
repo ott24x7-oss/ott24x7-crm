@@ -97,9 +97,15 @@ function applyTheme(id, save) {
   r.setAttribute('data-theme', t.id);
   r.style.colorScheme = t.dark ? 'dark' : 'light';
   if (save !== false) { try { store.set('ott_theme', t.id); } catch (e) {} }
-  // The chips injected into WhatsApp carry their own colours — refresh them so they
-  // pick up the new accent too.
-  try { accounts.forEach(function (acc) { applyQuickReplies(acc.id); }); } catch (e) {}
+  // The chips / widget / lead button injected into WhatsApp carry their own colours —
+  // refresh them so they pick up the new accent too.
+  try {
+    accounts.forEach(function (acc) {
+      applyQuickReplies(acc.id);
+      applyLeadButton(acc.id);
+      applyChatWidget(acc.id);
+    });
+  } catch (e) {}
 }
 
 function themeSwatch(t) {
@@ -126,8 +132,8 @@ function openThemePicker() {
 
   function draw() {
     grid.innerHTML = '';
-    let active = 'emerald';
-    try { active = store.get('ott_theme', 'emerald'); } catch (e) {}
+    let active = 'graphite';
+    try { active = store.get('ott_theme', 'graphite'); } catch (e) {}
     THEMES.forEach(function (t) {
       const on = t.id === active;
       const cell = el('div', {

@@ -172,7 +172,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // The stylesheet's :root fallbacks are the old dark chrome; the licence gate renders
   // before enterApp applies the saved palette, so without this the first screen flashes
   // dark and then snaps light. Theme first, everything else after.
-  try { applyTheme(store.get('ott_theme', 'emerald'), false); } catch (e) {}
+  try { applyTheme(store.get('ott_theme', 'graphite'), false); } catch (e) {}
   const v = document.querySelector('.ver');
   if (v) {
     v.style.cursor = 'pointer'; v.title = 'Check for updates';
@@ -328,7 +328,7 @@ const partOf = (id) => `persist:wa-${id}`;
 
 async function enterApp() {
   $('#gate').classList.add('hidden'); $('#app').classList.remove('hidden');
-  try { applyTheme(store.get('ott_theme', 'emerald'), false); } catch (e) {}
+  try { applyTheme(store.get('ott_theme', 'graphite'), false); } catch (e) {}
   updateTrialBanner();
   await restorePersisted();
   engineSrc = await ott.getEngine();
@@ -336,8 +336,17 @@ async function enterApp() {
   $('#addAccountTop').onclick = addAccount;
   $('#addFirst').onclick = addAccount;
   $('#themeBtn').onclick = openThemePicker;
-  $('#deactivateBtn').onclick = async () => { if (confirm('Deactivate this device? You will need the key again.')) { await ott.licenseClear(); location.reload(); } };
+  $('#deactivateBtn').onclick = async () => {
+    if (await confirmModal('Deactivate this device?', 'You will need the license key again to reactivate.')) {
+      await ott.licenseClear(); location.reload();
+    }
+  };
   $('#fpClose').onclick = closeFeature;
+  const scrim = $('#panelScrim');
+  if (scrim) scrim.onclick = closeFeature;
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && openFeatureId) { e.preventDefault(); closeFeature(); }
+  });
   const licPill = document.querySelector('.lic-pill');
   if (licPill) { licPill.style.cursor = 'pointer'; licPill.title = 'Licence details'; licPill.onclick = showLicenceInfo; }
   makeDraggable($('#featurePanel'), $('#featurePanel .fp-head'));
@@ -367,12 +376,14 @@ async function addAccount() {
   toast('Account added — scan the QR to link');
 }
 function closeAccount(id) {
-  if (!confirm('Remove this account tab? (WhatsApp session data stays on disk.)')) return;
-  accounts = accounts.filter(a => a.id !== id); store.set('ott_accounts', accounts);
-  document.querySelector(`webview[data-acc="${id}"]`)?.remove();
-  if (activeId === id) activeId = null;
-  renderTabs();
-  if (accounts.length) switchAccount(accounts[0].id); else { activeId = null; $('#waEmpty').style.display = 'flex'; }
+  confirmModal('Remove this account tab?', 'WhatsApp session data stays on disk.').then((ok) => {
+    if (!ok) return;
+    accounts = accounts.filter(a => a.id !== id); store.set('ott_accounts', accounts);
+    document.querySelector(`webview[data-acc="${id}"]`)?.remove();
+    if (activeId === id) activeId = null;
+    renderTabs();
+    if (accounts.length) switchAccount(accounts[0].id); else { activeId = null; $('#waEmpty').style.display = 'flex'; }
+  });
 }
 
 function createWebview(acc) {
@@ -412,24 +423,36 @@ async function waExec(expr) { const w = activeWv(); if (!w) throw new Error('No 
 
 // A small input dialog in the app's own modal style — window.prompt does not exist in
 // Electron, and renaming should not need a settings screen.
-function promptModal(title, value) {
+/** App-styled confirm — replaces native window.confirm so destructive actions match chrome. */
+function confirmModal(title, detail, okLabel) {
   return new Promise((resolve) => {
-    const done = (v) => { scrim.remove(); resolve(v); };
-    const inp = el('input', { value: value || '', maxLength: 30 });
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value); if (e.key === 'Escape') done(null); });
-    const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) done(null); } },
-      el('div', { className: 'modal-box', style: { width: '360px', textAlign: 'left' } },
-        el('b', {}, title), el('div', { style: { marginTop: '8px' } }, inp),
-        el('div', { className: 'row', style: { marginTop: '10px' } },
-          el('button', { className: 'btn small primary', onclick: () => done(inp.value) }, 'Save'),
-          el('button', { className: 'btn small ghost', onclick: () => done(null) }, 'Cancel'))));
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey, true);
+      scrim.remove();
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    };
+    const scrim = el('div', { className: 'modal-scrim', onclick: (e) => { if (e.target === scrim) done(false); } },
+      el('div', { className: 'modal-box', role: 'dialog', 'aria-modal': 'true', style: { width: '400px', textAlign: 'left' } },
+        el('h3', { style: { margin: '0 0 6px', fontSize: '16px' } }, title),
+        detail ? el('p', { className: 'muted', style: { margin: '0 0 14px', fontSize: '13px', lineHeight: '1.5', whiteSpace: 'pre-wrap' } }, detail) : null,
+        el('div', { className: 'row', style: { marginTop: '4px', justifyContent: 'flex-end' } },
+          el('button', { className: 'btn small ghost', onclick: () => done(false) }, 'Cancel'),
+          el('button', { className: 'btn small primary', onclick: () => done(true) }, okLabel || 'Confirm'))));
     document.body.append(scrim);
-    inp.focus(); inp.select();
+    document.addEventListener('keydown', onKey, true);
+    const primary = scrim.querySelector('.btn.primary');
+    if (primary) primary.focus();
   });
 }
 
 async function renameAccount(a) {
-  const nn = await promptModal('Rename this account', a.name);
+  const nn = await promptModal('Rename this account', 'New name', a.name);
   if (nn == null) return;
   const clean = nn.trim().slice(0, 30);
   if (!clean || clean === a.name) return;
@@ -526,20 +549,23 @@ function renderRail() {
   FEATURES.forEach(f => {
     if (f.divider) { rail.append(el('div', { className: 'rail-divider' }, f.divider)); return; }
     if (f.sub) {
-      const sub = el('div', { className: 'rail-sub hidden' });
-      f.sub.forEach(([v, n]) => sub.append(el('div', { className: 'rail-subitem', onclick: () => { if (v === 'label') openFeature(f); else chatFilter(v); } }, n)));
-      const item = el('div', { className: 'rail-item', onclick: () => sub.classList.toggle('hidden') }, svg(f.icon), f.name, el('span', { className: 'caret' }, '▾'));
+      const sub = el('div', { className: 'rail-sub hidden', id: 'rail-sub-' + f.id });
+      f.sub.forEach(([v, n]) => sub.append(el('button', { type: 'button', className: 'rail-subitem', onclick: () => { if (v === 'label') openFeature(f); else chatFilter(v); } }, n)));
+      const item = el('button', { type: 'button', className: 'rail-item', 'aria-expanded': 'false', 'aria-controls': 'rail-sub-' + f.id,
+        onclick: () => { const open = sub.classList.toggle('hidden'); item.setAttribute('aria-expanded', open ? 'false' : 'true'); } },
+        svg(f.icon), f.name, el('span', { className: 'caret', 'aria-hidden': 'true' }, '▾'));
       item.dataset.fid = f.id;
       rail.append(item, sub);
       return;
     }
-    const item = el('div', { className: 'rail-item', onclick: () => openFeature(f) }, svg(f.icon), f.name);
+    const item = el('button', { type: 'button', className: 'rail-item', onclick: () => openFeature(f) }, svg(f.icon), f.name);
     item.dataset.fid = f.id;
     if (!f.impl) item.append(el('span', { className: 'soon' }, 'soon'));
     rail.append(item);
   });
 }
 let openFeatureId = null;
+let _fpPrevFocus = null;
 // Features that do not touch WhatsApp at all. Backup in particular must work on a fresh
 // machine, before any account has been connected — that is exactly when you restore.
 const NO_ACCOUNT_NEEDED = new Set(['backup']);
@@ -555,12 +581,25 @@ function openFeature(f) {
   const body = $('#fpBody'); body.innerHTML = '';
   (RENDER[f.id] || renderSoon)(body, f);
   panel.classList.remove('hidden');
-  if (wasHidden) positionWindow(panel);   // keep position when switching features
+  const scrim = $('#panelScrim');
+  if (scrim) scrim.classList.remove('hidden');
+  if (wasHidden) {
+    positionWindow(panel);
+    _fpPrevFocus = document.activeElement;
+    const closeBtn = $('#fpClose');
+    if (closeBtn) closeBtn.focus();
+  }
 }
 function closeFeature() {
   openFeatureId = null;
   $('#featurePanel').classList.add('hidden');
+  const scrim = $('#panelScrim');
+  if (scrim) scrim.classList.add('hidden');
   document.querySelectorAll('.rail-item').forEach(x => x.classList.remove('active'));
+  if (_fpPrevFocus && typeof _fpPrevFocus.focus === 'function') {
+    try { _fpPrevFocus.focus(); } catch (e) {}
+  }
+  _fpPrevFocus = null;
 }
 function positionWindow(panel) {
   const stage = $('#waStage').getBoundingClientRect();
@@ -883,13 +922,13 @@ RENDER.quick = (b) => {
       background: 'rgba(18,184,102,.06)',
     },
   });
-  const bulkDelete = () => {
+  const bulkDelete = async () => {
     const qs = store.get('ott_quick', []);
     // A stale index can only mean the list changed under us; dropping them keeps the count
     // honest rather than deleting the wrong row.
     const hit = [...selected].filter((i) => i >= 0 && i < qs.length);
     if (!hit.length) return;
-    if (!confirm(`Delete ${hit.length} saved product${hit.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    if (!(await confirmModal(`Delete ${hit.length} saved product${hit.length === 1 ? '' : 's'}?`, 'This cannot be undone.', 'Delete'))) return;
     const kill = new Set(hit);
     if (store.set('ott_quick', qs.filter((_, idx) => !kill.has(idx)))) {
       selected = new Set();
@@ -1310,18 +1349,37 @@ function applyWaTheme(accId) {
   wv.executeJavaScript(`(function(){try{if(localStorage.getItem('theme')==null){localStorage.setItem('theme','"dark"');}}catch(e){}})();void 0;`).catch(() => {});
 }
 
+/** Colours for WA webview injects — guest page cannot read host :root vars. */
+function injectThemeColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const g = (k, fb) => (cs.getPropertyValue(k) || fb).trim();
+  return {
+    green: g('--green', '#12a054'),
+    green2: g('--green-2', '#0e8a48'),
+    soft: g('--green-soft', '#2ee178'),
+    on: g('--on-accent', '#ffffff'),
+    elev: g('--elev', '#ffffff'),
+    panel2: g('--panel-2', '#f2f6f4'),
+    text: g('--text', '#04240f'),
+    line: g('--line', 'rgba(9,30,22,.14)'),
+  };
+}
+
 function applyQuickReplies(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
   const replies = store.get('ott_quick', []).filter(q => q.pinned !== false); // only pinned show as chips
-  const js = `window.__ott_quick=${JSON.stringify(replies)};(function(){
+  const C = injectThemeColors();
+  const js = `window.__ott_quick=${JSON.stringify(replies)};window.__ott_tc=${JSON.stringify(C)};(function(){
     ${MENU_GUARD}
     function insert(text){var box=document.querySelector('#main footer [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"]');if(!box)return;box.focus();try{var dt=new DataTransfer();dt.setData('text/plain',String(text));box.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));return;}catch(e){}try{var lines=String(text).replace(/\\r\\n?/g,'\\n').split('\\n');for(var i=0;i<lines.length;i++){if(i>0)document.execCommand('insertLineBreak');if(lines[i])document.execCommand('insertText',false,lines[i]);}}catch(e){}}
     function act(q){if(q&&q.data){try{var c=window.WPP&&WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(c){WPP.chat.sendFileMessage(c.id,q.data,{type:'auto',caption:q.text||'',filename:q.filename||'file',createChat:true});}}catch(e){}}else{insert((q&&q.text)||'');}}
     /* One stylesheet instead of a cssText string per chip — hover and focus states are
        impossible with inline styles, and this is what makes the bar match the extension. */
     function css(){
-      if(document.getElementById('ott-qr-css'))return;
-      var s=document.createElement('style');s.id='ott-qr-css';
+      var tc=window.__ott_tc||{};
+      var g=tc.green||'#12a054', soft=tc.soft||'#2ee178', elev=tc.elev||'#fff', line=tc.line||'rgba(9,30,22,.14)';
+      var s=document.getElementById('ott-qr-css');
+      if(!s){s=document.createElement('style');s.id='ott-qr-css';document.head.appendChild(s);}
       /* z-index 100, deliberately modest. At 99999 this sat above WhatsApp's own attach and
          emoji menus, so a click meant for Document or Photos landed on us instead and
          WhatsApp closed the menu as a click-outside. Sitting in WhatsApp's own band lets its
@@ -1330,13 +1388,12 @@ function applyQuickReplies(accId) {
       s.textContent='#ott-qr-bar{position:fixed;z-index:100;pointer-events:none;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}'
         +'.ott-qr-chip{pointer-events:auto}'
         +'#ott-qr-bar::-webkit-scrollbar{display:none}'
-        +'.ott-qr-chip{flex:none;cursor:pointer;height:30px;padding:0 13px;border-radius:15px;display:inline-flex;align-items:center;gap:6px;color:#12a054;font:600 12px Inter,system-ui,-apple-system,sans-serif;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.96);border:1px solid rgba(9,30,22,.14);box-shadow:0 1px 2px rgba(11,20,26,.14),0 4px 12px -6px rgba(11,20,26,.3);transition:background .16s cubic-bezier(.2,0,0,1),color .16s cubic-bezier(.2,0,0,1),transform .16s cubic-bezier(.2,0,0,1)}'
-        +'.ott-qr-chip:hover{color:#fff;background:linear-gradient(180deg,#2ee178 0%,#12a054 100%);transform:translateY(-1px)}'
+        +'.ott-qr-chip{flex:none;cursor:pointer;height:30px;padding:0 13px;border-radius:15px;display:inline-flex;align-items:center;gap:6px;color:'+g+';font:600 12px Inter,system-ui,-apple-system,sans-serif;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;background:'+elev+';border:1px solid '+line+';box-shadow:0 1px 2px rgba(11,20,26,.14),0 4px 12px -6px rgba(11,20,26,.3);transition:background .16s cubic-bezier(.2,0,0,1),color .16s cubic-bezier(.2,0,0,1),transform .16s cubic-bezier(.2,0,0,1)}'
+        +'.ott-qr-chip:hover{color:#fff;background:linear-gradient(180deg,'+soft+' 0%,'+g+' 100%);transform:translateY(-1px)}'
         +'.ott-qr-chip:active{transform:translateY(1px)}'
-        +'.ott-qr-chip:focus-visible{outline:2px solid #12a054;outline-offset:2px}'
+        +'.ott-qr-chip:focus-visible{outline:2px solid '+g+';outline-offset:2px}'
         +'.ott-qr-add{padding:0 11px}'
         +'@media (prefers-reduced-motion:reduce){.ott-qr-chip{transition:none}}';
-      document.head.appendChild(s);
     }
     function chip(label,tip,cls,fn){
       var b=document.createElement('button');b.type='button';b.className='ott-qr-chip'+(cls?' '+cls:'');
@@ -1515,7 +1572,9 @@ RENDER.autopost = (b) => {
 // Inject a "+ Lead" button into each chat header + capture incoming replies (for stop-on-reply).
 function applyLeadButton(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const C = injectThemeColors();
   const js = `(function(){
+    window.__ott_tc=${JSON.stringify(C)};
     ${PH_RESOLVER}
     /* The queues exist from the first run; only the listener is retried. */
     window.__ott_leadq=window.__ott_leadq||[];window.__ott_inq=window.__ott_inq||[];
@@ -1687,7 +1746,7 @@ function applyLeadButton(accId) {
 
     if(!window.__ott_place_init){window.__ott_place_init=true;setInterval(place,4000);}
     async function grab(){try{var c=WPP.chat.getActiveChat&&WPP.chat.getActiveChat();if(!c)return;var u=await _ph(c.id);if(!u&&c.contact&&c.contact.id)u=await _ph(c.contact.id);var nm=(c.contact&&c.contact.name)||c.name||c.formattedTitle||u;var b=document.getElementById('ott-lead-btn');if(!u){if(b){b.textContent='no number';setTimeout(function(){b.textContent='\uFF0B Lead';},1600);}return;}window.__ott_leadq.push({number:u,name:nm});if(b){b.textContent='\u2713 Lead saved';setTimeout(function(){b.textContent='\uFF0B Lead';},1500);}}catch(e){}}
-    function place(){var header=document.querySelector('#main header');if(!header||document.getElementById('ott-lead-btn'))return;var b=document.createElement('button');b.id='ott-lead-btn';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:#12b866;color:#fff;border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
+    function place(){var header=document.querySelector('#main header');if(!header)return;var tc=window.__ott_tc||{};var bg=tc.green||'#12b866';var on=tc.on||'#fff';var b=document.getElementById('ott-lead-btn');if(b){b.style.background=bg;b.style.color=on;return;}b=document.createElement('button');b.id='ott-lead-btn';b.type='button';b.textContent='\\uFF0B Lead';b.style.cssText='margin:0 6px;background:'+bg+';color:'+on+';border:none;border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;align-self:center;';b.onclick=function(e){e.preventDefault();e.stopPropagation();grab();};var actions=header.lastElementChild||header;try{actions.insertBefore(b,actions.firstChild);}catch(e){header.appendChild(b);}}
     place();
   })();`;
   wv.executeJavaScript(js).catch(() => {});
@@ -1701,7 +1760,32 @@ let pendingChatAction = null;   // read by the Schedule / Reminder / Invoice pan
 
 function applyChatWidget(accId) {
   const wv = document.querySelector(`webview[data-acc="${accId}"]`); if (!wv || !wv.dataset.injected) return;
+  const C = injectThemeColors();
   const js = `(function(){
+    window.__ott_tc=${JSON.stringify(C)};
+    function paint(){
+      var tc=window.__ott_tc||{};
+      var g=tc.green||'#12a054', soft=tc.soft||'#2ee178', g2=tc.green2||'#109a4f', elev=tc.elev||'#fff',
+          p2=tc.panel2||'#f2f6f4', on=tc.on||'#fff', text=tc.text||'#04240f', line=tc.line||'rgba(9,30,22,.12)';
+      var s=document.getElementById('ott-w-css');
+      if(!s){s=document.createElement('style');s.id='ott-w-css';document.documentElement.appendChild(s);}
+      s.textContent='#ott-w{position:fixed;z-index:101;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
+      +'#ott-w .h{pointer-events:auto}'
+      +'#ott-w.open .a{pointer-events:auto}'
+      +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1),visibility 0s linear .18s}'
+      +'#ott-w.open .acts{opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1),visibility 0s}'
+      +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'
+      +'font:600 12.5px Inter,-apple-system,"Segoe UI",sans-serif;color:'+g+';background:linear-gradient(180deg,'+elev+' 0%,'+p2+' 100%);'
+      +'border:1px solid '+line+';box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 1px 2px rgba(11,20,26,.18),0 6px 16px -6px rgba(11,20,26,.35);transition:all .16s cubic-bezier(.2,0,0,1)}'
+      +'#ott-w .a:hover{color:'+on+';transform:translateX(3px);background:linear-gradient(180deg,'+soft+' 0%,'+g+' 100%)}'
+      +'#ott-w .a:active{transform:translateY(1px)}'
+      +'#ott-w .h{position:relative;width:42px;height:42px;border-radius:50%;cursor:pointer;display:grid;place-items:center;color:'+text+';'
+      +'font:800 12px Inter,sans-serif;background:linear-gradient(180deg,'+soft+' 0%,'+g+' 46%,'+g2+' 100%);border:1px solid rgba(255,255,255,.3);'
+      +'box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 2px 4px rgba(11,20,26,.28),0 10px 24px -8px rgba(11,20,26,.45);transition:transform .2s}'
+      +'#ott-w .h:hover{transform:translateY(-2px)}'
+      +'@media (prefers-reduced-motion:reduce){#ott-w .acts,#ott-w .a,#ott-w .h{transition:none}}';
+    }
+    paint();
     if(window.__ott_widget_init)return; window.__ott_widget_init=true;
     ${MENU_GUARD}
     ${PH_RESOLVER}
@@ -1713,36 +1797,7 @@ function applyChatWidget(accId) {
            ['remind','Remind me about this','M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0'],
            ['invoice','Send an invoice','M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5']];
     function ico(d){return '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="'+d+'"/></svg>';}
-    function css(){
-      if(document.getElementById('ott-w-css'))return;
-      var s=document.createElement('style'); s.id='ott-w-css';
-      /* See the note on #ott-qr-bar: a modest z-index keeps WhatsApp's own menus clickable. */
-      s.textContent='#ott-w{position:fixed;z-index:101;pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:7px}'
-      /* Only the handle opts back in while closed. A child re-enables pointer-events even
-         when its parent is none, so listing .a here made the whole invisible action column
-         clickable: it sat over the messages, swallowed text-selection drags, and turned a
-         click on a message into "Save as lead". */
-      +'#ott-w .h{pointer-events:auto}'
-      +'#ott-w.open .a{pointer-events:auto}'
-      /* visibility:hidden as well as opacity:0 and pointer-events:none. opacity alone
-         leaves the column hit-testable, and pointer-events can be overridden by a child;
-         visibility cannot be resurrected without an explicit visibility:visible, so this
-         is the one that makes the collapsed column genuinely inert. It flips instantly on
-         open and only after the fade on close, so the animation is unchanged. */
-      +'#ott-w .acts{display:flex;flex-direction:column;gap:6px;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(8px) scale(.97);transform-origin:bottom left;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1),visibility 0s linear .18s}'
-      +'#ott-w.open .acts{opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:opacity .18s cubic-bezier(.2,0,0,1),transform .18s cubic-bezier(.2,0,0,1),visibility 0s}'
-      +'#ott-w .a{display:flex;align-items:center;gap:9px;height:36px;padding:0 14px 0 11px;border-radius:18px;cursor:pointer;white-space:nowrap;'
-      +'font:600 12.5px Inter,-apple-system,"Segoe UI",sans-serif;color:#12a054;background:linear-gradient(180deg,#fff 0%,#f2f6f4 100%);'
-      +'border:1px solid rgba(9,30,22,.12);box-shadow:inset 0 1px 0 #fff,0 1px 2px rgba(11,20,26,.18),0 6px 16px -6px rgba(11,20,26,.35);transition:all .16s cubic-bezier(.2,0,0,1)}'
-      +'#ott-w .a:hover{color:#fff;transform:translateX(3px);background:linear-gradient(180deg,#2ee178 0%,#12a054 100%)}'
-      +'#ott-w .a:active{transform:translateY(1px)}'
-      +'#ott-w .h{position:relative;width:42px;height:42px;border-radius:50%;cursor:pointer;display:grid;place-items:center;color:#04240f;'
-      +'font:800 12px Inter,sans-serif;background:linear-gradient(180deg,#3bef8c 0%,#1cbc64 46%,#109a4f 100%);border:1px solid rgba(255,255,255,.3);'
-      +'box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 2px 4px rgba(11,20,26,.28),0 10px 24px -8px rgba(18,160,84,.7);transition:transform .2s}'
-      +'#ott-w .h:hover{transform:translateY(-2px)}'
-      +'@media (prefers-reduced-motion:reduce){#ott-w .acts,#ott-w .a,#ott-w .h{transition:none}}';
-      document.documentElement.appendChild(s);
-    }
+    function css(){paint();}
     function build(){
       var ex=document.getElementById('ott-w'); if(ex)return ex;
       css();
@@ -2049,7 +2104,7 @@ RENDER.leads = (b) => {
         L.seqActive ? el('button', { className: 'btn small ghost', onclick: () => { updateLead(L.id, { seqActive: false }); refresh(); } }, 'Stop') : null),
       el('div', { className: 'row', style: { marginTop: '6px' } },
         el('button', { className: 'btn small ghost', onclick: async () => { const n = await promptModal('Note for ' + (L.name || L.number), 'Add a note', L.notes || ''); if (n != null) { updateLead(L.id, { notes: n }); refresh(); } } }, 'Note'),
-        el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: () => { if (confirm('Delete this lead?')) { deleteLead(L.id); refresh(); } } }, 'Delete')));
+        el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: async () => { if (await confirmModal('Delete this lead?', 'This cannot be undone.', 'Delete')) { deleteLead(L.id); refresh(); } } }, 'Delete')));
   }
 
   function seqsView() {
@@ -2621,7 +2676,7 @@ RENDER.grouputils = (b) => {
           const file = att.get();
           if (!sel.length) return toast('Select at least one group', 'err');
           if (!msg.value.trim() && !file) return toast('Write a message or attach a file', 'err');
-          if (!confirm(`Send this post to ${sel.length} group(s)?`)) return;
+          if (!(await confirmModal(`Send this post to ${sel.length} group(s)?`, null, 'Send'))) return;
           const wait = Math.max(1, +gap.value || 6) * 1000;
           bar.style.display = 'block'; barI.style.width = '0%';
           let done = 0, ok = 0;
@@ -2639,7 +2694,7 @@ RENDER.grouputils = (b) => {
         el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: async () => {
           const sel = picker ? picker.selected() : [];
           if (!sel.length) return toast('Select at least one group', 'err');
-          if (!confirm(`Leave ${sel.length} group(s)?`)) return;
+          if (!(await confirmModal(`Leave ${sel.length} group(s)?`, null, 'Leave'))) return;
           for (const g of sel) {
             const r = await waExec(`(async()=>{try{await WPP.group.leave(${JSON.stringify(g.jid)});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
             line(out, (r.ok ? '✓ left ' : '✗ ') + (g.name || g.jid), r.ok ? 'ok' : 'bad');
@@ -2677,7 +2732,7 @@ RENDER.grouputils = (b) => {
         el('button', { className: 'btn ghost', style: { color: 'var(--danger)' }, onclick: destroy }, 'Destroy group')), out);
     async function destroy() {
       const gid = sel.value; if (!gid) return toast('Load & pick a group', 'err');
-      if (!confirm('Remove ALL members and leave this group? This cannot be undone.')) return;
+      if (!(await confirmModal('Destroy this group?', 'Removes ALL members and leaves the group. This cannot be undone.', 'Destroy'))) return;
       const me = await waExec("(async()=>{try{return WPP.conn.getMyUserId().user}catch(e){return ''}})()").catch(() => '');
       const ids = await waExec(`(async()=>{try{${PH_RESOLVER};const p=await WPP.group.getParticipants(${JSON.stringify(gid)});var o=[];for(var i=0;i<p.length;i++){var ph=await _ph(p[i].id);o.push(ph?ph+'@c.us':((p[i].id&&p[i].id._serialized)||''));}return o.filter(Boolean)}catch(e){return[]}})()`).catch(() => []);
       const targets = ids.filter(x => x && (!me || x.indexOf(me) === -1));
@@ -3725,7 +3780,11 @@ RENDER.backup = (b) => {
       .map(([dk, , label]) => `${label}: ${bkCount(incoming[dk])}`).join('\n');
     const where = payload.platform === 'desktop' ? 'the desktop app' : 'the Chrome extension';
     const verb = mode === 'replace' ? 'REPLACE everything currently stored' : 'ADD to what is already stored';
-    if (!confirm(`Backup from ${where}, taken ${String(payload.exportedAt || '').slice(0, 10)}.\n\n${summary}\n\nThis will ${verb}. Continue?`)) return;
+    if (!(await confirmModal(
+      mode === 'replace' ? 'Replace with this backup?' : 'Merge this backup?',
+      `From ${where}, taken ${String(payload.exportedAt || '').slice(0, 10)}.\n\n${summary}\n\nThis will ${verb}.`,
+      mode === 'replace' ? 'Replace' : 'Merge'
+    ))) return;
 
     for (const [dk] of BACKUP_MAP) {
       if (!(dk in incoming)) continue;

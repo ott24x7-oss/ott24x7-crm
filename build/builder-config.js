@@ -44,6 +44,9 @@ const config = {
     icon: `assets/${brand.icon}`,
     target: ['nsis'],
     artifactName: '${productName}-Setup-${version}.${ext}',
+    // Avoid winCodeSign extract (needs symlink privilege). Unsigned builds are fine —
+    // shipping releases have always been unsigned on Windows.
+    signAndEditExecutable: false,
   },
   mac: {
     icon: `assets/${brand.macIcon}`,
