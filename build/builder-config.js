@@ -36,17 +36,29 @@ const config = {
   artifactName: '${productName}-${version}-${os}.${ext}',
   directories: { output: 'release' },
   afterPack: 'build/afterPack.js',
+  afterAllArtifactBuild: require('./afterPack.js').signArtifacts,
   compression: 'maximum',
   files: ['electron/**', 'renderer/**', 'assets/**', 'config.js', 'brand.js', 'brands/**',
     // The suites guard the source; customers do not run them.
-    '!electron/**/*.test.js', '!electron/**/*.test.mjs'],
+    '!electron/**/*.test.js', '!electron/**/*.test.mjs', '!electron/ai/**'],
   win: {
     icon: `assets/${brand.icon}`,
     target: ['nsis'],
     artifactName: '${productName}-Setup-${version}.${ext}',
-    // Avoid winCodeSign extract (needs symlink privilege). Unsigned builds are fine —
-    // shipping releases have always been unsigned on Windows.
+    // afterPack stamps icon + CompanyName. Do not use electron-builder's
+    // winCodeSign extract — it needs symlink privilege and fails on this PC.
     signAndEditExecutable: false,
+  },
+  nsis: {
+    oneClick: true,
+    perMachine: false,
+    shortcutName: brand.name,
+    uninstallDisplayName: brand.name,
+    installerIcon: `assets/${brand.icon}`,
+    uninstallerIcon: `assets/${brand.icon}`,
+    installerHeaderIcon: `assets/${brand.icon}`,
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
   },
   mac: {
     icon: `assets/${brand.macIcon}`,

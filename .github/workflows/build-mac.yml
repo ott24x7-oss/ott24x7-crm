@@ -109,9 +109,10 @@ jobs:
       # Do not gate on env.GH_TOKEN in the `if:` — step env is not visible there, so a
       # present RELEASES_TOKEN was still skipping this step (v0.40.0 Mac attach).
       - name: Attach to the release
-        if: ${{ inputs.tag != '' && secrets.RELEASES_TOKEN != '' }}
+        if: ${{ inputs.tag != '' }}
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then echo "RELEASES_TOKEN not set — skip attach"; exit 0; fi
           gh release upload "${{ inputs.tag }}" release/*.dmg \
             --repo ott24x7-oss/ott24x7-crm-releases --clobber

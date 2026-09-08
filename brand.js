@@ -23,7 +23,7 @@ const DEFAULTS = {
   // Reverse-DNS app id. MUST differ per brand or Windows treats two installs as the
   // same app: shared taskbar identity, and the updater feeds cross over.
   appId: 'com.ott24x7.crm',
-  company: 'WA-CRM',
+  company: 'Watshop Automation',
   // Lowercase, filename-safe. Used for exported CSVs and backup filenames.
   slug: 'wa-crm',
   site: 'https://wa-crm.in',
