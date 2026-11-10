@@ -23,7 +23,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14 # Apple Silicon runner; builds both arm64 and x64
+    runs-on: macos-15 # Apple Silicon runner; builds both arm64 and x64
     permissions:
       # write, so the job can stage the DMGs as a release asset in this repo
       contents: write
