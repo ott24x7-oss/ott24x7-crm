@@ -4,7 +4,7 @@ Your own WhatsApp CRM / bulk sender, built on the open-source **WPPConnect `wa-j
 gated by the **ott24x7 license server**. Electron app — Windows/macOS/Linux.
 
 > Clean-room product you own. It bundles the MIT-licensed `@wppconnect/wa-js` engine
-> (`assets/wa-js.js`, v4.4.2) and does not contain any third-party commercial software.
+> (`assets/wa-js.js`, latest) and does not contain any third-party commercial software.
 
 ## What works in this skeleton
 
