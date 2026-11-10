@@ -132,4 +132,7 @@ exports.default = async function afterPack(context) {
 exports.signArtifacts = async function signArtifacts(buildResult) {
   const paths = buildResult.artifactPaths || [];
   for (const file of paths) signFile(file);
+  // latest.yml is rewritten by build/refresh-feed.js after electron-builder exits.
+  // Doing it here is too early: the builder overwrites the file again on the way out,
+  // with the checksum from before this signature.
 };

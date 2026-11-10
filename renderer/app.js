@@ -13,7 +13,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // in userData, not just localStorage — localStorage does not survive a profile reset.
 const PERSIST_KEYS = ['ott_theme', 'ott_lic_ok', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
   'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items',
-  'ott_reminders', 'ott_schedule', 'ott_memberadd', 'ott_sig', 'ott_notes', 'ott_books', 'ott_deals', 'ott_deal_cfg'];
+  'ott_reminders', 'ott_schedule', 'ott_memberadd', 'ott_sig', 'ott_notes', 'ott_books', 'ott_deals', 'ott_deal_cfg',
+  'ott_msg_sound'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -63,6 +64,7 @@ const IC = {
   lead: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>',
   invoice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6M9 9h1"/></svg>',
   extract: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
+  status: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>',
 };
 
 const FEATURES = [
@@ -81,6 +83,7 @@ const FEATURES = [
   { id: 'memberadd', name: 'Add Members', icon: IC.users, impl: true },
   { id: 'groupextract', name: 'Group Extractor', icon: IC.extract, impl: true },
   { divider: 'Tools' },
+  { id: 'status', name: 'WhatsApp Status', icon: IC.status, impl: true },
   { id: 'autopost', name: 'Auto Offer Post', icon: IC.rocket, impl: true },
   { id: 'blur', name: 'Blur Settings', icon: IC.eye, impl: true },
   { id: 'link', name: 'Link Generator', icon: IC.link, impl: true },
@@ -156,20 +159,30 @@ try {
       });
     }
     const n = $('#verBadge');
-    if (n && c && c.version) n.textContent = 'v' + c.version;
+    if (n && c && c.version) { APP_VERSION = String(c.version); n.textContent = 'v' + APP_VERSION; }
   }).catch(() => {});
 } catch (e) {}
 
 // ---- Auto-update wiring (registered at load so the popup event is never missed) ----
+let APP_VERSION = '';
 let _updChecking = false;
+let _verPop = null;
 try {
-  ott.onUpdateAvailable(d => { _updChecking = false; showUpdatePopup(d.version, d.manual); });
+  ott.onUpdateAvailable(d => { _updChecking = false; showVersionUpdate(d.version, d.manual); });
   ott.onUpdateProgress(d => setUpdateProgress(d.percent));
   ott.onUpdateDownloaded(() => setUpdateDownloaded());
-  ott.onUpdateNone(() => { if (_updChecking) { toast('You’re on the latest version ✓'); _updChecking = false; } });
-  ott.onUpdateError(() => { if (_updChecking) { toast('Update check failed — check your connection', 'err'); _updChecking = false; } });
+  ott.onUpdateNone(() => {
+    if (_verPop || _updChecking) setVersionStatus('You are on the latest version.', false);
+    _updChecking = false;
+  });
+  ott.onUpdateError((d) => {
+    const msg = (d && d.message) || 'Update check failed. Check your connection.';
+    if (_upd && _upd.downloading) { showUpdateFailed(msg); return; }
+    if (_verPop || _updChecking) setVersionStatus(msg, true);
+    _updChecking = false;
+  });
 } catch (_) {}
-// Click the version pill to check for updates manually.
+// Click the version pill to open the version popup and check for updates.
 window.addEventListener('DOMContentLoaded', () => {
   // The stylesheet's :root fallbacks are the old dark chrome; the licence gate renders
   // before enterApp applies the saved palette, so without this the first screen flashes
@@ -177,11 +190,25 @@ window.addEventListener('DOMContentLoaded', () => {
   try { applyTheme(store.get('ott_theme', 'graphite'), false); } catch (e) {}
   const v = document.querySelector('.ver');
   if (v) {
-    v.style.cursor = 'pointer'; v.title = 'Check for updates';
-    // It was always clickable — nothing said so, and nobody guessed. Now it reads as a button.
-    if (!v.textContent.includes('⟳')) v.textContent = v.textContent + ' ⟳';
+    v.style.cursor = 'pointer';
+    v.title = 'Software version and updates';
     v.style.textDecoration = 'underline dotted';
-    v.addEventListener('click', () => { _updChecking = true; toast('Checking for updates…'); try { ott.checkUpdate && ott.checkUpdate(); } catch (_) {} });
+    v.addEventListener('click', () => {
+      _updChecking = true;
+      openVersionPopup();
+      try { ott.checkUpdate && ott.checkUpdate(); } catch (_) { setVersionStatus('Update check failed. Check your connection.', true); }
+    });
+  }
+  const soundBtn = document.getElementById('soundBtn');
+  if (soundBtn) {
+    paintSoundBtn();
+    soundBtn.addEventListener('click', () => {
+      const on = store.get('ott_msg_sound', true) === false;
+      store.set('ott_msg_sound', on);
+      paintSoundBtn();
+      pushMsgSound();
+      toast(on ? 'Message sound on' : 'Message sound off');
+    });
   }
 });
 
@@ -272,37 +299,172 @@ function lockApp(reason) {
   }
 }
 
-// ---- Auto-update popup ----
+// ---- Version + update popup ----
+// Clicking the version in the top bar opens this. A newer release uses the same card,
+// so the check result is never only a toast that disappears.
 let _upd = null;
+function closeVersionPopup() {
+  if (!_verPop) return;
+  try { _verPop.scrim.remove(); } catch (_) {}
+  _verPop = null;
+}
+function openVersionPopup() {
+  if (_upd) closeUpd();
+  if (_verPop) return;
+  const status = el('div', { className: 'muted', style: { margin: '8px 0 0', lineHeight: '1.5' } }, 'Checking for updates…');
+  const actions = el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '12px' } },
+    el('button', { className: 'btn ghost', onclick: closeVersionPopup }, 'Close'));
+  const scrim = el('div', { className: 'modal-scrim' });
+  scrim.onclick = (e) => { if (e.target === scrim) closeVersionPopup(); };
+  scrim.append(el('div', { className: 'modal-box', style: { width: '400px', textAlign: 'center' } },
+    el('h3', {}, 'Software version'),
+    el('div', { className: 'ver-now' }, 'v' + (APP_VERSION || '…')),
+    el('div', { className: 'muted', style: { fontSize: '12.5px' } }, BRAND.name),
+    status,
+    actions));
+  document.body.append(scrim);
+  _verPop = { scrim, status };
+}
+function setVersionStatus(text, bad) {
+  if (!_verPop) openVersionPopup();
+  if (!_verPop || !_verPop.status) return;
+  _verPop.status.textContent = text;
+  _verPop.status.className = bad ? 'msg err' : 'muted';
+  _verPop.status.style.margin = '8px 0 0';
+}
+function showVersionUpdate(version, manual) {
+  closeVersionPopup();
+  showUpdatePopup(version, manual);
+}
 function showUpdatePopup(version, manual) {
   if (_upd) return;
   const bar = el('div', { className: 'progress', style: { display: 'none', width: '100%' } }); const barI = el('div', { className: 'bar' }); bar.append(barI);
   const pct = el('div', { className: 'muted', style: { fontSize: '12px', display: 'none' } }, '0%');
   // On macOS the app is not code-signed, so it cannot replace itself — open the download
   // page instead of pretending an in-app update is running.
+  const here = APP_VERSION ? ('You are on v' + APP_VERSION + '. ') : '';
   const updBtn = manual
     ? el('button', { className: 'btn primary', onclick: () => { ott.downloadUpdate(); closeUpd(); } }, 'Download')
-    : el('button', { className: 'btn primary', onclick: () => { updBtn.disabled = true; updBtn.textContent = 'Downloading…'; bar.style.display = 'block'; pct.style.display = 'block'; ott.downloadUpdate(); } }, 'Update now');
-  const box = el('div', { className: 'modal-box', style: { width: '380px', textAlign: 'center' } },
+    : el('button', { className: 'btn primary', onclick: () => beginUpdateDownload(updBtn, bar, pct) }, 'Update now');
+  const box = el('div', { className: 'modal-box', style: { width: '400px', textAlign: 'center' } },
     el('h3', {}, 'Update available'),
-    el('div', { className: 'muted', style: { margin: '4px 0 8px' } },
-      'Version ' + (version || '') + (manual
+    el('div', { className: 'ver-now' }, 'v' + (version || '')),
+    el('div', { className: 'muted', style: { margin: '6px 0 8px', lineHeight: '1.5' } },
+      here + 'Version ' + (version || '') + (manual
         ? ' is out. Download it and drag ' + BRAND.name + ' into Applications to replace this copy.'
-        : ' is ready — get the latest features and fixes.')),
+        : ' is ready. Install it to get the latest features and fixes.')),
     bar, pct,
     el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '8px' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), updBtn));
   const scrim = el('div', { className: 'modal-scrim' }, box);
   document.body.append(scrim);
-  _upd = { scrim, box, barI, pct };
+  _upd = { scrim, box, barI, pct, btn: updBtn, downloading: false };
 }
-function setUpdateProgress(p) { if (_upd) { _upd.barI.style.width = p + '%'; _upd.pct.textContent = p + '%'; } }
+function beginUpdateDownload(btn, bar, pct) {
+  if (!_upd) return;
+  _upd.downloading = true;
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  bar.style.display = 'block';
+  pct.style.display = 'block';
+  ott.downloadUpdate();
+}
+function setUpdateProgress(p) {
+  if (!_upd || !_upd.barI || !_upd.pct) return;
+  _upd.barI.style.width = p + '%';
+  _upd.pct.textContent = p + '%';
+  if (p >= 100 && _upd.btn && _upd.downloading) _upd.btn.textContent = 'Checking download…';
+}
+function showUpdateFailed(msg) {
+  if (!_upd || !_upd.box) return;
+  _upd.downloading = false;
+  _upd.box.innerHTML = '';
+  _upd.box.append(
+    el('h3', {}, 'Update did not finish'),
+    el('div', { className: 'msg err', style: { margin: '8px 0', lineHeight: '1.45', fontSize: '13px' } }, msg || 'The download stopped.'),
+    el('div', { className: 'row', style: { justifyContent: 'center' } },
+      el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'),
+      el('button', { className: 'btn primary', onclick: () => { closeUpd(); ott.downloadUpdate && ott.checkUpdate && ott.checkUpdate(); } }, 'Try again')));
+}
 function setUpdateDownloaded() {
   if (!_upd) showUpdatePopup('');
+  if (!_upd || !_upd.box) return;
+  _upd.downloading = false;
   _upd.box.innerHTML = '';
   _upd.box.append(el('h3', {}, 'Update ready'), el('div', { className: 'muted', style: { margin: '4px 0 10px' } }, 'Restart to apply the update.'),
     el('div', { className: 'row', style: { justifyContent: 'center' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), el('button', { className: 'btn primary', onclick: () => ott.installUpdate() }, 'Restart & update')));
 }
 function closeUpd() { if (_upd) { _upd.scrim.remove(); _upd = null; } }
+
+// Message sound. The CRM switch and WhatsApp's own Notifications → Sounds switch both
+// have to agree before a chime plays. Voice notes inside a chat are not chimes.
+function msgSoundOn(crmOn, waSound) {
+  if (crmOn === false) return false;
+  if (waSound === false) return false;
+  return true;
+}
+function isNotifyChime(info) {
+  const row = info || {};
+  if (row.controls) return false;
+  if (row.inChat) return false;
+  const src = String(row.src || '');
+  if (/ptt|opus|voice-note|audio-player/i.test(src)) return false;
+  const d = Number(row.duration);
+  if (d && isFinite(d) && d > 4) return false;
+  return true;
+}
+function paintSoundBtn() {
+  const btn = document.getElementById('soundBtn');
+  const icon = document.getElementById('soundIcon');
+  if (!btn || !icon) return;
+  const on = store.get('ott_msg_sound', true) !== false;
+  btn.classList.toggle('off', !on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.title = on ? 'Message sound on — click to mute' : 'Message sound off';
+  icon.innerHTML = on
+    ? '<path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M16 9a5 5 0 0 1 0 6M19 7a8 8 0 0 1 0 10"/>'
+    : '<path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/>';
+}
+function pushMsgSound() {
+  const on = store.get('ott_msg_sound', true) !== false;
+  document.querySelectorAll('#waStage webview').forEach((w) => {
+    w.executeJavaScript('window.__ott_msg_sound=' + (on ? 'true' : 'false')).catch(() => {});
+  });
+}
+function applyMsgSound(wv) {
+  if (!wv) return;
+  const on = store.get('ott_msg_sound', true) !== false;
+  // Windows plays its own toast sound for every page Notification, and that sound
+  // ignores WhatsApp's Sounds switch. Notifications are always silent here. The
+  // message chime is WhatsApp's own short audio, and that is what the switches gate.
+  const js = '(function(){'
+    + 'window.__ott_msg_sound=' + (on ? 'true' : 'false') + ';'
+    + 'if(window.__ott_sound_guard)return;'
+    + 'window.__ott_sound_guard=true;'
+    + 'function prefKey(k){return /notif|sound|pref|setting/i.test(String(k||""));}'
+    + 'function note(k,v){var s=String(v==null?"":v);if(!prefKey(k)||s.length>2000)return;'
+    + 'if(/sound/i.test(k)&&(s==="false"||s==="0"))window.__ott_wa_sound=false;'
+    + 'else if(/sound/i.test(k)&&(s==="true"||s==="1"))window.__ott_wa_sound=true;'
+    + 'else if(s.charAt(0)==="{"&&/"(?:sound|playSound|incomingSound|notificationSounds|msgSound)"\\s*:\\s*false/i.test(s))window.__ott_wa_sound=false;'
+    + 'else if(s.charAt(0)==="{"&&window.__ott_wa_sound!==false&&/"(?:sound|playSound|incomingSound|notificationSounds|msgSound)"\\s*:\\s*true/i.test(s))window.__ott_wa_sound=true;}'
+    + 'function scan(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);note(k,localStorage.getItem(k));}}catch(e){}}'
+    + 'try{var _set=localStorage.setItem.bind(localStorage);localStorage.setItem=function(k,v){try{note(k,v);}catch(e){}return _set(k,v);};}catch(e){}'
+    + 'scan();var _sn=0;var _si=setInterval(function(){scan();if(++_sn>12)clearInterval(_si);},2000);'
+    + 'function rowText(t){var row=t&&t.closest?t.closest("label,li,[role=listitem],div"):null;var a=t.getAttribute?t.getAttribute("aria-label"):"";return String(a||(row&&row.innerText)||"").slice(0,180);}'
+    + 'function readOn(t){if(!t)return true;var a=t.getAttribute&&t.getAttribute("aria-checked");if(a==="true"||a==="false")return a==="true";return !!t.checked;}'
+    + 'function fromControl(t){if(!t)return;var text=rowText(t);if(!/\\b(sounds?|incoming sounds|notification tone)\\b/i.test(text))return;if(/\\bcalls?\\b/i.test(text)&&!/message/i.test(text))return;window.__ott_wa_sound=readOn(t);}'
+    + 'document.addEventListener("change",function(e){fromControl(e.target);},true);'
+    + 'document.addEventListener("click",function(e){var t=e.target&&e.target.closest&&e.target.closest("[role=switch],input[type=checkbox]");if(t)setTimeout(function(){fromControl(t);},0);},true);'
+    + 'function allowed(){if(window.__ott_msg_sound===false||window.__ott_wa_sound===false)return false;return true;}'
+    + 'var Native=window.Notification;if(Native){var Wrapped=function(title,opts){opts=Object.assign({},opts||{});opts.silent=true;return new Native(title,opts);};'
+    + 'Wrapped.prototype=Native.prototype;try{Wrapped.requestPermission=Native.requestPermission.bind(Native);}catch(e){}'
+    + 'try{Object.defineProperty(Wrapped,"permission",{get:function(){return Native.permission;}});}catch(e){}'
+    + 'window.Notification=Wrapped;}'
+    + 'function chime(el){if(!el||el.controls)return false;try{if(el.closest&&el.closest("#main [data-id],#main .message-in,#main .message-out,[data-testid=audio-player],[data-testid=ptt-player]"))return false;}catch(e){}'
+    + 'var src=String(el.currentSrc||el.src||"");if(/ptt|opus|voice-note/i.test(src))return false;var d=Number(el.duration);if(d&&isFinite(d)&&d>4)return false;return true;}'
+    + 'var play=HTMLAudioElement.prototype.play;HTMLAudioElement.prototype.play=function(){if(!allowed()&&chime(this))return Promise.resolve();return play.apply(this,arguments);};'
+    + '})();';
+  wv.executeJavaScript(js).catch(() => {});
+}
 $('#activateBtn').addEventListener('click', activate);
 $('#trialBtn').addEventListener('click', startTrial);
 $('#trialBuyBtn').addEventListener('click', () => ott.openExternal(BUY_URL));
@@ -333,6 +495,8 @@ async function enterApp() {
   try { applyTheme(store.get('ott_theme', 'graphite'), false); } catch (e) {}
   updateTrialBanner();
   await restorePersisted();
+  paintSoundBtn();
+  await loadStatusDoc();
   engineSrc = await ott.getEngine();
   renderRail();
   $('#addAccountTop').onclick = addAccount;
@@ -395,6 +559,7 @@ function createWebview(acc) {
   // Keep background accounts fully alive so switching to them is instant.
   wv.setAttribute('webpreferences', 'backgroundThrottling=false');
   wv.addEventListener('dom-ready', async () => {
+    applyMsgSound(wv);
     if (wv.dataset.injected) return;
     try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyWaTheme(acc.id); applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); applyChatWidget(acc.id); } catch (e) { console.warn('inject', e); }
   });
@@ -529,6 +694,7 @@ async function pollTick() {
       if (info.acts && info.acts.length) info.acts.forEach((a) => handleChatAction(a).catch(() => {}));
     }
     if (statusChanged) renderTabs();                  // only redraw tabs on real change
+    maybeStatusPrompt();
   } finally {
     _pollBusy = false;
   }
@@ -940,6 +1106,12 @@ RENDER.quick = (b) => {
     el('span', { style: { flex: '1' } }),
     selCount,
     el('button', { className: 'btn small ghost', onclick: () => { selected = new Set(); draw(); } }, 'Clear'),
+    el('button', { className: 'btn small', onclick: () => {
+      const qs = store.get('ott_quick', []);
+      const hit = [...selected].filter((i) => i >= 0 && i < qs.length).map((i) => qs[i]);
+      if (!hit.length) return toast('Select products first', 'err');
+      queueProductOffers(hit);
+    } }, 'Add to rotation'),
     el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: bulkDelete }, 'Delete selected'));
 
   const drawFilters = () => {
@@ -991,6 +1163,7 @@ RENDER.quick = (b) => {
         el('div', { className: 'muted', style: { fontSize: '12px', marginTop: '3px', lineHeight: '1.45', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' } }, cleanPreview(it.text) || it.filename || ''),
         el('div', { className: 'row', style: { marginTop: '8px' } },
           el('button', { className: 'btn small', onclick: () => sendQuickToActiveChat(it) }, '➤ Send to chat'),
+          el('button', { className: 'btn small ghost', onclick: () => queueProductOffers([it]) }, 'Add to rotation'),
           el('button', { className: 'btn small ghost', onclick: () => { const qs = store.get('ott_quick', []); qs[i].pinned = qs[i].pinned === false; store.set('ott_quick', qs); draw(); refreshChips(); } }, it.pinned !== false ? 'Unpin' : 'Pin chip'),
           el('button', { className: 'btn small ghost', style: { color: 'var(--danger)' }, onclick: () => { const qs = store.get('ott_quick', []); qs.splice(i, 1); store.set('ott_quick', qs); drawFilters(); draw(); refreshChips(); } }, 'Delete'))));
   }
@@ -1103,7 +1276,7 @@ RENDER.quick = (b) => {
   impOut.append(impList, impBar);
 
   b.append(
-    el('div', { className: 'fp-note' }, 'Save your product offers (image + caption) once, then search and send them to the open chat in one click. Pin your most-used ones as chips above the message box.'),
+    el('div', { className: 'fp-note' }, 'Save your product offers once. Send to chat posts one into the open chat now. Add to rotation puts it on the product rotation list, and it goes out only when the schedule is due.'),
     lbl('Product / offer name', title),
     el('div', { className: 'row' }, lbl('Category', category), lbl('Type', mtype)),
     el('div', { className: 'row' }, lbl('Selling rate ₹', sell), lbl('Purchase rate ₹', cost)),
@@ -1487,6 +1660,46 @@ function applyBlur(accId) {
   wv.executeJavaScript(js).catch(() => {});
 }
 
+// Appends products to the rotation list and does not post them.
+// A list that has never posted gets its clock started now, so the first offer
+// waits for the interval instead of going out on the next scheduler tick.
+function queueProductOffers(items) {
+  const cfg = store.get('ott_offers', { on: false, accId: activeId, timezone: 'Asia/Kolkata', startHour: 9, endHour: 22, intervalMin: 60, targets: [], offers: [], nextIndex: 0, lastPostTs: 0, logs: [] });
+  cfg.offers = cfg.offers || [];
+  cfg.targets = cfg.targets || [];
+  cfg.logs = cfg.logs || [];
+  const wasEmpty = cfg.offers.length === 0;
+  let added = 0;
+  let dup = 0;
+  let empty = 0;
+  for (const it of items) {
+    const text = String(it.text || '').trim();
+    const data = it.data || undefined;
+    const title = it.title || '';
+    if (!text && !data) { empty++; continue; }
+    const same = cfg.offers.some((o) => (o.title || '') === title && (o.text || '') === text && (o.data || '') === (data || ''));
+    if (same) { dup++; continue; }
+    cfg.offers.push({ title, text, data, filename: it.filename });
+    added++;
+  }
+  if (!added) {
+    toast(dup && !empty ? 'Already on the product rotation list' : (empty && !dup ? 'That product needs a caption or image before it can rotate' : 'Nothing new to add'), 'err');
+    return 0;
+  }
+  // A brand-new list must wait a full interval. An old clock from a list that was
+  // emptied would otherwise send the product on the next tick.
+  if (!cfg.lastPostTs || wasEmpty) cfg.lastPostTs = Date.now();
+  if (!store.set('ott_offers', cfg)) {
+    toast('Storage full — the rotation list was not updated', 'err');
+    return 0;
+  }
+  if (openFeatureId === 'autopost') refreshPanel('autopost');
+  toast(`Added ${added} to the product rotation list. Nothing was posted.`
+    + (dup ? ` ${dup} already there.` : '')
+    + (empty ? ` ${empty} skipped — no caption or image.` : ''));
+  return added;
+}
+
 // ================= Auto Offer Post =================
 RENDER.autopost = (b) => {
   const cfg = store.get('ott_offers', { on: false, accId: activeId, timezone: 'Asia/Kolkata', startHour: 9, endHour: 22, intervalMin: 60, targets: [], offers: [], nextIndex: 0, lastPostTs: 0, logs: [] });
@@ -1520,12 +1733,53 @@ RENDER.autopost = (b) => {
   const offAtt = attachControl('*');
   const offList = el('div', { className: 'rules' });
   const drawOffers = () => {
-    offList.innerHTML = ''; if (!cfg.offers.length) offList.append(el('div', { className: 'muted' }, 'No offers yet.'));
-    cfg.offers.forEach((o, i) => offList.append(el('div', { className: 'qr-item' },
-      el('div', { className: 'txt' }, el('b', {}, (o.data ? '📎 ' : '') + (o.text || o.filename || 'offer').slice(0, 30)), el('div', { className: 'muted', style: { fontSize: '12px' } }, (o.text || '').slice(0, 50))),
-      el('button', { className: 'btn small ghost', onclick: () => { cfg.offers.splice(i, 1); drawOffers(); save(); } }, '✕'))));
+    offList.innerHTML = ''; if (!cfg.offers.length) offList.append(el('div', { className: 'muted' }, 'No offers on the rotation list yet.'));
+    cfg.offers.forEach((o, i) => {
+      const name = o.title || o.text || o.filename || 'offer';
+      offList.append(el('div', { className: 'qr-item' },
+        el('div', { className: 'txt' }, el('b', {}, (o.data ? '📎 ' : '') + name.slice(0, 40)), el('div', { className: 'muted', style: { fontSize: '12px' } }, (o.text || '').slice(0, 50))),
+        el('button', { className: 'btn small ghost', onclick: () => { cfg.offers.splice(i, 1); drawOffers(); save(); updateTimer(); } }, '✕')));
+    });
   };
-  const addOffer = () => { const f = offAtt.get(); if (!offText.value.trim() && !f) return toast('Add offer text or a file', 'err'); cfg.offers.push({ text: offText.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined }); if (save()) { offText.value = ''; drawOffers(); toast('Offer saved'); } };
+  const holdForSchedule = (wasEmpty) => {
+    if (!cfg.lastPostTs || wasEmpty) cfg.lastPostTs = Date.now();
+  };
+  const addOffer = () => {
+    const f = offAtt.get();
+    if (!offText.value.trim() && !f) return toast('Add offer text or a file', 'err');
+    const item = { title: '', text: offText.value.trim(), data: f ? f.data : undefined, filename: f ? f.name : undefined };
+    const dup = cfg.offers.some((o) => (o.title || '') === '' && (o.text || '') === item.text && (o.data || '') === (item.data || ''));
+    if (dup) return toast('Already on the product rotation list', 'err');
+    const wasEmpty = cfg.offers.length === 0;
+    cfg.offers.push(item);
+    holdForSchedule(wasEmpty);
+    if (save()) { offText.value = ''; drawOffers(); updateTimer(); toast('Added to the product rotation list. It will post on the schedule, not now.'); }
+  };
+  const prodPick = el('select');
+  const fillProdPick = () => {
+    const cur = prodPick.value;
+    prodPick.innerHTML = '';
+    const qs = store.get('ott_quick', []);
+    prodPick.append(el('option', { value: '' }, qs.length ? 'Choose a saved product…' : 'No saved products yet'));
+    qs.forEach((p, i) => prodPick.append(el('option', { value: String(i) }, p.title || deriveTitle(p.text) || 'Untitled')));
+    if ([...prodPick.options].some((o) => o.value === cur)) prodPick.value = cur;
+  };
+  const addPickedProduct = () => {
+    if (prodPick.value === '') return toast('Choose a saved product', 'err');
+    const qs = store.get('ott_quick', []);
+    const it = qs[Number(prodPick.value)];
+    if (!it) return toast('Choose a saved product', 'err');
+    const text = String(it.text || '').trim();
+    const data = it.data || undefined;
+    if (!text && !data) return toast('That product needs a caption or image before it can rotate', 'err');
+    const title = it.title || '';
+    const dup = cfg.offers.some((o) => (o.title || '') === title && (o.text || '') === text && (o.data || '') === (data || ''));
+    if (dup) return toast('Already on the product rotation list', 'err');
+    const wasEmpty = cfg.offers.length === 0;
+    cfg.offers.push({ title, text, data, filename: it.filename });
+    holdForSchedule(wasEmpty);
+    if (save()) { drawOffers(); updateTimer(); toast('Added to the product rotation list. Nothing was posted.'); }
+  };
 
   // timer + logs
   const timerEl = el('div', { className: 'fp-note' }, '—');
@@ -1552,11 +1806,13 @@ RENDER.autopost = (b) => {
     el('div', { className: 'fp-note' }, 'Target groups:'),
     el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: loadTargets }, 'Load groups'), el('button', { className: 'btn small', onclick: saveTargets }, 'Save targets')), tsum, gbox,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
-    el('div', { className: 'fp-note' }, 'Offers (posted in rotation):'),
-    lbl('Offer text / caption', offText), offAtt.node, el('button', { className: 'btn', onclick: addOffer }, '＋ Add offer'), offList,
+    el('div', { className: 'fp-note' }, 'Product rotation list — added offers wait for the schedule. Post now is the only button that sends immediately.'),
+    el('div', { className: 'row' }, lbl('Saved product', prodPick), el('button', { className: 'btn small', onclick: addPickedProduct }, 'Add product to list')),
+    lbl('Offer text / caption', offText), offAtt.node, el('button', { className: 'btn', onclick: addOffer }, '＋ Add offer to list'), offList,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
     el('div', { className: 'row' }, el('button', { className: 'btn primary', onclick: () => postOffer(true) }, 'Post now'), el('button', { className: 'btn ghost', onclick: () => { cfg.logs = []; save(); drawLogs(); } }, 'Clear logs')),
     lbl('Logs', logs));
+  fillProdPick();
   drawOffers(); drawLogs(); updateTimer();
 };
 
@@ -3680,6 +3936,356 @@ function typeTag(t) {
 }
 function chkRow(input, label) { return el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, input, label); }
 
+// ================= WhatsApp Status =================
+// Media lives in the userData file store. A few photos blow past localStorage, and
+// store.set gives up before it ever writes the file, so this key never goes through it.
+const STATUS_KEY = 'ott_status';
+const STATUS_MAX_ITEMS = 12;
+const STATUS_MAX_BYTES = 16 * 1024 * 1024;
+let statusDoc = { packs: {} };
+let statusReady = false;
+let statusBusy = false;
+let statusPrompt = null;
+const statusHold = new Set();
+let statusSaveChain = Promise.resolve();
+let statusSaveTimer = null;
+
+function blankStatusPack() {
+  return { auto: true, text: '', includeText: true, items: [], lastDay: '', lastResult: '' };
+}
+function statusPack(accId) {
+  if (!statusDoc.packs) statusDoc.packs = {};
+  if (!statusDoc.packs[accId]) statusDoc.packs[accId] = blankStatusPack();
+  return statusDoc.packs[accId];
+}
+async function loadStatusDoc() {
+  if (statusReady) return statusDoc;
+  try {
+    const v = await ott.persistLoad(STATUS_KEY);
+    if (v && typeof v === 'object' && v.packs) statusDoc = v;
+  } catch (_) {}
+  if (!statusDoc.packs) statusDoc = { packs: {} };
+  statusReady = true;
+  return statusDoc;
+}
+function saveStatusDoc() {
+  clearTimeout(statusSaveTimer);
+  const snap = statusDoc;
+  statusSaveChain = statusSaveChain.then(() => ott.persistSave(STATUS_KEY, snap)).catch(() => {});
+  return statusSaveChain;
+}
+function saveStatusSoon() {
+  clearTimeout(statusSaveTimer);
+  statusSaveTimer = setTimeout(() => saveStatusDoc(), 400);
+}
+
+// What gets posted, in order: the offer text, then each checked file.
+// An unselected file stays in the library and is not part of the daily pack.
+function statusItemsToPost(pack) {
+  const p = pack || {};
+  const text = String(p.text || '').trim();
+  const out = [];
+  if (p.includeText !== false && text) out.push({ kind: 'text', text: text });
+  const list = p.items || [];
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i];
+    if (!it || it.selected === false || !it.data) continue;
+    const video = it.kind === 'video' || String(it.data).indexOf('data:video') === 0;
+    out.push({ kind: video ? 'video' : 'image', data: it.data, caption: String(it.caption || text || '') });
+  }
+  return out;
+}
+
+// Once per account per local day, and only after WhatsApp is actually connected.
+function statusDayDecision(p) {
+  const auto = !!(p && p.auto);
+  const items = (p && p.items) || [];
+  const lastDay = (p && p.lastDay) || '';
+  const today = (p && p.today) || '';
+  if (!auto) return 'skip';
+  if (!items.length) return 'skip';
+  if (lastDay && lastDay === today) return 'skip';
+  if (!(p && p.connected)) return 'wait';
+  return 'prompt';
+}
+
+// Deny is the only cancel. Dismiss hides the card; the timer still posts.
+// A failed send does not mark the day, so the next connection asks again.
+function statusPromptOutcome(action) {
+  if (action === 'deny') return { post: false, markDay: true, result: 'denied', hide: true };
+  if (action === 'dismiss') return { post: false, markDay: false, result: 'pending', hide: true };
+  if (action === 'timeout') return { post: true, markDay: false, result: 'post', hide: true };
+  if (action === 'posted') return { post: false, markDay: true, result: 'posted', hide: true };
+  if (action === 'fail') return { post: false, markDay: false, result: 'failed', hide: true };
+  return { post: false, markDay: false, result: 'noop', hide: false };
+}
+
+function markStatusDay(accId, result) {
+  const pack = statusDoc.packs && statusDoc.packs[accId];
+  if (!pack) return;
+  const outcome = statusPromptOutcome(result === 'denied' ? 'deny' : 'posted');
+  if (!outcome.markDay) return;
+  pack.lastDay = localDay();
+  pack.lastResult = outcome.result;
+  saveStatusDoc();
+}
+
+function readStatusFile(f) {
+  return new Promise((resolve) => {
+    if (!f) return resolve({ err: 'read' });
+    if (f.size > STATUS_MAX_BYTES) return resolve({ err: 'too-big', name: f.name });
+    const reader = new FileReader();
+    reader.onload = () => resolve({
+      id: 'st' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      name: f.name,
+      data: reader.result,
+      kind: String(f.type || '').indexOf('video') === 0 ? 'video' : 'image',
+      selected: true,
+      caption: '',
+    });
+    reader.onerror = () => resolve({ err: 'read', name: f.name });
+    reader.readAsDataURL(f);
+  });
+}
+
+async function postStatusItem(accId, item) {
+  let expr;
+  if (item.kind === 'text') {
+    const body = JSON.stringify(String(item.text || ''));
+    expr = `(async()=>{try{if(!WPP.status||!WPP.status.sendTextStatus)return{ok:false,err:'Status is not available on this WhatsApp yet'};await WPP.status.sendTextStatus(${body},{backgroundColor:'#0b3d2e',font:2});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  } else {
+    const data = JSON.stringify(item.data);
+    const cap = JSON.stringify(item.caption || '');
+    const api = item.kind === 'video' ? 'sendVideoStatus' : 'sendImageStatus';
+    expr = `(async()=>{try{if(!WPP.status||!WPP.status.${api})return{ok:false,err:'Status is not available on this WhatsApp yet'};await WPP.status.${api}(${data},{caption:${cap}});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  }
+  try { return await waExecOn(accId, expr); } catch (e) { return { ok: false, err: String(e.message || e) }; }
+}
+
+async function postStatusPack(accId, pack) {
+  const items = statusItemsToPost(pack);
+  let sent = 0, fail = 0, err = '';
+  for (let i = 0; i < items.length; i++) {
+    const r = await postStatusItem(accId, items[i]);
+    if (r && r.ok) sent++;
+    else { fail++; err = (r && r.err) || 'failed'; }
+    if (i < items.length - 1) await sleep(2000);
+  }
+  return { ok: sent > 0 && fail === 0, sent, fail, err };
+}
+
+function cancelStatusPrompt(accId) {
+  if (!statusPrompt) return;
+  if (accId && statusPrompt.accId !== accId) return;
+  statusPrompt.cancelled = true;
+  clearInterval(statusPrompt.iv);
+  try { statusPrompt.scrim.remove(); } catch (_) {}
+  statusPrompt = null;
+}
+
+async function runDailyPost(accId) {
+  if (statusBusy) return;
+  statusBusy = true;
+  const pack = statusDoc.packs && statusDoc.packs[accId];
+  if (!pack) { statusBusy = false; return; }
+  const r = await postStatusPack(accId, pack);
+  if (r.ok) {
+    markStatusDay(accId, 'posted');
+    toast('Daily status posted (' + r.sent + ')');
+  } else {
+    // Still connected, so without this the next poll would raise the popup again immediately.
+    // The hold lifts once that account drops offline; the next time it connects, it asks again.
+    statusHold.add(accId);
+    toast('Status was not posted' + (r.err ? ': ' + r.err : ''), 'err');
+  }
+  statusBusy = false;
+  if (openFeatureId === 'status') refreshPanel('status');
+  maybeStatusPrompt();
+}
+
+function showStatusPrompt(acc) {
+  if (statusPrompt || statusBusy) return;
+  const pack = statusDoc.packs && statusDoc.packs[acc.id];
+  const n = statusItemsToPost(pack).length;
+  let left = 30;
+  const count = el('div', { className: 'status-count' }, '30');
+  const card = el('div', { className: 'alarm-card' },
+    el('div', { className: 'alarm-ring' }, el('span', {}, '\u25CF')),
+    el('h2', { className: 'alarm-title' }, 'Uploaded daily task status for today'),
+    el('div', { className: 'alarm-date' }, (acc.name || 'WhatsApp') + ' \u00b7 ' + n + (n === 1 ? ' update' : ' updates')),
+    count,
+    el('div', { className: 'muted', style: { fontSize: '13px', marginTop: '6px' } }, 'Posts when the timer ends. Deny to skip today.'),
+    el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '14px' } },
+      el('button', { className: 'btn status-deny', onclick: () => deny() }, 'Deny'),
+      el('button', { className: 'btn ghost', onclick: () => dismiss() }, 'Dismiss')));
+  const scrim = el('div', { className: 'alarm-scrim' }, card);
+  const state = { accId: acc.id, cancelled: false, dismissed: false, scrim, iv: null };
+  function deny() {
+    if (state.cancelled) return;
+    state.cancelled = true;
+    clearInterval(state.iv);
+    try { scrim.remove(); } catch (_) {}
+    if (statusPrompt === state) statusPrompt = null;
+    markStatusDay(acc.id, 'denied');
+    toast('Today\u2019s status was not posted');
+    maybeStatusPrompt();
+  }
+  function dismiss() {
+    state.dismissed = true;
+    try { scrim.remove(); } catch (_) {}
+  }
+  state.iv = setInterval(() => {
+    if (state.cancelled) return;
+    left -= 1;
+    if (!state.dismissed) count.textContent = String(Math.max(0, left));
+    if (left > 0) return;
+    clearInterval(state.iv);
+    if (state.cancelled) return;
+    try { scrim.remove(); } catch (_) {}
+    if (statusPrompt === state) statusPrompt = null;
+    if (statusPromptOutcome('timeout').post) runDailyPost(acc.id);
+  }, 1000);
+  statusPrompt = state;
+  document.body.append(scrim);
+}
+
+function maybeStatusPrompt() {
+  if (!statusReady || statusBusy || statusPrompt) return;
+  const today = localDay();
+  for (let i = 0; i < accounts.length; i++) {
+    const acc = accounts[i];
+    if (statusHold.has(acc.id)) {
+      if (statusMap[acc.id] !== 'connected') statusHold.delete(acc.id);
+      continue;
+    }
+    if (statusMap[acc.id] !== 'connected') continue;
+    const pack = statusDoc.packs && statusDoc.packs[acc.id];
+    if (!pack) continue;
+    const decision = statusDayDecision({
+      auto: pack.auto,
+      items: statusItemsToPost(pack),
+      lastDay: pack.lastDay || '',
+      today: today,
+      connected: true,
+    });
+    if (decision === 'prompt') { showStatusPrompt(acc); return; }
+  }
+}
+
+function statusThumb(it) {
+  if (it.kind === 'video') return el('span', { className: 'status-file' }, 'Video');
+  const img = el('img', { className: 'status-thumb', alt: '' });
+  img.src = it.data;
+  return img;
+}
+
+RENDER.status = (b) => {
+  b.append(el('div', { className: 'muted' }, 'Loading\u2026'));
+  loadStatusDoc().then(() => drawStatusPanel(b));
+};
+
+function drawStatusPanel(b) {
+  b.innerHTML = '';
+  if (!activeId) {
+    b.append(el('div', { className: 'fp-note' }, 'Add a WhatsApp account first. Status posts from the account that is open.'));
+    return;
+  }
+  const acc = accounts.find((a) => a.id === activeId);
+  const pack = statusPack(activeId);
+  pack.items = pack.items || [];
+
+  const auto = chk(pack.auto !== false);
+  const text = el('textarea', { placeholder: 'Offer text \u2014 posted as its own status, and used as the caption on media', value: pack.text || '' });
+  const includeText = chk(pack.includeText !== false);
+  const list = el('div', { className: 'rules' });
+  const last = el('div', { className: 'fp-note' });
+  const countLbl = el('span', { className: 'muted', style: { fontSize: '12.5px', alignSelf: 'center' } }, '');
+  const postBtn = el('button', { className: 'btn primary' }, 'Post all to Status');
+
+  const paintLast = () => {
+    if (!pack.lastDay) last.textContent = 'Not posted yet. With auto-post on, the next time this account connects you get 30 seconds to deny it.';
+    else if (pack.lastResult === 'denied') last.textContent = 'Skipped on ' + pack.lastDay + '. It will ask again tomorrow.';
+    else last.textContent = 'Posted on ' + pack.lastDay + '.';
+  };
+  const drawItems = () => {
+    list.innerHTML = '';
+    countLbl.textContent = pack.items.length + ' / ' + STATUS_MAX_ITEMS;
+    if (!pack.items.length) {
+      list.append(el('div', { className: 'muted' }, 'No media yet. Upload images or videos, then tick the ones to post.'));
+      return;
+    }
+    pack.items.forEach((it, i) => {
+      const on = chk(it.selected !== false);
+      on.onchange = () => { it.selected = on.checked; saveStatusDoc(); };
+      const cap = el('input', { placeholder: 'Caption (blank uses the offer text)', value: it.caption || '' });
+      cap.oninput = () => { it.caption = cap.value; saveStatusSoon(); };
+      list.append(el('div', { className: 'qr-item', style: { alignItems: 'flex-start' } },
+        on,
+        statusThumb(it),
+        el('div', { className: 'txt' },
+          el('b', {}, it.name || (it.kind === 'video' ? 'Video' : 'Image')),
+          cap),
+        el('button', { className: 'btn small ghost', onclick: () => { pack.items.splice(i, 1); drawItems(); saveStatusDoc(); } }, '\u2715')));
+    });
+  };
+
+  auto.onchange = () => { pack.auto = auto.checked; saveStatusDoc(); };
+  text.oninput = () => { pack.text = text.value; saveStatusSoon(); };
+  includeText.onchange = () => { pack.includeText = includeText.checked; saveStatusDoc(); };
+
+  const inp = el('input', { type: 'file', accept: 'image/*,video/*', multiple: true, style: { display: 'none' } });
+  inp.onchange = async (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    for (const f of files) {
+      if (pack.items.length >= STATUS_MAX_ITEMS) { toast('Up to ' + STATUS_MAX_ITEMS + ' files', 'err'); break; }
+      const row = await readStatusFile(f);
+      if (row.err === 'too-big') { toast((row.name || 'File') + ' is over 16 MB', 'err'); continue; }
+      if (row.err) { toast('Could not read ' + (row.name || 'that file'), 'err'); continue; }
+      pack.items.push(row);
+    }
+    drawItems();
+    saveStatusDoc();
+  };
+
+  postBtn.onclick = async () => {
+    const items = statusItemsToPost(pack);
+    if (!items.length) return toast('Add an offer or select media', 'err');
+    if (!(await isConnectedOn(activeId))) return toast('WhatsApp not linked', 'err');
+    cancelStatusPrompt(activeId);
+    statusBusy = true;
+    postBtn.disabled = true;
+    postBtn.textContent = 'Posting\u2026';
+    const r = await postStatusPack(activeId, pack);
+    statusBusy = false;
+    postBtn.disabled = false;
+    postBtn.textContent = 'Post all to Status';
+    if (r.ok) {
+      markStatusDay(activeId, 'posted');
+      paintLast();
+      toast('Posted ' + r.sent + ' status update' + (r.sent === 1 ? '' : 's'));
+    } else {
+      statusHold.add(activeId);
+      toast('Status was not posted' + (r.err ? ': ' + r.err : ''), 'err');
+    }
+  };
+
+  paintLast();
+  drawItems();
+  b.append(
+    el('div', { className: 'fp-note' }, 'Posts to the WhatsApp status of ' + ((acc && acc.name) || 'this account') + '. Tick the media to include. Post all sends the offer text and every ticked file, one after another.'),
+    chkRow(auto, 'Auto-post daily when this account connects'),
+    lbl('Offer text', text),
+    chkRow(includeText, 'Also post the offer as a text status'),
+    el('div', { className: 'row' },
+      el('button', { className: 'btn', onclick: () => inp.click() }, 'Upload media'),
+      countLbl),
+    inp,
+    list,
+    postBtn,
+    last);
+}
+
 // ================= Backup & Restore =================
 // One file format shared with the WA-CRM Chrome extension, so a backup taken on either
 // side restores into the other. Desktop keys are ott_*, the extension's are wa_*; the
@@ -3700,13 +4306,32 @@ const BACKUP_MAP = [
   ['ott_books', 'wa_books', 'Sales, purchases & expenses'],
   ['ott_deals', 'wa_deals', 'Deals & renewals'],
   ['ott_deal_cfg', 'wa_deal_cfg', 'Deal follow-up settings'],
+  ['ott_status', null, 'WhatsApp status'],
 ];
 const bkCount = (v) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : (v ? 1 : 0)));
 
+function backupValue(dk) {
+  if (dk === 'ott_status') return statusReady ? statusDoc : null;
+  return store.get(dk, null);
+}
+function mergeStatusDoc(cur, incoming) {
+  const out = { packs: Object.assign({}, (cur && cur.packs) || {}) };
+  const packs = (incoming && incoming.packs) || {};
+  Object.keys(packs).forEach((id) => {
+    const a = out.packs[id];
+    const b = packs[id];
+    if (!a) { out.packs[id] = b; return; }
+    const seen = new Set((a.items || []).map((x) => x.id || x.name));
+    out.packs[id] = Object.assign({}, a, b, {
+      items: (a.items || []).concat((b.items || []).filter((x) => !seen.has(x.id || x.name))),
+    });
+  });
+  return out;
+}
 function collectBackup() {
   const data = {}; const compat = {};
   for (const [dk, wk] of BACKUP_MAP) {
-    const v = store.get(dk, null);
+    const v = backupValue(dk);
     if (v == null) continue;
     data[dk] = v;
     if (wk) compat[wk] = v;
@@ -3744,7 +4369,7 @@ function bkMerge(key, incoming) {
 RENDER.backup = (b) => {
   const stats = el('div', { className: 'log', style: { maxHeight: '220px' } });
   BACKUP_MAP.forEach(([dk, , label]) => {
-    line(stats, `${label}: ${bkCount(store.get(dk, null))}`);
+    line(stats, `${label}: ${bkCount(backupValue(dk))}`);
   });
 
   const msg = el('div', { className: 'muted', style: { fontSize: '12.5px', minHeight: '20px', marginTop: '10px' } });
@@ -3782,6 +4407,13 @@ RENDER.backup = (b) => {
 
     for (const [dk] of BACKUP_MAP) {
       if (!(dk in incoming)) continue;
+      if (dk === 'ott_status') {
+        statusDoc = mode === 'replace' ? incoming.ott_status : mergeStatusDoc(statusDoc, incoming.ott_status);
+        if (!statusDoc.packs) statusDoc = { packs: {} };
+        statusReady = true;
+        await saveStatusDoc();
+        continue;
+      }
       store.set(dk, mode === 'replace' ? incoming[dk] : bkMerge(dk, incoming[dk]));
     }
     msg.textContent = 'Restored.';

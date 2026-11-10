@@ -239,6 +239,12 @@ ipcMain.handle('backup:open', async () => {
   } catch (e) { return { ok: false, err: String(e.message || e) }; }
 });
 
+function dataDir() {
+  const dir = path.join(app.getPath('userData'), 'data');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 ipcMain.handle('persist:load', (_e, key) => {
   try { const p = path.join(dataDir(), key.replace(/[^\w-]/g, '') + '.json'); if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}
   return null;
@@ -324,24 +330,36 @@ function initNoUpdate() {
 }
 
 function initAutoUpdate() {
-  // Only in a packaged build; checks the public releases repo for a newer version.
-  if (!app.isPackaged) return;
   // A brand with no updateRepo gets no updater at all. Without this the packaged
   // app-update.yml — written from the publish config at build time — would still point
   // at our repo, and a reseller's customers would be auto-updated into WA-CRM-branded
   // installers. Silently shipping someone else's brand to their users is the one
   // failure mode a white-label build cannot have.
   if (!brand.updateRepo) return initNoUpdate();
-  if (process.platform === 'darwin') return initManualUpdate();
+  // Unpackaged `npm start` has no app-update.yml, so electron-updater cannot answer the
+  // version popup. The public releases tag can. macOS stays on that path too: an
+  // unsigned build is not allowed to replace itself.
+  if (!app.isPackaged || process.platform === 'darwin') return initManualUpdate();
   try {
     const { autoUpdater } = require('electron-updater');
     autoUpdater.autoDownload = false;              // ask the user first (popup)
     autoUpdater.autoInstallOnAppQuit = true;
+    // The blockmap is produced before the installer is signed, so a differential
+    // update builds a file that can never pass the checksum. Always take the full installer.
+    autoUpdater.disableDifferentialDownload = true;
     autoUpdater.on('update-available', (info) => win?.webContents.send('update:available', { version: info.version }));
     autoUpdater.on('update-not-available', () => win?.webContents.send('update:none'));
     autoUpdater.on('download-progress', (p) => win?.webContents.send('update:progress', { percent: Math.round(p.percent || 0) }));
     autoUpdater.on('update-downloaded', () => win?.webContents.send('update:downloaded'));
-    autoUpdater.on('error', (err) => win?.webContents.send('update:error', { message: String(err && err.message || err) }));
+    autoUpdater.on('error', (err) => {
+      const message = String(err && err.message || err);
+      win?.webContents.send('update:error', { message });
+      // A failed check should still announce a newer release. A failed download must not
+      // start a second check — the popup is already open and is waiting on this error.
+      if (!/sha512|checksum|download|differential|cannot find/i.test(message)) {
+        checkManualUpdate().catch(() => {});
+      }
+    });
     ipcMain.handle('update:download', () => { try { autoUpdater.downloadUpdate(); } catch (e) {} });
     ipcMain.handle('update:install', () => { try { autoUpdater.quitAndInstall(); } catch (e) {} });
     ipcMain.handle('update:check', () => { try { return autoUpdater.checkForUpdates().catch(() => {}); } catch (e) {} });

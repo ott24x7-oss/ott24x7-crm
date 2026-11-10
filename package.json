@@ -1,13 +1,13 @@
 {
   "name": "ott24x7-crm",
-  "version": "0.42.0",
+  "version": "0.43.3",
   "description": "WA-CRM \u2014 WhatsApp CRM/sender on the open-source WPPConnect engine",
   "author": "Watshop Automation",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "smoke": "cross-env OTT_SMOKE=1 electron .",
-    "dist": "electron-builder --config build/builder-config.js"
+    "dist": "electron-builder --config build/builder-config.js && node build/refresh-feed.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",

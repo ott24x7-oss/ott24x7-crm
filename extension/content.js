@@ -118,7 +118,7 @@
       'What every icon on the left does, and the steps to use it.',
       'M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20zM9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01'],
     ['catalog', 'Catalog', 'Product Catalog',
-      'Your saved offers — send an image and caption to the open chat in one click.',
+      'Your saved offers. Send posts to the open chat now. Add to rotation queues them for the schedule.',
       'M20 7H4V5h16zM4 9h16l-1.2 10.2A2 2 0 0 1 16.8 21H7.2a2 2 0 0 1-2-1.8z'],
     ['quick', 'Quick', 'Quick Replies',
       'One-tap phrases that appear just above the message box.',
@@ -590,6 +590,7 @@
             el('div', { class: 'wacrm-dim' }, (it.text || '').slice(0, 90))),
           el('div', { class: 'wacrm-col' },
             el('button', { class: 'wacrm-btn small primary', onclick: () => sendItem(it) }, 'Send'),
+            el('button', { class: 'wacrm-btn small', onclick: () => addCatalogToRotation(it) }, 'Add to rotation'),
             el('button', { class: 'wacrm-btn small', onclick: async () => {
               items.splice(i, 1); await store.set('wa_catalog', items); draw();
             } }, 'Delete'))));
@@ -616,7 +617,7 @@
 
     search.addEventListener('input', draw);
     bodyEl.append(el('div', { class: 'wacrm-pad' },
-      el('div', { class: 'wacrm-note' }, 'Save your offers once, then send any of them to the open chat in one click.'),
+      el('div', { class: 'wacrm-note' }, 'Save your offers once. Send posts one to the open chat now. Add to rotation puts it on the product rotation list, and it goes out only when the schedule is due.'),
       search, list,
       el('details', { class: 'wacrm-acc' },
         el('summary', {}, 'Add a product'),
@@ -1321,7 +1322,8 @@
     ['catalog', 'Product Catalog', [
       'Open the chat you want to send to.',
       'Press "+ Add a product", pick an image and write the caption you normally send.',
-      'From then on, click Send on that product and it goes to the open chat instantly.',
+      'Click Send and it goes to the open chat now.',
+      'Click Add to rotation to queue it on the product rotation list. That does not post it.',
     ], 'Replaces copy-pasting the same offer 50 times a day.'],
     ['leads', 'Leads', [
       'Open a customer chat, then press "+ Save current chat".',
@@ -2551,7 +2553,7 @@
   const BACKUP_KEYS = [
     'wa_leads', 'wa_catalog', 'wa_notes', 'wa_business', 'wa_links',
     'wa_funnels', 'wa_flows', 'wa_scheduled', 'wa_reminders', 'wa_enabled', 'wa_webhook',
-    'wa_books', 'wa_quick', 'wa_deals', 'wa_deal_cfg',
+    'wa_books', 'wa_quick', 'wa_deals', 'wa_deal_cfg', 'wa_offers',
   ];
   const BACKUP_LABEL = {
     wa_leads: 'Leads', wa_catalog: 'Catalog products', wa_notes: 'Chat notes',
@@ -2561,6 +2563,7 @@
     wa_enabled: 'Menu settings', wa_webhook: 'Webhook settings',
     wa_books: 'Sales, purchases & expenses', wa_quick: 'Quick replies',
     wa_deals: 'Deals & renewals', wa_deal_cfg: 'Deal follow-up settings',
+    wa_offers: 'Product rotation list',
   };
   const countOf = (v) => (Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : (v ? 1 : 0)));
 
@@ -2687,10 +2690,10 @@
 
   // ---------- Catalog picker for invoices ----------
   // Bill straight from saved products instead of retyping names and prices.
-  async function pickFromCatalog(onPick) {
+  async function pickFromCatalog(onPick, opts = {}) {
     const items = await store.get('wa_catalog', []);
     if (!items.length) {
-      return modal('No products yet', 'Add products in the Catalog tab, with a price, and they will show up here.',
+      return modal('No products yet', opts.empty || 'Add products in the Catalog tab, with a price, and they will show up here.',
         el('div', { class: 'wacrm-empty' }, el('b', {}, 'Catalog is empty')),
         [el('button', { class: 'wacrm-btn primary', onclick: () => { closeModal(); openFeature('catalog'); } }, 'Open Catalog')]);
     }
@@ -2702,13 +2705,13 @@
         false,
         (on) => { on ? chosen.set(i, it) : chosen.delete(i); },
       )));
-    modal('Add from Catalog', 'Tick the products to put on this bill.', list,
+    modal(opts.title || 'Add from Catalog', opts.hint || 'Tick the products to put on this bill.', list,
       [el('button', { class: 'wacrm-btn', onclick: closeModal }, 'Cancel'),
        el('button', { class: 'wacrm-btn primary', onclick: () => {
          if (!chosen.size) return toast('Pick at least one product', true);
          onPick([...chosen.values()]);
          closeModal();
-       } }, 'Add to invoice')]);
+       } }, opts.confirm || 'Add to invoice')]);
   }
 
 
@@ -2843,6 +2846,48 @@
 
 
 
+  // Puts catalog products on the rotation list only. It never calls postOffer.
+  // A list that has never posted gets its clock started now, so the first offer waits
+  // for the interval instead of going out on the next tick.
+  async function addProductsToRotation(products) {
+    const cfg = await store.get('wa_offers', {
+      on: false, offers: [], targets: [], intervalMin: 60,
+      startHour: 9, endHour: 22, nextIndex: 0, lastPostTs: 0, logs: [],
+    });
+    cfg.offers = (cfg.offers || []).filter((o) => o && typeof o === 'object');
+    const wasEmpty = cfg.offers.length === 0;
+    let added = 0;
+    let skipped = 0;
+    for (const p of products) {
+      const title = p.title || 'Offer';
+      const text = p.text || '';
+      const data = p.img || p.data || '';
+      if (!String(text).trim() && !data) { skipped++; continue; }
+      const dup = cfg.offers.some((o) => (o.title || '') === title && (o.text || '') === text && (o.data || '') === data);
+      if (dup) { skipped++; continue; }
+      cfg.offers.push({
+        id: Date.now() + added,
+        title,
+        text,
+        data,
+        filename: (p.filename || title || 'offer').slice(0, 40),
+      });
+      added++;
+    }
+    if (!added) {
+      toast(skipped ? 'Already on the product rotation list, or it has no caption or image' : 'Nothing to add');
+      return 0;
+    }
+    if (!cfg.lastPostTs || wasEmpty) cfg.lastPostTs = Date.now();
+    await store.set('wa_offers', cfg);
+    return added;
+  }
+
+  async function addCatalogToRotation(it) {
+    const n = await addProductsToRotation([it]);
+    if (n) toast('Added to the product rotation list. It will post on the schedule, not now.');
+  }
+
   // ---------- Auto Offer Post ----------
   // Matched to the desktop app's screen: offers are written here with their own caption
   // and attached media (not picked from the catalog), posted in rotation to the groups you
@@ -2939,15 +2984,24 @@
         return toast('Write a caption or attach media', true);
       }
       const store1 = async (data) => {
+        const title = oTitle.value.trim() || (oText.value.trim().split('\n')[0] || 'Offer').slice(0, 40);
+        const text = oText.value;
+        const media = data || '';
+        const dup = cfg.offers.some((o) => (o.title || '') === title && (o.text || '') === text && (o.data || '') === media);
+        if (dup) return toast('Already on the product rotation list', true);
+        const wasEmpty = cfg.offers.length === 0;
         cfg.offers.push({
           id: Date.now(),
-          title: oTitle.value.trim() || (oText.value.trim().split('\n')[0] || 'Offer').slice(0, 40),
-          text: oText.value, data: data || '',
+          title,
+          text,
+          data: media,
           filename: (oFile.files && oFile.files[0] && oFile.files[0].name) || 'offer',
         });
+        if (!cfg.lastPostTs || wasEmpty) cfg.lastPostTs = Date.now();
         await save();
         oTitle.value = ''; oText.value = ''; oFile.value = '';
-        drawOffers(); paintStatus(); toast('Offer added');
+        drawOffers(); paintStatus();
+        toast('Added to the product rotation list. It will post on the schedule, not now.');
       };
       const f = oFile.files && oFile.files[0];
       if (!f) return store1('');
@@ -2992,16 +3046,25 @@
         groupCount),
       groupBox,
 
-      el('label', {}, 'Offers (posted in rotation)'),
+      el('label', {}, 'Product rotation list'),
+      el('div', { class: 'wacrm-note' }, 'Added offers wait for the schedule. Post one now is the only button that sends immediately.'),
       offerList,
       oTitle, oText, oFile,
       el('div', { class: 'wacrm-row' },
-        el('button', { class: 'wacrm-btn', onclick: addOffer }, '+ Add offer'),
-        el('button', { class: 'wacrm-btn small', onclick: () => pickFromCatalog((picked) => {
-          for (const p of picked) {
-            cfg.offers.push({ id: Date.now() + Math.floor(p.price || 0), title: p.title || 'Offer', text: p.text || '', data: p.img || '', filename: 'offer' });
-          }
-          save(); drawOffers(); paintStatus(); toast(`${picked.length} added from catalog`);
+        el('button', { class: 'wacrm-btn', onclick: addOffer }, '+ Add offer to list'),
+        el('button', { class: 'wacrm-btn small', onclick: () => pickFromCatalog(async (picked) => {
+          const n = await addProductsToRotation(picked);
+          const fresh = await store.get('wa_offers', cfg);
+          cfg.offers = fresh.offers || [];
+          cfg.lastPostTs = fresh.lastPostTs || cfg.lastPostTs || 0;
+          drawOffers(); paintStatus();
+          if (!n) return;
+          toast(`${n} added to the product rotation list. Nothing was posted.`);
+        }, {
+          title: 'Add to product rotation',
+          hint: 'These join the rotation list only. Nothing is posted until the schedule is due.',
+          confirm: 'Add to list',
+          empty: 'Save a product in Catalog first. It can then be queued here without posting.',
         }) }, 'Add from Catalog')),
 
       el('div', { class: 'wacrm-row' },
