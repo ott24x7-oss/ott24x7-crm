@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>All Features — WA-CRM | Bulk Messaging, Automation, Team Inbox & More</title>
+<meta name="description" content="Every WA-CRM feature: bulk WhatsApp messaging, group extractor, Google Sheets sync, chatbot, team inbox, number warmer, API access and more. One flat price.">
+<link rel="icon" href="assets/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --green:#25D366;--green-dark:#128C7E;--green-deep:#075E54;
+  --ink:#0b141a;--ink-soft:#3b4a54;--muted:#667781;
+  --bg:#fff;--bg-soft:#f0f7f3;--line:#e3ece7;
+  --radius:16px;--shadow:0 10px 30px rgba(7,94,84,.10);--shadow-lg:0 20px 50px rgba(7,94,84,.16);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:'Inter',system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6}
+a{text-decoration:none;color:inherit}
+.container{width:min(1140px,92%);margin:0 auto}
+
+/* Navbar (same as home) */
+.nav{position:sticky;top:0;z-index:100;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;height:68px}
+.logo{display:flex;align-items:center;gap:.55rem;font-weight:800;font-size:1.25rem}
+.logo-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--green),var(--green-dark));display:grid;place-items:center;color:#fff;font-weight:900}
+.logo span em{font-style:normal;color:var(--green-dark)}
+.nav-right{display:flex;align-items:center;gap:1.2rem}
+.back-link{font-size:.9rem;font-weight:600;color:var(--ink-soft)}
+.back-link:hover{color:var(--green-dark)}
+.nav-cta{display:inline-flex;align-items:center;background:var(--green);color:#fff;font-weight:700;font-size:.9rem;padding:.62rem 1.15rem;border-radius:999px;box-shadow:0 6px 18px rgba(37,211,102,.35)}
+.nav-cta:hover{background:#1eb856}
+
+/* Page head */
+.page-head{text-align:center;padding:4.5rem 0 3rem;background:radial-gradient(900px 400px at 50% -10%,rgba(37,211,102,.14),transparent 60%)}
+.eyebrow{font-size:.78rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--green-dark);margin-bottom:.7rem}
+.page-head h1{font-size:clamp(1.9rem,4vw,2.8rem);font-weight:900;letter-spacing:-.02em;line-height:1.12}
+.page-head p{color:var(--muted);max-width:36rem;margin:1rem auto 0}
+
+/* Feature blocks — alternating rows, NOT cards */
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:center;padding:3.4rem 0;border-top:1px solid var(--line);scroll-margin-top:90px}
+.feat:first-of-type{border-top:0}
+.feat.flip .feat-text{order:2}
+.feat-text h2{font-size:1.55rem;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:.6rem}
+.feat-text .ic{width:44px;height:44px;flex:none;border-radius:12px;background:linear-gradient(135deg,rgba(37,211,102,.16),rgba(18,140,126,.16));display:grid;place-items:center;font-size:1.25rem}
+.feat-text p{color:var(--ink-soft);margin:.9rem 0 1.1rem;font-size:.97rem}
+.feat-text ul{list-style:none;display:flex;flex-direction:column;gap:.5rem}
+.feat-text li{display:flex;gap:.55rem;font-size:.9rem;color:var(--ink-soft)}
+.feat-text li::before{content:"✓";color:var(--green-dark);font-weight:900}
+.feat-visual{background:var(--bg-soft);border:1px solid var(--line);border-radius:20px;min-height:230px;display:grid;place-items:center;font-size:4rem;box-shadow:var(--shadow)}
+.mini-cta{display:inline-flex;align-items:center;gap:.4rem;margin-top:1.3rem;font-weight:700;font-size:.9rem;color:var(--green-dark)}
+.mini-cta:hover{text-decoration:underline}
+
+/* Bottom CTA */
+.cta-band{background:linear-gradient(120deg,var(--green-deep),var(--green-dark) 60%,var(--green));color:#fff;padding:4rem 0;text-align:center}
+.cta-band h2{font-size:clamp(1.6rem,3vw,2.2rem);font-weight:900}
+.cta-band p{margin:.9rem auto 1.8rem;color:#dff3e8;max-width:32rem}
+.btn-white{display:inline-flex;align-items:center;gap:.5rem;background:#fff;color:var(--green-deep);font-weight:800;font-size:1rem;padding:.95rem 2rem;border-radius:999px;box-shadow:0 12px 30px rgba(0,0,0,.25)}
+.btn-white:hover{transform:translateY(-2px)}
+
+footer{background:#0b141a;color:#93a8a0;padding:2.4rem 0;text-align:center;font-size:.82rem}
+footer a{color:var(--green)}
+
+@media(max-width:860px){
+  .feat{grid-template-columns:1fr;gap:1.6rem;padding:2.6rem 0}
+  .feat.flip .feat-text{order:0}
+}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="container nav-inner">
+    <a href="index.html" class="logo"><span class="logo-mark">W</span><span>WA<em>-CRM</em></span></a>
+    <div class="nav-right">
+      <a class="back-link" href="index.html">← Back to home</a>
+      <a class="nav-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Get Access →</a>
+    </div>
+  </div>
+</header>
+
+<section class="page-head">
+  <div class="container">
+    <div class="eyebrow">Every feature · One flat price</div>
+    <h1>Everything you need to sell on WhatsApp.<br>Nothing you don't.</h1>
+    <p>No tiers. No per-message fees. No upsells. Every tool below is included in every WA-CRM license — with free Done-For-You setup.</p>
+  </div>
+</section>
+
+<main class="container">
+
+  <section class="feat" id="bulk">
+    <div class="feat-text">
+      <h2><span class="ic">📤</span> Bulk Messaging</h2>
+      <p>Send personalized campaigns to thousands of contacts at once — with delivery throttling that keeps your number safe.</p>
+      <ul><li>Personalize with {{name}}, {{city}} & custom fields</li><li>Human-like random delays between messages</li><li>Attach images, videos, PDFs & documents</li><li>Pause, resume & schedule campaigns</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Start your first campaign →</a>
+    </div>
+    <div class="feat-visual">📤</div>
+  </section>
+
+  <section class="feat flip" id="extractor">
+    <div class="feat-text">
+      <h2><span class="ic">👥</span> Group Member Extractor</h2>
+      <p>Turn any WhatsApp group into a lead list. Extract every member's number to CSV in one click.</p>
+      <ul><li>Export members from any group you belong to</li><li>One-click CSV export, ready for campaigns</li><li>Filter admins & dedupe against existing contacts</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Build your lead list →</a>
+    </div>
+    <div class="feat-visual">👥</div>
+  </section>
+
+  <section class="feat" id="sheets">
+    <div class="feat-text">
+      <h2><span class="ic">📊</span> Google Sheets Sync</h2>
+      <p>Your spreadsheet is your contact database. Connect a sheet and every row becomes a personalized message.</p>
+      <ul><li>Import contacts straight from Google Sheets</li><li>Map any column to a message variable</li><li>Auto-sync new rows into campaigns</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Connect your sheet →</a>
+    </div>
+    <div class="feat-visual">📊</div>
+  </section>
+
+  <section class="feat flip" id="chatbot">
+    <div class="feat-text">
+      <h2><span class="ic">🤖</span> Auto-Reply Chatbot</h2>
+      <p>Reply to every customer in under a second — even at 2 AM. Keyword-based flows that answer, qualify and sell.</p>
+      <ul><li>Keyword & exact-match triggers</li><li>Multi-step flows with delays</li><li>Business-hours & away messages</li><li>We build your first 3 flows for you (DFY)</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Automate your replies →</a>
+    </div>
+    <div class="feat-visual">🤖</div>
+  </section>
+
+  <section class="feat" id="buttons">
+    <div class="feat-text">
+      <h2><span class="ic">🔘</span> Buttons & Interactive Lists</h2>
+      <p>Send messages customers can tap, not just read. CTAs, quick replies and menus — right inside WhatsApp.</p>
+      <ul><li>Call-to-action & quick-reply buttons</li><li>Product menus & option lists</li><li>Higher response rates than plain text</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Send interactive messages →</a>
+    </div>
+    <div class="feat-visual">🔘</div>
+  </section>
+
+  <section class="feat flip" id="inbox">
+    <div class="feat-text">
+      <h2><span class="ic">💬</span> Team Inbox & CRM Labels</h2>
+      <p>Every chat, organized. Label leads, track pipelines and follow up on time — from one clean inbox.</p>
+      <ul><li>Custom labels: Hot Lead, Follow-Up, Closed…</li><li>Filter chats by label, unread or status</li><li>Notes & reminders on every contact</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Organize your inbox →</a>
+    </div>
+    <div class="feat-visual">💬</div>
+  </section>
+
+  <section class="feat" id="warmer">
+    <div class="feat-text">
+      <h2><span class="ic">🔥</span> Number Warmer & Anti-Ban</h2>
+      <p>New number? Warm it up automatically before campaigns so WhatsApp sees a trusted, human account.</p>
+      <ul><li>Automated warm-up conversations</li><li>Daily sending limits that scale up gradually</li><li>Best-practices guide included</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Protect your number →</a>
+    </div>
+    <div class="feat-visual">🔥</div>
+  </section>
+
+  <section class="feat flip" id="api">
+    <div class="feat-text">
+      <h2><span class="ic">🔌</span> API & Webhooks</h2>
+      <p>Developers welcome. Trigger messages from your website, store or CRM with a simple HTTP API.</p>
+      <ul><li>REST API for sending messages</li><li>Incoming message webhooks</li><li>Works with any stack that can POST</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Get API access →</a>
+    </div>
+    <div class="feat-visual">🔌</div>
+  </section>
+
+  <section class="feat" id="reports">
+    <div class="feat-text">
+      <h2><span class="ic">📈</span> Reports & Data Export</h2>
+      <p>Know exactly what landed. Full delivery stats and one-click exports of every chat and campaign.</p>
+      <ul><li>Sent / delivered / failed per campaign</li><li>Export chats & contacts to CSV</li><li>Full local backup — your data stays yours</li></ul>
+      <a class="mini-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">See your numbers →</a>
+    </div>
+    <div class="feat-visual">📈</div>
+  </section>
+
+</main>
+
+<section class="cta-band">
+  <div class="container">
+    <h2>All of this. One payment. ₹1,999.</h2>
+    <p>Lifetime license · Free DFY setup · 7-day money-back guarantee</p>
+    <a class="btn-white" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">🚀 Get Instant Access</a>
+  </div>
+</section>
+
+<footer>
+  <div class="container">© 2026 Watshop Automation · <a href="index.html">wa-crm.in</a> · Not affiliated with WhatsApp™ or Meta Platforms, Inc.</div>
+</footer>
+
+</body>
+</html>

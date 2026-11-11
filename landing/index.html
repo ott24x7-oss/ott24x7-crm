@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WA-CRM — Done-For-You WhatsApp CRM | Bulk Messaging, Automation & Team Inbox</title>
+<meta name="description" content="Turn WhatsApp into your #1 sales machine. Bulk messaging, chatbot automation, shared team inbox, Google Sheets sync & more — fully set up for you. One-time price.">
+
+<!-- Open Graph (Meta ads preview) -->
+<meta property="og:title" content="WA-CRM — Done-For-You WhatsApp CRM">
+<meta property="og:description" content="Bulk messaging, automation & team inbox for WhatsApp. Set up for you in 24 hours. One-time price.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://wa-crm.in/">
+<meta property="og:image" content="https://wa-crm.in/assets/og-cover.png">
+
+<link rel="icon" href="assets/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+<!-- ============================================================
+     META PIXEL — paste your pixel code here before running ads
+     ============================================================
+<script>
+!function(f,b,e,v,n,t,s){...}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', 'YOUR_PIXEL_ID');
+fbq('track', 'PageView');
+</script>
+============================================================ -->
+
+<style>
+:root{
+  --green:#25D366;
+  --green-dark:#128C7E;
+  --green-deep:#075E54;
+  --ink:#0b141a;
+  --ink-soft:#3b4a54;
+  --muted:#667781;
+  --bg:#ffffff;
+  --bg-soft:#f0f7f3;
+  --bg-dark:#0b141a;
+  --card:#ffffff;
+  --line:#e3ece7;
+  --cta:#25D366;
+  --cta-hover:#1eb856;
+  --radius:14px;
+  --shadow:0 10px 30px rgba(7,94,84,.10);
+  --shadow-lg:0 20px 50px rgba(7,94,84,.16);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+img{max-width:100%;display:block}
+a{text-decoration:none;color:inherit}
+.container{width:min(1140px,92%);margin:0 auto}
+
+/* ---------- Announcement bar ---------- */
+.announce{background:linear-gradient(90deg,var(--green-deep),var(--green-dark));color:#fff;text-align:center;font-size:.85rem;font-weight:600;padding:.55rem 1rem;letter-spacing:.02em}
+.announce b{color:#b6f5cf}
+
+/* ---------- Navbar ---------- */
+.nav{position:sticky;top:0;z-index:100;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;height:68px}
+.logo{display:flex;align-items:center;gap:.55rem;font-weight:800;font-size:1.25rem;letter-spacing:-.02em}
+.logo-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--green),var(--green-dark));display:grid;place-items:center;color:#fff;font-size:1.05rem;font-weight:900}
+.logo span em{font-style:normal;color:var(--green-dark)}
+.nav-links{display:flex;align-items:center;gap:1.6rem;list-style:none}
+.nav-links>a,.nav-links .dd-btn{font-size:.93rem;font-weight:600;color:var(--ink-soft);background:none;border:0;cursor:pointer;font-family:inherit;padding:.4rem 0;display:flex;align-items:center;gap:.3rem}
+.nav-links>a:hover,.dd-btn:hover{color:var(--green-dark)}
+.dd-btn .chev{transition:transform .25s;font-size:.7rem}
+.dd.open .chev{transform:rotate(180deg)}
+
+/* ---------- Features mega dropdown ---------- */
+.dd{position:relative}
+.dd-panel{position:absolute;top:calc(100% + 14px);left:50%;transform:translateX(-50%) translateY(8px);width:min(760px,92vw);background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow-lg);padding:1.4rem;opacity:0;visibility:hidden;transition:.22s ease;z-index:50}
+.dd.open .dd-panel,.dd:hover .dd-panel,.dd:focus-within .dd-panel{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0)}
+.dd-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem}
+.dd-item{display:flex;gap:.75rem;padding:.7rem .75rem;border-radius:12px;transition:background .15s}
+.dd-item:hover{background:var(--bg-soft)}
+.dd-item .ic{flex:none;width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,rgba(37,211,102,.14),rgba(18,140,126,.14));display:grid;place-items:center;font-size:1.05rem}
+.dd-item h4{font-size:.86rem;font-weight:700;line-height:1.25}
+.dd-item p{font-size:.74rem;color:var(--muted);line-height:1.35;margin-top:.1rem}
+.dd-foot{margin-top:1rem;padding-top:1rem;border-top:1px dashed var(--line);display:flex;justify-content:space-between;align-items:center}
+.dd-foot a{font-size:.85rem;font-weight:700;color:var(--green-dark)}
+.dd-foot a:hover{text-decoration:underline}
+
+.nav-cta{display:inline-flex;align-items:center;gap:.45rem;background:var(--cta);color:#fff;font-weight:700;font-size:.9rem;padding:.62rem 1.15rem;border-radius:999px;box-shadow:0 6px 18px rgba(37,211,102,.35);transition:.2s}
+.nav-cta:hover{background:var(--cta-hover);transform:translateY(-1px)}
+.burger{display:none;background:none;border:0;font-size:1.5rem;cursor:pointer}
+
+/* ---------- Hero ---------- */
+.hero{position:relative;overflow:hidden;background:radial-gradient(1100px 520px at 75% -10%,rgba(37,211,102,.16),transparent 60%),radial-gradient(800px 400px at 0% 20%,rgba(18,140,126,.10),transparent 55%),var(--bg)}
+.hero-inner{display:grid;grid-template-columns:1.05fr .95fr;gap:3rem;align-items:center;padding:5rem 0 4.2rem}
+.badge{display:inline-flex;align-items:center;gap:.45rem;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:999px;padding:.38rem .95rem;font-size:.78rem;font-weight:700;color:var(--green-deep);margin-bottom:1.3rem}
+.badge .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(37,211,102,.5)}60%{box-shadow:0 0 0 7px rgba(37,211,102,0)}}
+.hero h1{font-size:clamp(2.1rem,4.6vw,3.4rem);font-weight:900;line-height:1.08;letter-spacing:-.03em}
+.hero h1 .hl{color:transparent;background:linear-gradient(90deg,var(--green-dark),var(--green));-webkit-background-clip:text;background-clip:text}
+.hero p.sub{margin:1.15rem 0 1.8rem;font-size:1.08rem;color:var(--ink-soft);max-width:34rem}
+.hero-ctas{display:flex;gap:.9rem;flex-wrap:wrap;align-items:center}
+.btn-primary{display:inline-flex;align-items:center;gap:.5rem;background:var(--cta);color:#fff;font-weight:800;font-size:1rem;padding:.95rem 1.8rem;border-radius:999px;box-shadow:0 10px 26px rgba(37,211,102,.4);transition:.2s}
+.btn-primary:hover{background:var(--cta-hover);transform:translateY(-2px)}
+.btn-ghost{display:inline-flex;align-items:center;gap:.5rem;font-weight:700;font-size:.95rem;color:var(--green-deep);padding:.95rem 1.2rem;border-radius:999px;border:2px solid var(--line);background:#fff;transition:.2s}
+.btn-ghost:hover{border-color:var(--green);background:var(--bg-soft)}
+.hero-proof{display:flex;gap:1.6rem;margin-top:2rem;flex-wrap:wrap}
+.hero-proof div{font-size:.82rem;color:var(--muted)}
+.hero-proof b{display:block;font-size:1.15rem;color:var(--ink);font-weight:800}
+
+/* hero mockup */
+.hero-visual{position:relative}
+.chat-mock{background:#fff;border-radius:22px;box-shadow:var(--shadow-lg);border:1px solid var(--line);overflow:hidden;transform:rotate(1.2deg)}
+.chat-head{background:var(--green-deep);color:#fff;padding:.85rem 1.1rem;display:flex;align-items:center;gap:.7rem;font-weight:700;font-size:.9rem}
+.chat-head .avatar{width:34px;height:34px;border-radius:50%;background:var(--green);display:grid;place-items:center;font-weight:900}
+.chat-body{background:#e5ddd5;padding:1.1rem;display:flex;flex-direction:column;gap:.6rem;min-height:300px}
+.bubble{max-width:78%;padding:.55rem .8rem;border-radius:12px;font-size:.8rem;line-height:1.4;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.bubble.in{background:#fff;align-self:flex-start;border-top-left-radius:4px}
+.bubble.out{background:#d9fdd3;align-self:flex-end;border-top-right-radius:4px}
+.bubble .tag{display:inline-block;font-size:.62rem;font-weight:800;color:var(--green-dark);background:rgba(37,211,102,.15);border-radius:6px;padding:.05rem .4rem;margin-bottom:.25rem}
+.float-chip{position:absolute;background:#fff;border-radius:12px;box-shadow:var(--shadow-lg);padding:.55rem .9rem;font-size:.75rem;font-weight:700;display:flex;align-items:center;gap:.45rem;border:1px solid var(--line)}
+.chip-1{top:6%;left:-6%;animation:float 5s ease-in-out infinite}
+.chip-2{bottom:10%;right:-5%;animation:float 6s ease-in-out infinite reverse}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+
+/* ---------- Trust strip ---------- */
+.trust{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--bg-soft)}
+.trust-inner{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;padding:1.2rem 0;font-size:.85rem;font-weight:600;color:var(--ink-soft)}
+.trust-inner span{display:flex;align-items:center;gap:.45rem}
+.trust-inner .tk{color:var(--green-dark)}
+
+/* ---------- Pain / solution ---------- */
+.pain{padding:4.5rem 0}
+.pain-grid{display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:center}
+.eyebrow{font-size:.78rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--green-dark);margin-bottom:.7rem}
+.h2{font-size:clamp(1.7rem,3.2vw,2.4rem);font-weight:900;letter-spacing:-.02em;line-height:1.15}
+.pain-list{margin-top:1.6rem;display:flex;flex-direction:column;gap:1rem}
+.pain-item{display:flex;gap:.9rem;align-items:flex-start;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.2rem;box-shadow:var(--shadow)}
+.pain-item .x{flex:none;width:26px;height:26px;border-radius:50%;background:#fde8e8;color:#d33;display:grid;place-items:center;font-weight:900;font-size:.8rem;margin-top:.15rem}
+.pain-item.good .x{background:#dcf8e7;color:var(--green-dark)}
+.pain-item p{font-size:.92rem;color:var(--ink-soft)}
+.pain-item p b{color:var(--ink)}
+
+/* ---------- DFY section ---------- */
+.dfy{background:var(--bg-dark);color:#e7f0ec;padding:4.5rem 0;position:relative;overflow:hidden}
+.dfy::before{content:"";position:absolute;inset:0;background:radial-gradient(700px 320px at 85% 10%,rgba(37,211,102,.14),transparent 60%)}
+.dfy .eyebrow{color:var(--green)}
+.dfy-grid{display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:center;position:relative}
+.dfy p{color:#a8bcb4;margin-top:1rem}
+.steps{margin-top:2rem;display:flex;flex-direction:column;gap:1.1rem;counter-reset:s}
+.step{display:flex;gap:1rem;align-items:flex-start;position:relative}
+.step::before{counter-increment:s;content:counter(s);flex:none;width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--green),var(--green-dark));color:#fff;font-weight:800;display:grid;place-items:center;font-size:.9rem}
+.step h4{font-size:1rem;font-weight:700}
+.step p{font-size:.85rem;margin-top:.15rem}
+.dfy-card{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:2rem;backdrop-filter:blur(6px)}
+.dfy-card h3{font-size:1.2rem;font-weight:800;margin-bottom:1.2rem}
+.check-list{list-style:none;display:flex;flex-direction:column;gap:.75rem}
+.check-list li{display:flex;gap:.6rem;font-size:.9rem;color:#cfe0d8}
+.check-list li::before{content:"✓";color:var(--green);font-weight:900}
+
+/* ---------- Features teaser (compact, NOT cards) ---------- */
+.teaser{padding:4.5rem 0;text-align:center}
+.teaser .h2{margin-bottom:.8rem}
+.teaser .lede{color:var(--muted);max-width:38rem;margin:0 auto 2.4rem}
+.teaser-pills{display:flex;flex-wrap:wrap;justify-content:center;gap:.6rem;max-width:52rem;margin:0 auto 2.2rem}
+.pill{display:inline-flex;align-items:center;gap:.4rem;background:var(--bg-soft);border:1px solid var(--line);border-radius:999px;padding:.5rem 1rem;font-size:.85rem;font-weight:600;color:var(--ink-soft);transition:.15s;cursor:pointer}
+.pill:hover{border-color:var(--green);color:var(--green-deep);transform:translateY(-1px)}
+
+/* ---------- CTA / pricing band ---------- */
+.cta-band{background:linear-gradient(120deg,var(--green-deep),var(--green-dark) 60%,var(--green));color:#fff;padding:4.5rem 0;text-align:center;position:relative;overflow:hidden}
+.cta-band::after{content:"";position:absolute;inset:0;background:radial-gradient(600px 300px at 50% 120%,rgba(255,255,255,.18),transparent 60%)}
+.cta-band .h2{color:#fff}
+.cta-band p{margin:1rem auto 2rem;max-width:34rem;color:#dff3e8;position:relative}
+.price-tag{display:inline-flex;align-items:baseline;gap:.6rem;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:14px;padding:.8rem 1.4rem;margin-bottom:1.8rem;position:relative}
+.price-tag .old{text-decoration:line-through;opacity:.7;font-size:1rem}
+.price-tag .now{font-size:1.7rem;font-weight:900}
+.price-tag .per{font-size:.8rem;opacity:.85}
+.btn-white{position:relative;display:inline-flex;align-items:center;gap:.5rem;background:#fff;color:var(--green-deep);font-weight:800;font-size:1.05rem;padding:1rem 2.2rem;border-radius:999px;box-shadow:0 12px 30px rgba(0,0,0,.25);transition:.2s}
+.btn-white:hover{transform:translateY(-2px)}
+.guarantee{margin-top:1.3rem;font-size:.85rem;color:#cfeee0;position:relative}
+
+/* ---------- FAQ ---------- */
+.faq{padding:4.5rem 0;max-width:760px;margin:0 auto}
+.faq .h2{text-align:center;margin-bottom:2.2rem}
+details{border:1px solid var(--line);border-radius:var(--radius);margin-bottom:.8rem;background:#fff;overflow:hidden}
+summary{cursor:pointer;list-style:none;padding:1.1rem 1.3rem;font-weight:700;font-size:.95rem;display:flex;justify-content:space-between;align-items:center;gap:1rem}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-size:1.3rem;color:var(--green-dark);transition:.2s}
+details[open] summary::after{transform:rotate(45deg)}
+details .ans{padding:0 1.3rem 1.1rem;color:var(--ink-soft);font-size:.9rem}
+
+/* ---------- Footer ---------- */
+footer{background:var(--bg-dark);color:#93a8a0;padding:3rem 0 2rem;font-size:.85rem}
+.foot-grid{display:flex;justify-content:space-between;gap:2rem;flex-wrap:wrap;margin-bottom:2rem}
+.foot-grid .brand{max-width:300px}
+.foot-grid h5{color:#fff;font-size:.9rem;margin-bottom:.8rem}
+.foot-grid a{display:block;color:#93a8a0;margin-bottom:.45rem}
+.foot-grid a:hover{color:var(--green)}
+.foot-bottom{border-top:1px solid rgba(255,255,255,.08);padding-top:1.4rem;display:flex;justify-content:space-between;flex-wrap:wrap;gap:.8rem;font-size:.78rem}
+
+/* ---------- Sticky mobile CTA ---------- */
+.sticky-cta{position:fixed;bottom:0;left:0;right:0;z-index:90;background:rgba(255,255,255,.95);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:.7rem 1rem;display:none}
+.sticky-cta a{display:block;text-align:center;background:var(--cta);color:#fff;font-weight:800;padding:.85rem;border-radius:12px;font-size:.95rem}
+
+/* ---------- Responsive ---------- */
+@media(max-width:960px){
+  .hero-inner,.pain-grid,.dfy-grid{grid-template-columns:1fr;gap:2.4rem}
+  .hero-inner{padding:3.4rem 0}
+  .nav-links{position:fixed;inset:68px 0 auto 0;background:#fff;flex-direction:column;align-items:stretch;padding:1rem 5%;gap:.2rem;border-bottom:1px solid var(--line);box-shadow:var(--shadow-lg);display:none}
+  .nav-links.show{display:flex}
+  .nav-links>li>a,.nav-links .dd-btn{padding:.8rem .2rem;font-size:1rem}
+  .dd-panel{position:static;transform:none;width:100%;box-shadow:none;border:0;padding:.4rem 0;opacity:1;visibility:visible;display:none}
+  .dd.open .dd-panel{display:block}
+  .dd:hover .dd-panel{display:none}
+  .dd.open:hover .dd-panel{display:block}
+  .dd-grid{grid-template-columns:1fr 1fr}
+  .burger{display:block}
+  .nav-cta{display:none}
+  .sticky-cta{display:block}
+  body{padding-bottom:64px}
+  .float-chip{display:none}
+}
+@media(max-width:560px){.dd-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- Announcement -->
+<div class="announce">🔥 Limited Offer: <b>Done-For-You setup FREE</b> with every license this week — we install, configure & train your team.</div>
+
+<!-- Navbar -->
+<header class="nav">
+  <div class="container nav-inner">
+    <a href="/" class="logo"><span class="logo-mark">W</span><span>WA<em>-CRM</em></span></a>
+
+    <ul class="nav-links" id="navLinks">
+      <!-- Features as DROPDOWN instead of card grid -->
+      <li class="dd" id="featuresDd">
+        <button class="dd-btn" aria-haspopup="true" aria-expanded="false" onclick="toggleDd(event)">
+          Features <span class="chev">▾</span>
+        </button>
+        <div class="dd-panel">
+          <div class="dd-grid">
+            <a class="dd-item" href="features.html#bulk"><span class="ic">📤</span><span><h4>Bulk Messaging</h4><p>Send campaigns to thousands with smart throttling</p></span></a>
+            <a class="dd-item" href="features.html#extractor"><span class="ic">👥</span><span><h4>Group Extractor</h4><p>Export members from any group in one click</p></span></a>
+            <a class="dd-item" href="features.html#sheets"><span class="ic">📊</span><span><h4>Google Sheets Sync</h4><p>Import contacts & personalize every message</p></span></a>
+            <a class="dd-item" href="features.html#chatbot"><span class="ic">🤖</span><span><h4>Auto-Reply Chatbot</h4><p>Keyword replies that sell while you sleep</p></span></a>
+            <a class="dd-item" href="features.html#buttons"><span class="ic">🔘</span><span><h4>Buttons & Lists</h4><p>Interactive CTAs inside every message</p></span></a>
+            <a class="dd-item" href="features.html#inbox"><span class="ic">💬</span><span><h4>Team Inbox</h4><p>All chats, labels & follow-ups in one place</p></span></a>
+            <a class="dd-item" href="features.html#warmer"><span class="ic">🔥</span><span><h4>Number Warmer</h4><p>Keep your number safe from bans</p></span></a>
+            <a class="dd-item" href="features.html#api"><span class="ic">🔌</span><span><h4>API & Webhooks</h4><p>Connect your CRM, store or any tool</p></span></a>
+            <a class="dd-item" href="features.html#reports"><span class="ic">📈</span><span><h4>Reports & Exports</h4><p>Delivery stats, CSV exports, full history</p></span></a>
+          </div>
+          <div class="dd-foot">
+            <span style="font-size:.8rem;color:var(--muted)">…and 15+ more tools inside</span>
+            <a href="features.html">View all features →</a>
+          </div>
+        </div>
+      </li>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#dfy">DFY Setup</a></li>
+      <li><a href="#faq">FAQ</a></li>
+      <li><a href="#pricing">Pricing</a></li>
+    </ul>
+
+    <a class="nav-cta" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Get Instant Access →</a>
+    <button class="burger" onclick="document.getElementById('navLinks').classList.toggle('show')" aria-label="Menu">☰</button>
+  </div>
+</header>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="container hero-inner">
+    <div>
+      <span class="badge"><span class="dot"></span> 2,000+ businesses already selling on WhatsApp</span>
+      <h1>Turn WhatsApp Into Your <span class="hl">#1 Sales Machine</span> — Set Up For You</h1>
+      <p class="sub">Stop losing leads in chats. WA-CRM gives you bulk campaigns, chatbot automation, a shared team inbox and Google Sheets sync — <b>fully installed & configured by our team</b>, so you start selling from day one.</p>
+      <div class="hero-ctas">
+        <a class="btn-primary" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">🚀 Get WA-CRM Now</a>
+        <a class="btn-ghost" href="#how">▶ See how it works</a>
+      </div>
+      <div class="hero-proof">
+        <div><b>98%</b>message open rate</div>
+        <div><b>24 hrs</b>done-for-you setup</div>
+        <div><b>One-time</b>payment, no monthly fees</div>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <div class="chat-mock">
+        <div class="chat-head"><span class="avatar">W</span> WA-CRM Campaign <span style="margin-left:auto;font-size:.72rem;opacity:.8">● sending…</span></div>
+        <div class="chat-body">
+          <div class="bubble out"><span class="tag">CAMPAIGN · 4,823 contacts</span>Hi {{name}}! 🎉 Your exclusive 30% OFF coupon is here. Tap below to claim 👇<br>🔘 [Claim Offer] 🔘 [Talk to Sales]</div>
+          <div class="bubble in">Claim Offer ✅</div>
+          <div class="bubble out"><span class="tag">AUTO-REPLY</span>Awesome, {{name}}! Your coupon code is <b>WACRM30</b>. Valid for 24 hrs ⏰</div>
+          <div class="bubble in">Just ordered! Thanks 🙌</div>
+          <div class="bubble out"><span class="tag">CRM · LABELED</span>🏷️ Lead moved to <b>"Hot Buyers"</b> · Follow-up scheduled ✔</div>
+        </div>
+      </div>
+      <div class="float-chip chip-1">📊 4,823 messages · 96% delivered</div>
+      <div class="float-chip chip-2">🤖 Chatbot replied in 0.4s</div>
+    </div>
+  </div>
+</section>
+
+<!-- Trust strip -->
+<div class="trust">
+  <div class="container trust-inner">
+    <span><span class="tk">✓</span> Works on Windows & Mac</span>
+    <span><span class="tk">✓</span> No WhatsApp ban — smart warm-up built in</span>
+    <span><span class="tk">✓</span> Your data stays on your computer</span>
+    <span><span class="tk">✓</span> Free lifetime updates</span>
+    <span><span class="tk">✓</span> WhatsApp support 7 days a week</span>
+  </div>
+</div>
+
+<!-- Pain → Solution -->
+<section class="pain">
+  <div class="container pain-grid">
+    <div>
+      <div class="eyebrow">The Problem</div>
+      <h2 class="h2">Your customers are on WhatsApp.<br>Your sales process isn't.</h2>
+      <div class="pain-list">
+        <div class="pain-item"><span class="x">✕</span><p><b>Leads slip away</b> — chats get buried, follow-ups forgotten, money left on the table.</p></div>
+        <div class="pain-item"><span class="x">✕</span><p><b>Manual messaging eats hours</b> — copy-pasting the same reply to hundreds of people.</p></div>
+        <div class="pain-item"><span class="x">✕</span><p><b>Number gets banned</b> — blasting messages without warm-up or throttling.</p></div>
+      </div>
+    </div>
+    <div>
+      <div class="eyebrow">The Fix</div>
+      <h2 class="h2">One tool. Every WhatsApp workflow, automated.</h2>
+      <div class="pain-list">
+        <div class="pain-item good"><span class="x">✓</span><p><b>Every lead captured & labeled</b> in a CRM built for WhatsApp — nothing falls through.</p></div>
+        <div class="pain-item good"><span class="x">✓</span><p><b>Campaigns in minutes</b> — upload a sheet, personalize, hit send to thousands.</p></div>
+        <div class="pain-item good"><span class="x">✓</span><p><b>Anti-ban protection</b> — human-like delays, warm-up mode & smart limits included.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DFY -->
+<section class="dfy" id="dfy">
+  <div class="container dfy-grid">
+    <div id="how">
+      <div class="eyebrow">Done-For-You</div>
+      <h2 class="h2">We set everything up.<br>You just start selling.</h2>
+      <p>No tutorials. No tech headaches. Our team installs, configures and trains yours — live, on a call, within 24 hours of your order.</p>
+      <div class="steps">
+        <div class="step"><div><h4>Order & book your slot</h4><p>Pick a time that suits you — same-day slots available.</p></div></div>
+        <div class="step"><div><h4>We install & connect everything</h4><p>Remote setup: WhatsApp linked, sheets imported, chatbot trained on your FAQs.</p></div></div>
+        <div class="step"><div><h4>Live training for your team</h4><p>45-minute hands-on call — your team runs their first campaign before we hang up.</p></div></div>
+      </div>
+    </div>
+    <div class="dfy-card">
+      <h3>✅ Everything included in DFY setup</h3>
+      <ul class="check-list">
+        <li>Installation & activation on your system</li>
+        <li>WhatsApp number linked & warmed up safely</li>
+        <li>Your contact list imported & cleaned</li>
+        <li>3 auto-reply chatbot flows written for you</li>
+        <li>First bulk campaign configured together</li>
+        <li>Labels, pipelines & team inbox organized</li>
+        <li>45-min live training (Hindi / English)</li>
+        <li>30 days priority WhatsApp support</li>
+      </ul>
+      <a class="btn-primary" style="margin-top:1.6rem;width:100%;justify-content:center" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">Claim Free DFY Setup →</a>
+    </div>
+  </div>
+</section>
+
+<!-- Compact feature teaser (pills, not cards) -->
+<section class="teaser">
+  <div class="container">
+    <div class="eyebrow">All-in-one toolkit</div>
+    <h2 class="h2">15+ tools. One flat price.</h2>
+    <p class="lede">Every feature is included in every license — no tiers, no upsells, no per-message charges.</p>
+    <div class="teaser-pills">
+      <a class="pill" href="features.html#bulk">📤 Bulk Messaging</a>
+      <a class="pill" href="features.html#extractor">👥 Group Extractor</a>
+      <a class="pill" href="features.html#sheets">📊 Google Sheets</a>
+      <a class="pill" href="features.html#chatbot">🤖 Chatbot</a>
+      <a class="pill" href="features.html#buttons">🔘 Buttons & Lists</a>
+      <a class="pill" href="features.html#inbox">💬 Team Inbox</a>
+      <a class="pill" href="features.html#warmer">🔥 Number Warmer</a>
+      <a class="pill" href="features.html#api">🔌 API Access</a>
+      <a class="pill" href="features.html#reports">📈 Reports</a>
+      <a class="pill" href="features.html">✨ +6 more →</a>
+    </div>
+    <a class="btn-ghost" href="features.html">Explore every feature →</a>
+  </div>
+</section>
+
+<!-- Pricing / CTA -->
+<section class="cta-band" id="pricing">
+  <div class="container">
+    <div class="eyebrow" style="color:#b6f5cf">One-time payment · Yours forever</div>
+    <h2 class="h2">Start closing deals on WhatsApp today</h2>
+    <p>Join 2,000+ businesses automating sales with WA-CRM. Free DFY setup included this week only.</p>
+    <div class="price-tag"><span class="old">₹4,999</span><span class="now">₹1,999</span><span class="per">one-time · lifetime license</span></div>
+    <br>
+    <a class="btn-white" href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">🚀 Get Instant Access + Free Setup</a>
+    <div class="guarantee">🛡️ 7-day money-back guarantee · 🔒 Secure checkout · ⚡ License delivered in 5 minutes</div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq" id="faq">
+  <div class="container">
+    <h2 class="h2">Questions? Answered.</h2>
+    <details open><summary>Is this an official WhatsApp product?</summary><div class="ans">WA-CRM is an independent desktop tool that works with WhatsApp Web. It includes human-like sending delays and warm-up modes designed to keep your number safe.</div></details>
+    <details><summary>Will my number get banned?</summary><div class="ans">Our built-in Number Warmer, smart throttling and randomized delays mimic human behavior. Thousands of users run daily campaigns safely when following our included best-practices guide.</div></details>
+    <details><summary>What does "Done-For-You setup" mean?</summary><div class="ans">Our team connects to your computer remotely, installs WA-CRM, links your WhatsApp, imports your contacts, builds your chatbot flows, and trains your team live — all within 24 hours of purchase.</div></details>
+    <details><summary>Is it really a one-time payment?</summary><div class="ans">Yes. Pay once, use forever. Lifetime updates and 30 days of priority support are included. No subscriptions, no per-message fees.</div></details>
+    <details><summary>Does it work on Mac and Windows?</summary><div class="ans">Yes — native apps for both Windows and macOS are included with every license.</div></details>
+    <details><summary>What if it doesn't work for me?</summary><div class="ans">You're covered by a 7-day money-back guarantee. If WA-CRM isn't a fit, email us for a full refund — no questions asked.</div></details>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div class="foot-grid">
+      <div class="brand">
+        <a href="/" class="logo" style="color:#fff;margin-bottom:.8rem"><span class="logo-mark">W</span><span>WA<em style="color:var(--green)">-CRM</em></span></a>
+        <p>The all-in-one WhatsApp CRM for businesses that sell where their customers chat.</p>
+      </div>
+      <div><h5>Product</h5><a href="features.html">All Features</a><a href="#pricing">Pricing</a><a href="#dfy">DFY Setup</a><a href="#faq">FAQ</a></div>
+      <div><h5>Support</h5><a href="https://wa.me/91XXXXXXXXXX">WhatsApp Us</a><a href="mailto:support@wa-crm.in">Email Support</a><a href="#">Installation Guide</a></div>
+      <div><h5>Legal</h5><a href="#">Privacy Policy</a><a href="#">Terms of Service</a><a href="#">Refund Policy</a></div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 Watshop Automation · wa-crm.in</span>
+      <span>Not affiliated with WhatsApp™ or Meta Platforms, Inc.</span>
+    </div>
+  </div>
+</footer>
+
+<!-- Sticky mobile CTA -->
+<div class="sticky-cta"><a href="https://ott24x7.com/plans/dev-crm-pro-whatsapp-software">🚀 Get WA-CRM — ₹1,999 One-Time</a></div>
+
+<script>
+// Features dropdown: click toggle (mobile + keyboard), hover handled by CSS on desktop
+function toggleDd(e){
+  e.preventDefault();
+  const dd = document.getElementById('featuresDd');
+  const open = dd.classList.toggle('open');
+  dd.querySelector('.dd-btn').setAttribute('aria-expanded', open);
+}
+// Close dropdown when clicking outside
+document.addEventListener('click', function(e){
+  const dd = document.getElementById('featuresDd');
+  if(!dd.contains(e.target)) dd.classList.remove('open');
+});
+// Track CTA clicks for Meta Pixel (fires only if pixel installed)
+document.querySelectorAll('a[href*="ott24x7.com/plans"]').forEach(function(a){
+  a.addEventListener('click', function(){
+    if(window.fbq) fbq('track','InitiateCheckout');
+  });
+});
+</script>
+</body>
+</html>
