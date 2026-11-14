@@ -2,7 +2,7 @@
 const $ = (s, r = document) => r.querySelector(s);
 const el = (t, p = {}, ...kids) => {
   const n = Object.assign(document.createElement(t), p);
-  for (const [k, v] of Object.entries(p.style || {})) n.style[k] = v;
+  for (const [k, v] of Object.entries(p.style || {})) k.startsWith('--') ? n.style.setProperty(k, v) : (n.style[k] = v);
   for (const c of kids) if (c != null) n.append(c.nodeType ? c : document.createTextNode(c));
   return n;
 };
@@ -14,7 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PERSIST_KEYS = ['ott_theme', 'ott_lic_ok', 'ott_quick', 'ott_offers', 'ott_leads', 'ott_lead_seqs',
   'ott_invoice_cfg', 'ott_invoices', 'ott_invoice_items',
   'ott_reminders', 'ott_schedule', 'ott_memberadd', 'ott_sig', 'ott_notes', 'ott_books', 'ott_deals', 'ott_deal_cfg',
-  'ott_msg_sound'];
+  'ott_msg_sound', 'ott_gb'];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => {
@@ -72,6 +72,7 @@ const FEATURES = [
   { id: 'leads', name: 'Lead Manager', icon: IC.lead, impl: true },
   { id: 'invoice', name: 'Invoice', icon: IC.invoice, impl: true },
   { id: 'broadcast', name: 'Broadcast', icon: IC.broadcast, impl: true },
+  { id: 'gbroadcast', name: 'Group Broadcast', icon: IC.group, impl: true },
   { id: 'autoreply', name: 'Autoreply BOT', icon: IC.bot, impl: true },
   { id: 'guard', name: 'Group Guard', icon: IC.shield, impl: true },
   { id: 'schedule', name: 'Schedule', icon: IC.clock, impl: true },
@@ -103,6 +104,7 @@ let trialInfo = { isTrial: false, expiresAt: null };
 // split second before config resolves.
 const BRAND = { name: 'WA-CRM', company: 'WA-CRM', slug: 'wa-crm', site: '', buyUrl: '', hasUpdates: true };
 let BUY_URL = '';
+let APP_SERVER = '';   // licence server origin, from app:config
 window.addEventListener('DOMContentLoaded', async () => {
   $('#deviceId').textContent = (await ott.deviceId()).slice(0, 12) + '…';
   const saved = await ott.licenseLoad();
@@ -144,6 +146,7 @@ function showGate() { $('#gate').classList.remove('hidden'); $('#app').classList
 // every later release and made a successful update look like it had not installed.
 try {
   ott.config().then((c) => {
+    if (c && c.server) APP_SERVER = String(c.server).replace(/\/+$/, '');
     if (c && c.brand) {
       Object.assign(BRAND, c.brand);
       BUY_URL = BRAND.buyUrl || '';
@@ -233,6 +236,42 @@ async function startTrial() {
     m.className = 'msg err'; m.textContent = 'Could not start trial: ' + String(r.reason || 'error').replace(/_/g, ' ');
   }
 }
+
+// Plans dialog, opened from the licence gate. Prices come from the licence server's shop
+// cards (the same list wa-crm.in shows), so the app can never quote a stale price.
+// White-label builds have their own buy page and pricing, so they skip the dialog.
+let plansCache = null;
+async function showProductCard() {
+  if (!BRAND.hasUpdates || !APP_SERVER) { if (BUY_URL) ott.openExternal(BUY_URL); return; }
+  $('#productCardSection').classList.remove('hidden');
+  const grid = $('#plansGrid');
+  if (!plansCache) {
+    try {
+      const r = await fetch(APP_SERVER + '/api/shop/cards', { cache: 'no-store' });
+      const d = r.ok ? await r.json() : null;
+      plansCache = ((d && d.cards) || []).filter((c) => !c.hidden && c.kind !== 'reseller' && c.platform !== 'extension');
+    } catch { plansCache = null; }
+  }
+  grid.textContent = '';
+  if (!plansCache || !plansCache.length) {
+    grid.append(el('div', { className: 'pc-loading' },
+      el('div', { className: 'muted' }, 'Could not load plans. Check your internet connection.'),
+      el('button', { className: 'btn small', onclick: () => ott.openExternal(planUrl()) }, 'Open pricing page')));
+    return;
+  }
+  grid.style.setProperty('--n', String(Math.min(plansCache.length, 3)));
+  for (const c of plansCache) {
+    const price = c.price > 0 ? (c.currency === 'INR' || !c.currency ? '₹' : c.currency + ' ') + Number(c.price).toLocaleString('en-IN') : 'Contact us';
+    grid.append(el('div', { className: 'license-card' + (c.featured ? ' popular' : '') },
+      c.featured ? el('div', { className: 'popular-badge' }, 'Most popular') : null,
+      el('div', { className: 'license-card-header' }, el('h3', {}, c.name), c.tag ? el('p', { className: 'muted' }, c.tag) : null),
+      el('div', { className: 'license-price' }, el('span', { className: 'price-main' }, price), c.period ? el('span', { className: 'price-annual' }, c.period) : null),
+      el('ul', { className: 'license-features' }, ...(c.features || []).map((f) => el('li', {}, el('span', { className: 'lf-tick' }, '✓'), f))),
+      el('button', { className: 'btn block ' + (c.featured ? 'primary' : ''), onclick: () => ott.openExternal(planUrl(c.id)) }, c.cta || 'Buy now')));
+  }
+}
+function planUrl(id) { return APP_SERVER + (id ? '/?buy=' + encodeURIComponent(id) : '/') + '#pricing'; }
+function hideProductCard() { $('#productCardSection').classList.add('hidden'); }
 
 // Trial banner (bottom pill) — shows remaining days while on trial.
 function updateTrialBanner() {
@@ -467,6 +506,11 @@ function applyMsgSound(wv) {
 }
 $('#activateBtn').addEventListener('click', activate);
 $('#trialBtn').addEventListener('click', startTrial);
+$('#buyLicenseBtn').addEventListener('click', showProductCard);
+$('#plansClose').addEventListener('click', hideProductCard);
+$('#plansTrial').addEventListener('click', () => { hideProductCard(); startTrial(); });
+$('#productCardSection').addEventListener('click', (e) => { if (e.target.id === 'productCardSection') hideProductCard(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#productCardSection').classList.contains('hidden')) hideProductCard(); });
 $('#trialBuyBtn').addEventListener('click', () => ott.openExternal(BUY_URL));
 $('#licenseKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') activate(); });
 async function activate() {
@@ -741,6 +785,10 @@ function openFeature(f) {
   panel.classList.remove('hidden');
   const scrim = $('#panelScrim');
   if (scrim) scrim.classList.remove('hidden');
+  const wide = WIDE_FEATURES.has(f.id);
+  panel.classList.toggle('fp-wide', wide);
+  if (!wasHidden && panel.dataset.wide !== String(wide)) positionWindow(panel);
+  panel.dataset.wide = String(wide);
   if (wasHidden) {
     positionWindow(panel);
     _fpPrevFocus = document.activeElement;
@@ -759,9 +807,11 @@ function closeFeature() {
   }
   _fpPrevFocus = null;
 }
+const WIDE_FEATURES = new Set(['gbroadcast']);
 function positionWindow(panel) {
   const stage = $('#waStage').getBoundingClientRect();
-  const w = Math.min(500, window.innerWidth - 260);
+  // Group Broadcast lays out a label sidebar beside the group list, so it needs the room.
+  const w = Math.min(WIDE_FEATURES.has(openFeatureId) ? 880 : 500, window.innerWidth - 260);
   panel.style.width = w + 'px';
   panel.style.left = Math.max(12, stage.left + (stage.width - w) / 2) + 'px';
   panel.style.top = Math.max(60, stage.top + 22) + 'px';
@@ -1136,7 +1186,7 @@ RENDER.quick = (b) => {
     selAll.checked = visible.length > 0 && visible.every((i) => selected.has(i));
     selCount.textContent = n ? `${n} selected` : '';
     selCount.style.color = n ? 'var(--danger)' : 'var(--muted)';
-    if (!items.length) { list.append(el('div', { className: 'muted' }, qs.length ? 'No products match your search.' : 'No products saved yet — add one above.')); return; }
+    if (!items.length) { list.append(el('div', { className: 'muted empty-state' }, qs.length ? 'No products match your search.' : 'No products saved yet — add one above.')); return; }
     list.append(el('div', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' } },
       items.length + ' item(s)' + (n && n > items.length ? ` · ${n} selected in total` : '')));
     items.forEach(({ it, i }) => list.append(catalogItem(it, i)));
@@ -1468,7 +1518,7 @@ RENDER.autoreply = (b) => {
   const rulesBox = el('div', { className: 'rules' });
   const drawRules = () => {
     rulesBox.innerHTML = '';
-    if (!cfg.rules.length) { rulesBox.append(el('div', { className: 'muted' }, 'No rules yet.')); return; }
+    if (!cfg.rules.length) { rulesBox.append(el('div', { className: 'muted empty-state' }, 'No rules yet.')); return; }
     cfg.rules.forEach((r, i) => rulesBox.append(el('div', { className: 'qr-item' },
       el('div', { className: 'txt' }, el('b', {}, `${COND[r.type] || r.type}: “${r.keyword}”`),
         el('div', { className: 'muted', style: { fontSize: '12px' } }, '→ ' + r.reply.slice(0, 54))),
@@ -1481,7 +1531,7 @@ RENDER.autoreply = (b) => {
   b.append(
     el('div', { className: 'fp-note' }, 'Auto-replies to incoming messages on THIS account. Runs while the app is open and the account is linked.'),
     el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, toggle, 'Enable / Start bot', chip),
-    el('div', { className: 'fp-note' }, 'Add a rule — if the incoming message matches, the bot replies:'),
+    el('div', { className: 'fp-sec' }, 'Add a rule', el('span', {}, 'If the incoming message matches, the bot replies')),
     el('div', { className: 'row' }, lbl('User sends', kw), lbl('Condition', cond)),
     lbl('Reply with', rep), addBtn,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '4px 0' } }),
@@ -1626,7 +1676,7 @@ RENDER.chatfilters = (b) => {
     if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
     const ls = await waExec("(async()=>{try{return (await WPP.labels.getAllLabels()).map(l=>({id:(l.id||'')+'',name:l.name||''}))}catch(e){return[]}})()").catch(() => []);
     listBox.innerHTML = '';
-    if (!ls.length) { listBox.append(el('div', { className: 'muted' }, 'No labels found (Business accounts only).')); return toast('No labels', 'err'); }
+    if (!ls.length) { listBox.append(el('div', { className: 'muted empty-state' }, 'No labels found (Business accounts only).')); return toast('No labels', 'err'); }
     ls.forEach(l => listBox.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, l.name),
       el('button', { className: 'btn small', onclick: () => chatFilter(l.name) }, 'Filter'))));
     toast(`${ls.length} labels`);
@@ -1733,7 +1783,7 @@ RENDER.autopost = (b) => {
   const offAtt = attachControl('*');
   const offList = el('div', { className: 'rules' });
   const drawOffers = () => {
-    offList.innerHTML = ''; if (!cfg.offers.length) offList.append(el('div', { className: 'muted' }, 'No offers on the rotation list yet.'));
+    offList.innerHTML = ''; if (!cfg.offers.length) offList.append(el('div', { className: 'muted empty-state' }, 'No offers on the rotation list yet.'));
     cfg.offers.forEach((o, i) => {
       const name = o.title || o.text || o.filename || 'offer';
       offList.append(el('div', { className: 'qr-item' },
@@ -1802,8 +1852,7 @@ RENDER.autopost = (b) => {
     el('div', { className: 'row' }, lbl('Post from account', accSel), lbl('Timezone', tz)),
     el('div', { className: 'row' }, lbl('Start hour (0-23)', sh), lbl('End hour (1-24)', eh), lbl('Every N minutes', iv)),
     timerEl,
-    el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
-    el('div', { className: 'fp-note' }, 'Target groups:'),
+    el('div', { className: 'fp-sec' }, 'Target groups'),
     el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: loadTargets }, 'Load groups'), el('button', { className: 'btn small', onclick: saveTargets }, 'Save targets')), tsum, gbox,
     el('div', { style: { borderTop: '1px solid var(--line)', margin: '2px 0' } }),
     el('div', { className: 'fp-note' }, 'Product rotation list — added offers wait for the schedule. Post now is the only button that sends immediately.'),
@@ -1814,6 +1863,544 @@ RENDER.autopost = (b) => {
     lbl('Logs', logs));
   fillProdPick();
   drawOffers(); drawLogs(); updateTimer();
+};
+
+// ================= Group Broadcast =================
+// A saved directory of the account's groups, labels that bundle them (one group may carry
+// several labels), and offers — each with its own timing (one time, daily, weekly) aimed at
+// one or more labels. Labels outlive the offers that use them, so the same groups are ready
+// for the next one-time post without picking them all over again.
+const GB_KEY = 'ott_gb';
+const GB_COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#ec4899', '#84cc16'];
+const GB_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+let gbTab = null;            // which tab the panel last showed; survives refreshes
+let gbLabelFilter = 'all';   // 'all' | 'none' | label id
+let gbProgress = null;       // { offerId, done, total } while a post is going out
+
+function gbLoad() {
+  const c = store.get(GB_KEY, null) || {};
+  return {
+    accId: c.accId || activeId, groups: c.groups || {}, fetchedAt: c.fetchedAt || 0,
+    labels: c.labels || [], offers: c.offers || [], logs: c.logs || [],
+    gapMin: c.gapMin ?? 4, gapMax: c.gapMax ?? 10,
+  };
+}
+function gbSave(c) { return store.set(GB_KEY, c); }
+const gbId = () => Math.random().toString(36).slice(2, 10);
+// Groups the offer reaches: every label's groups, once each, skipping ones we have left.
+function gbTargets(c, labelIds) {
+  const s = new Set();
+  for (const l of c.labels) if ((labelIds || []).includes(l.id)) l.jids.forEach((j) => { if (!(c.groups[j] && c.groups[j].gone)) s.add(j); });
+  return [...s];
+}
+// Next time an offer should fire, in local time. 0 means it never will.
+function gbNextRun(o, from = Date.now()) {
+  if (o.mode === 'once') return o.at ? new Date(o.at).getTime() : 0;
+  const times = (o.times || []).slice().sort();
+  const days = o.mode === 'weekly' ? (o.days || []) : [0, 1, 2, 3, 4, 5, 6];
+  if (!times.length || !days.length) return 0;
+  const base = new Date(from);
+  for (let d = 0; d < 8; d++) {
+    const day = new Date(base.getFullYear(), base.getMonth(), base.getDate() + d);
+    if (!days.includes(day.getDay())) continue;
+    for (const t of times) {
+      const [h, m] = t.split(':').map(Number);
+      const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m).getTime();
+      if (at > from) return at;
+    }
+  }
+  return 0;
+}
+function gbFmt(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts), now = new Date();
+  const tm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const tom = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (d.toDateString() === now.toDateString()) return 'Today ' + tm;
+  if (d.toDateString() === tom.toDateString()) return 'Tomorrow ' + tm;
+  return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ', ' + tm;
+}
+function gbIn(ms) {
+  if (ms <= 0) return 'due now';
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d) return `in ${d}d ${h % 24}h`;
+  if (h) return `in ${h}h ${m % 60}m`;
+  return `in ${m}m ${Math.floor((ms % 60000) / 1000)}s`;
+}
+function gbScheduleText(o) {
+  if (o.mode === 'once') return 'One time · ' + (o.at ? gbFmt(new Date(o.at).getTime()) : 'no time set');
+  const t = (o.times || []).slice().sort().join(', ') || 'no times';
+  if (o.mode === 'daily') return 'Daily · ' + t;
+  const ds = (o.days || []).slice().sort((x, y) => ((x + 6) % 7) - ((y + 6) % 7)).map((d) => GB_DAYS[d]).join(' '); // Mon first
+  return 'Weekly · ' + (ds || 'no days') + ' · ' + t;
+}
+function gbInitials(name) {
+  const w = String(name || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase();
+}
+function gbHue(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
+
+// What the engine knows about each group. Member count and admin status come from the
+// group metadata WhatsApp has already loaded; on a group it has not opened yet they can be
+// missing, and the row simply leaves them out rather than guessing.
+const GB_FETCH = `(async()=>{try{/*__ott_gb_fetch*/
+  var me=WPP.conn.getMyUserId(),meS=me&&me._serialized,meL='';
+  try{var l=WPP.conn.getMyUserLid&&WPP.conn.getMyUserLid();meL=l&&l._serialized||''}catch(e){}
+  var g=await WPP.chat.list({onlyGroups:true});
+  return g.map(function(x){
+    var md=x.groupMetadata||{},pc=md.participants,ps=[];
+    try{ps=pc?(pc.getModelsArray?pc.getModelsArray():(pc._models||[])):[]}catch(e){}
+    var admin=null;
+    for(var i=0;i<ps.length;i++){var pid=ps[i].id&&ps[i].id._serialized;if(pid&&(pid===meS||pid===meL)){admin=!!(ps[i].isAdmin||ps[i].isSuperAdmin);break;}}
+    return {id:x.id&&x.id._serialized,name:md.subject||x.name||x.formattedTitle||'',size:ps.length||md.size||0,
+      admin:admin,announce:!!md.announce,community:!!(x.isParentGroup||md.isParentGroup)};
+  }).filter(function(x){return x.id});
+}catch(e){return[]}})()`;
+
+let _gbBusy = false;
+async function gbTick() {
+  if (_gbBusy) return;
+  const c = gbLoad(); const now = Date.now();
+  const due = c.offers.find((o) => o.on && o.nextRun && o.nextRun <= now);
+  if (!due) return;
+  const late = now - due.nextRun;
+  // The app was closed through a slot. A recurring offer skips to its next slot instead
+  // of firing a pile of catch-up posts; a one-time offer still goes out if it is same-day.
+  if (due.mode !== 'once' && late > 30 * 60000) { due.nextRun = gbNextRun(due); gbSave(c); refreshPanel('gbroadcast'); return; }
+  if (due.mode === 'once' && late > 12 * 3600000) {
+    due.on = false; due.status = 'missed'; due.nextRun = 0;
+    c.logs = [{ ts: now, title: due.title || 'Offer', ok: 0, fail: 0, note: 'missed — app was closed at the scheduled time' }, ...c.logs].slice(0, 80);
+    gbSave(c); refreshPanel('gbroadcast'); return;
+  }
+  await gbPost(due.id, false);
+}
+async function gbPost(offerId, manual) {
+  if (_gbBusy) { if (manual) toast('Another group post is still going out', 'err'); return; }
+  const c = gbLoad(); const o = c.offers.find((x) => x.id === offerId); if (!o) return;
+  const jids = gbTargets(c, o.labelIds);
+  if (!jids.length) {
+    if (manual) return toast('Pick a label that has groups in it', 'err');
+    o.nextRun = o.mode === 'once' ? 0 : gbNextRun(o); if (o.mode === 'once') { o.on = false; o.status = 'missed'; }
+    c.logs = [{ ts: Date.now(), title: o.title || 'Offer', ok: 0, fail: 0, note: 'skipped — its labels have no groups' }, ...c.logs].slice(0, 80);
+    gbSave(c); refreshPanel('gbroadcast'); return;
+  }
+  const accId = c.accId && document.querySelector(`webview[data-acc="${c.accId}"]`) ? c.accId : activeId;
+  // Not linked: a scheduled post retries on the next tick until it is too late (see gbTick).
+  if (!(await isConnectedOn(accId))) { if (manual) toast('WhatsApp not linked', 'err'); return; }
+  _gbBusy = true; gbProgress = { offerId, done: 0, total: jids.length };
+  let ok = 0, fail = 0; const failed = [];
+  try {
+    for (const jid of jids) {
+      const r = o.data ? await sendMediaToJidOn(accId, jid, o.data, o.text, o.filename) : await sendToJidOn(accId, jid, o.text);
+      if (r && r.ok) ok++; else { fail++; failed.push((c.groups[jid] && c.groups[jid].name) || jidNumber(jid)); }
+      gbProgress.done++;
+      if (gbProgress.done < jids.length) await sleep((c.gapMin + Math.random() * Math.max(0, c.gapMax - c.gapMin)) * 1000);
+    }
+  } finally {
+    _gbBusy = false; gbProgress = null;
+    // Re-read: the user may have edited other offers while this one was sending.
+    const fresh = gbLoad(); const f = fresh.offers.find((x) => x.id === offerId);
+    if (f) {
+      f.lastRun = Date.now(); f.lastOk = ok; f.lastFail = fail; f.runs = (f.runs || 0) + 1;
+      if (f.mode === 'once' && !manual) { f.on = false; f.status = 'sent'; f.nextRun = 0; }
+      else if (f.mode !== 'once') f.nextRun = f.on ? gbNextRun(f) : 0;
+    }
+    fresh.logs = [{ ts: Date.now(), title: o.title || deriveTitle(o.text || '') || o.filename || 'Offer', ok, fail, manual: !!manual, failed: failed.slice(0, 10) }, ...fresh.logs].slice(0, 80);
+    gbSave(fresh);
+    refreshPanel('gbroadcast');
+    toast(`${o.title || 'Offer'} posted to ${ok}/${jids.length} groups`, fail ? 'err' : 'ok');
+  }
+}
+
+RENDER.gbroadcast = (b) => {
+  const c = gbLoad();
+  const save = () => gbSave(c);
+  const groupList = () => Object.entries(c.groups).map(([jid, g]) => ({ jid, ...g }));
+  if (!gbTab) gbTab = c.labels.length ? 'offers' : 'groups';
+  if (gbLabelFilter !== 'all' && gbLabelFilter !== 'none' && !c.labels.some((l) => l.id === gbLabelFilter)) gbLabelFilter = 'all';
+
+  // ---- tab strip ----
+  const tabs = el('div', { className: 'gb-tabs', role: 'tablist' });
+  const body = el('div', { className: 'gb-body' });
+  const TABS = [['groups', 'Groups & Labels', () => Object.keys(c.groups).length], ['offers', 'Offers', () => c.offers.length], ['activity', 'Activity & Settings', () => null]];
+  const drawTabs = () => {
+    tabs.innerHTML = '';
+    TABS.forEach(([id, name, count]) => {
+      const n = count();
+      tabs.append(el('button', { className: 'gb-tab' + (gbTab === id ? ' active' : ''), role: 'tab', onclick: () => { gbTab = id; drawTabs(); drawBody(); } },
+        name, n != null ? el('span', { className: 'gb-count' }, String(n)) : null));
+    });
+  };
+  const drawBody = () => { body.innerHTML = ''; ({ groups: drawGroups, offers: drawOffers, activity: drawActivity })[gbTab](); };
+
+  // ================= Groups & Labels =================
+  const selected = new Set();
+  function drawGroups() {
+    const all = groupList();
+    const search = el('input', { type: 'search', className: 'gb-search', placeholder: 'Search groups…' });
+    const show = el('select', { className: 'gb-show' });
+    [['all', 'All groups'], ['admin', 'I am admin'], ['canpost', 'I can post'], ['locked', 'Admins-only groups'], ['community', 'Communities']].forEach(([v, t]) => show.append(el('option', { value: v }, t)));
+    const fetchedNote = el('span', { className: 'muted gb-fetched' }, all.length
+      ? `${all.length} groups saved · fetched ${gbFmt(c.fetchedAt).toLowerCase()}`
+      : 'No groups saved yet');
+    const fetchBtn = el('button', { className: 'btn primary small', onclick: fetchGroups }, all.length ? '↻ Refresh groups' : 'Fetch groups');
+
+    // label sidebar
+    const side = el('div', { className: 'gb-side' });
+    const unlabelled = all.filter((g) => !c.labels.some((l) => l.jids.includes(g.jid))).length;
+    const sideItem = (id, name, count, color) => el('button', {
+      className: 'gb-side-item' + (gbLabelFilter === id ? ' active' : ''),
+      onclick: () => { gbLabelFilter = id; selected.clear(); drawBody(); },
+    }, el('span', { className: 'gb-dot', style: { background: color || 'var(--muted-2)' } }), el('span', { className: 'gb-side-name' }, name), el('span', { className: 'gb-side-count' }, String(count)));
+    side.append(
+      el('div', { className: 'gb-side-head' }, 'Labels'),
+      sideItem('all', 'All groups', all.length, 'var(--text)'),
+      sideItem('none', 'Unlabelled', unlabelled, 'transparent'),
+      el('div', { className: 'gb-side-sep' }));
+    if (!c.labels.length) side.append(el('div', { className: 'muted gb-side-empty' }, 'Make a label, then add groups to it. Offers post to labels.'));
+    c.labels.forEach((l) => side.append(sideItem(l.id, l.name, l.jids.filter((j) => c.groups[j] && !c.groups[j].gone).length, l.color)));
+    side.append(el('button', { className: 'gb-side-add', onclick: () => newLabel() }, '＋ New label'));
+
+    // list header (label being viewed)
+    const curLabel = c.labels.find((l) => l.id === gbLabelFilter);
+    const listHead = el('div', { className: 'gb-list-head' },
+      el('div', { className: 'gb-list-title' },
+        curLabel ? el('span', { className: 'gb-dot', style: { background: curLabel.color } }) : null,
+        curLabel ? curLabel.name : gbLabelFilter === 'none' ? 'Unlabelled groups' : 'All groups'),
+      curLabel ? el('div', { className: 'row', style: { gap: '6px' } },
+        el('button', { className: 'btn ghost small', onclick: () => renameLabel(curLabel) }, 'Rename'),
+        el('button', { className: 'btn ghost small', onclick: () => recolorLabel(curLabel) }, 'Colour'),
+        el('button', { className: 'btn ghost small gb-danger', onclick: () => deleteLabel(curLabel) }, 'Delete')) : null);
+
+    const list = el('div', { className: 'gb-list' });
+    const selAll = chk(false);
+    const listBar = el('label', { className: 'gb-selall' }, selAll, el('span', {}, 'Select all shown'));
+    const actionBar = el('div', { className: 'gb-actionbar hidden' });
+
+    let shown = [];
+    const visible = () => {
+      const q = search.value.trim().toLowerCase();
+      return all.filter((g) => {
+        if (gbLabelFilter === 'none' && c.labels.some((l) => l.jids.includes(g.jid))) return false;
+        if (curLabel && !curLabel.jids.includes(g.jid)) return false;
+        if (q && !(g.name || '').toLowerCase().includes(q) && !g.jid.includes(q)) return false;
+        if (show.value === 'admin' && g.admin !== true) return false;
+        if (show.value === 'canpost' && g.announce && g.admin !== true) return false;
+        if (show.value === 'locked' && !g.announce) return false;
+        if (show.value === 'community' && !g.community) return false;
+        return true;
+      }).sort((a, b) => (a.gone - b.gone) || (a.name || '').localeCompare(b.name || ''));
+    };
+    const drawActionBar = () => {
+      actionBar.classList.toggle('hidden', !selected.size);
+      actionBar.innerHTML = '';
+      if (!selected.size) return;
+      const addSel = el('select', { className: 'gb-addsel' });
+      addSel.append(el('option', { value: '' }, 'Add to label…'));
+      c.labels.forEach((l) => addSel.append(el('option', { value: l.id }, l.name)));
+      addSel.append(el('option', { value: '__new' }, '＋ New label from selection'));
+      addSel.onchange = async () => {
+        const v = addSel.value; addSel.value = '';
+        if (!v) return;
+        const l = v === '__new' ? await newLabel(true) : c.labels.find((x) => x.id === v);
+        if (!l) return;
+        let n = 0; selected.forEach((j) => { if (!l.jids.includes(j)) { l.jids.push(j); n++; } });
+        save(); toast(`${n} group${n === 1 ? '' : 's'} added to ${l.name}`); selected.clear(); drawTabs(); drawBody();
+      };
+      actionBar.append(el('span', { className: 'gb-selcount' }, `${selected.size} selected`), addSel);
+      if (curLabel) actionBar.append(el('button', { className: 'btn ghost small', onclick: () => {
+        curLabel.jids = curLabel.jids.filter((j) => !selected.has(j)); save();
+        toast(`Removed ${selected.size} from ${curLabel.name}`); selected.clear(); drawBody();
+      } }, 'Remove from ' + curLabel.name));
+      actionBar.append(el('button', { className: 'btn ghost small', onclick: () => { selected.clear(); drawList(); } }, 'Clear'));
+    };
+    const drawList = () => {
+      shown = visible(); list.innerHTML = '';
+      selAll.checked = shown.length > 0 && shown.every((g) => selected.has(g.jid));
+      listBar.style.display = shown.length ? '' : 'none';
+      if (!all.length) {
+        list.append(el('div', { className: 'gb-empty' },
+          el('div', { className: 'gb-empty-icon' }, svg(IC.group)),
+          el('b', {}, 'No groups fetched yet'),
+          el('div', { className: 'muted' }, 'Fetch the groups this WhatsApp account is in. They are saved here, so you only fetch again when you join new ones.'),
+          el('button', { className: 'btn primary small', onclick: fetchGroups }, 'Fetch groups')));
+      } else if (!shown.length) {
+        list.append(el('div', { className: 'gb-empty' }, el('b', {}, curLabel ? 'This label has no groups yet' : 'No groups match'),
+          el('div', { className: 'muted' }, curLabel ? 'Open All groups, tick the ones you want and use “Add to label”.' : 'Try another search or filter.')));
+      }
+      shown.forEach((g) => {
+        const cb = chk(selected.has(g.jid));
+        cb.onchange = () => { cb.checked ? selected.add(g.jid) : selected.delete(g.jid); row.classList.toggle('sel', cb.checked); drawActionBar(); selAll.checked = shown.every((x) => selected.has(x.jid)); };
+        const meta = [];
+        if (g.size) meta.push(`${g.size} members`);
+        if (g.community) meta.push('Community');
+        const badges = el('span', { className: 'gb-badges' });
+        if (g.admin === true) badges.append(el('span', { className: 'gb-badge admin' }, 'Admin'));
+        if (g.announce) badges.append(el('span', { className: 'gb-badge ' + (g.admin === true ? '' : 'lock'), title: g.admin === true ? 'Only admins can post — you are an admin' : 'Only admins can post here, so posts from this account will fail' }, '🔒 Admins only'));
+        if (g.gone) badges.append(el('span', { className: 'gb-badge lock', title: 'Not in the last fetch — you may have left this group' }, 'Not found'));
+        const pills = el('span', { className: 'gb-pills' });
+        c.labels.filter((l) => l.jids.includes(g.jid)).forEach((l) => pills.append(el('span', { className: 'gb-pill', style: { '--c': l.color } }, l.name)));
+        const row = el('label', { className: 'gb-row' + (selected.has(g.jid) ? ' sel' : '') + (g.gone ? ' gone' : '') },
+          cb,
+          el('span', { className: 'gb-avatar', style: { background: `oklch(55% .12 ${gbHue(g.jid)})` } }, gbInitials(g.name)),
+          el('span', { className: 'gb-main' },
+            el('span', { className: 'gb-name' }, g.name || jidNumber(g.jid)),
+            el('span', { className: 'gb-meta' }, meta.join(' · '), badges)),
+          pills);
+        list.append(row);
+      });
+      drawActionBar();
+    };
+    selAll.onchange = () => { shown.forEach((g) => (selAll.checked ? selected.add(g.jid) : selected.delete(g.jid))); drawList(); };
+    search.oninput = drawList; show.onchange = drawList;
+
+    body.append(
+      el('div', { className: 'gb-toolbar' }, fetchBtn, fetchedNote, el('span', { style: { flex: '1' } }), show, search),
+      el('div', { className: 'gb-split' }, side,
+        el('div', { className: 'gb-main-col' }, listHead, all.length ? listBar : null, list, actionBar)));
+    drawList();
+  }
+
+  async function fetchGroups() {
+    if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
+    toast('Fetching groups…');
+    const gs = await waExec(GB_FETCH).catch(() => []);
+    if (!gs || !gs.length) return toast('No groups found on this account', 'err');
+    const seen = new Set();
+    gs.forEach((g) => {
+      seen.add(g.id);
+      const prev = c.groups[g.id] || {};
+      c.groups[g.id] = { name: g.name || prev.name || '', size: g.size || prev.size || 0, admin: g.admin == null ? prev.admin ?? null : g.admin, announce: !!g.announce, community: !!g.community, gone: false };
+    });
+    // Keep groups that vanished instead of deleting them, so a label never shrinks silently.
+    let gone = 0;
+    for (const jid of Object.keys(c.groups)) if (!seen.has(jid)) { if (c.labels.some((l) => l.jids.includes(jid))) { c.groups[jid].gone = true; gone++; } else delete c.groups[jid]; }
+    c.fetchedAt = Date.now(); c.accId = activeId; save();
+    toast(`${gs.length} groups saved${gone ? ` · ${gone} labelled group${gone === 1 ? '' : 's'} not found` : ''}`);
+    drawTabs(); drawBody();
+  }
+  async function newLabel(silent) {
+    const name = await promptModal('New label', 'Name this set of groups, e.g. “Retail buyers” or “Delhi wholesale”', '');
+    if (!name || !name.trim()) return null;
+    const l = { id: gbId(), name: name.trim().slice(0, 40), color: GB_COLORS[c.labels.length % GB_COLORS.length], jids: [] };
+    c.labels.push(l); save();
+    if (!silent) { gbLabelFilter = l.id; drawTabs(); drawBody(); toast('Label created — now add groups from All groups'); }
+    return l;
+  }
+  async function renameLabel(l) {
+    const name = await promptModal('Rename label', '', l.name);
+    if (!name || !name.trim()) return;
+    l.name = name.trim().slice(0, 40); save(); drawBody();
+  }
+  function recolorLabel(l) { l.color = GB_COLORS[(GB_COLORS.indexOf(l.color) + 1) % GB_COLORS.length]; save(); drawBody(); }
+  async function deleteLabel(l) {
+    const users = c.offers.filter((o) => (o.labelIds || []).includes(l.id));
+    if (!(await confirmModal(`Delete label “${l.name}”?`, users.length ? `${users.length} offer${users.length === 1 ? '' : 's'} post to it and will stop reaching these groups. The groups themselves are kept.` : 'The groups themselves are kept.', 'Delete'))) return;
+    c.labels = c.labels.filter((x) => x.id !== l.id);
+    users.forEach((o) => { o.labelIds = o.labelIds.filter((id) => id !== l.id); });
+    gbLabelFilter = 'all'; save(); drawTabs(); drawBody();
+  }
+
+  // ================= Offers =================
+  let editing = null; // offer being composed: a copy, saved back on Save
+  function drawOffers() {
+    const head = el('div', { className: 'gb-toolbar' },
+      el('div', { className: 'muted', style: { fontSize: '12.5px' } }, 'Each offer has its own timing and labels. One-time offers switch off after posting — their labels stay ready for the next one.'),
+      el('span', { style: { flex: '1' } }),
+      editing ? null : el('button', { className: 'btn primary small', onclick: () => { editing = { id: null, title: '', text: '', labelIds: [], mode: 'once', at: '', times: ['10:00'], days: [1, 2, 3, 4, 5, 6], on: true }; drawBody(); } }, '＋ New offer'));
+    body.append(head);
+    if (editing) body.append(composer());
+    const listEl = el('div', { className: 'gb-offers' });
+    if (!c.offers.length && !editing) {
+      listEl.append(el('div', { className: 'gb-empty' }, el('div', { className: 'gb-empty-icon' }, svg(IC.broadcast)), el('b', {}, 'No offers yet'),
+        el('div', { className: 'muted' }, c.labels.length ? 'Create an offer, choose labels and set when it posts.' : 'Start in Groups & Labels: fetch your groups and sort them into labels.')));
+    }
+    // Live first, then scheduled-off, then finished.
+    const rank = (o) => (o.on ? 0 : o.status === 'sent' || o.status === 'missed' ? 2 : 1);
+    c.offers.slice().sort((a, b) => rank(a) - rank(b) || (a.nextRun || 9e15) - (b.nextRun || 9e15)).forEach((o) => listEl.append(offerCard(o)));
+    body.append(listEl);
+  }
+  function offerCard(o) {
+    const reach = gbTargets(c, o.labelIds).length;
+    const isImg = o.data && /^data:image\//.test(o.data);
+    const status = gbProgress && gbProgress.offerId === o.id ? ['sending', `Sending ${gbProgress.done}/${gbProgress.total}`]
+      : o.on ? ['live', o.mode === 'once' ? 'Scheduled' : 'Running']
+      : o.status === 'sent' ? ['done', 'Sent'] : o.status === 'missed' ? ['missed', 'Missed'] : ['off', 'Paused'];
+    const nextEl = el('span', { className: 'gb-next' });
+    const tickNext = () => {
+      const cur = gbLoad().offers.find((x) => x.id === o.id) || o;
+      nextEl.textContent = gbProgress && gbProgress.offerId === o.id ? `Sending ${gbProgress.done} of ${gbProgress.total}…`
+        : cur.on && cur.nextRun ? `Next: ${gbFmt(cur.nextRun)} (${gbIn(cur.nextRun - Date.now())})`
+        : cur.lastRun ? `Last posted ${gbFmt(cur.lastRun)} · ${cur.lastOk || 0}/${(cur.lastOk || 0) + (cur.lastFail || 0)} groups` : 'Not posted yet';
+    };
+    tickNext(); nextEl._tick = tickNext;
+    const toggle = chk(!!o.on);
+    toggle.title = o.on ? 'Pause this offer' : 'Turn this offer on';
+    toggle.onchange = () => {
+      if (toggle.checked) {
+        const nr = gbNextRun(o);
+        if (!nr || (o.mode === 'once' && nr <= Date.now())) { toggle.checked = false; toast(o.mode === 'once' ? 'Pick a future time first (Edit)' : 'Add a time first (Edit)', 'err'); return; }
+        o.on = true; o.status = ''; o.nextRun = nr;
+      } else { o.on = false; o.nextRun = 0; }
+      save(); drawBody();
+    };
+    const labelPills = el('div', { className: 'gb-pills' });
+    (o.labelIds || []).forEach((id) => { const l = c.labels.find((x) => x.id === id); if (l) labelPills.append(el('span', { className: 'gb-pill', style: { '--c': l.color } }, l.name)); });
+    if (!labelPills.children.length) labelPills.append(el('span', { className: 'gb-pill warn' }, 'No label'));
+    const actions = el('div', { className: 'gb-card-actions' },
+      el('button', { className: 'btn small', onclick: async () => {
+        if (await confirmModal('Post this offer now?', `It goes to ${reach} group${reach === 1 ? '' : 's'} right away. Its schedule is not changed.`, 'Post now')) gbPost(o.id, true);
+      } }, 'Post now'),
+      el('button', { className: 'btn ghost small', onclick: () => { editing = JSON.parse(JSON.stringify(o)); if (editing.mode === 'once' && (o.status === 'sent' || o.status === 'missed')) editing.at = ''; drawBody(); body.scrollTop = 0; } }, o.status === 'sent' || o.status === 'missed' ? 'Schedule again' : 'Edit'),
+      el('button', { className: 'btn ghost small', onclick: () => { const d = JSON.parse(JSON.stringify(o)); d.id = null; d.title = (o.title || 'Offer') + ' (copy)'; d.at = ''; d.on = true; d.status = ''; editing = d; drawBody(); body.scrollTop = 0; } }, 'Duplicate'),
+      el('button', { className: 'btn ghost small gb-danger', onclick: async () => {
+        if (!(await confirmModal('Delete this offer?', 'Its labels and groups are kept.', 'Delete'))) return;
+        c.offers = c.offers.filter((x) => x.id !== o.id); save(); drawTabs(); drawBody();
+      } }, 'Delete'));
+    return el('div', { className: 'gb-card ' + status[0] },
+      el('div', { className: 'gb-thumb' + (isImg ? '' : ' txt') }, isImg ? el('img', { src: o.data, alt: '' }) : el('span', {}, o.data ? '📎' : 'Aa')),
+      el('div', { className: 'gb-card-main' },
+        el('div', { className: 'gb-card-top' },
+          el('b', { className: 'gb-card-title' }, o.title || deriveTitle(o.text || '') || o.filename || 'Untitled offer'),
+          el('span', { className: 'gb-status ' + status[0] }, status[1]),
+          el('span', { style: { flex: '1' } }),
+          el('label', { className: 'gb-switch', title: 'On / off' }, toggle, el('span', {}))),
+        o.text ? el('div', { className: 'gb-card-text' }, o.text.slice(0, 140) + (o.text.length > 140 ? '…' : '')) : null,
+        el('div', { className: 'gb-card-meta' }, el('span', { className: 'gb-sched' }, '🕒 ' + gbScheduleText(o)), el('span', {}, `→ ${reach} group${reach === 1 ? '' : 's'}`)),
+        labelPills,
+        el('div', { className: 'gb-card-foot' }, nextEl, actions)));
+  }
+  function composer() {
+    const e = editing;
+    const title = el('input', { placeholder: 'e.g. Diwali sale — 30% off', value: e.title || '' });
+    const text = el('textarea', { placeholder: 'Offer message. {Hi|Hello} picks one at random per group, so posts do not look identical.', value: e.text || '', rows: 4 });
+    const att = attachControl('image/*,video/*,.pdf');
+    const keepFile = el('span', { className: 'muted', style: { fontSize: '12px' } }, e.data ? `Keeping current file: ${e.filename || 'attachment'}` : '');
+    // saved product shortcut (Quick Replies products)
+    const prod = el('select');
+    const qs = store.get('ott_quick', []);
+    prod.append(el('option', { value: '' }, qs.length ? 'Fill from a saved product…' : 'No saved products'));
+    qs.forEach((p, i) => prod.append(el('option', { value: String(i) }, p.title || deriveTitle(p.text) || 'Untitled')));
+    prod.onchange = () => { const p = qs[Number(prod.value)]; if (!p) return; title.value = p.title || title.value; text.value = p.text || ''; if (p.data) { e.data = p.data; e.filename = p.filename; keepFile.textContent = 'Using product image: ' + (p.filename || 'image'); } };
+
+    // labels
+    const labelBox = el('div', { className: 'gb-labelpick' });
+    const reachEl = el('span', { className: 'muted', style: { fontSize: '12px' } });
+    const drawLabelPick = () => {
+      labelBox.innerHTML = '';
+      if (!c.labels.length) labelBox.append(el('span', { className: 'muted', style: { fontSize: '12px' } }, 'No labels yet — create them in Groups & Labels.'));
+      c.labels.forEach((l) => {
+        const on = e.labelIds.includes(l.id);
+        const n = l.jids.filter((j) => c.groups[j] && !c.groups[j].gone).length;
+        labelBox.append(el('button', { className: 'gb-lp' + (on ? ' on' : ''), style: { '--c': l.color }, onclick: () => { on ? e.labelIds = e.labelIds.filter((x) => x !== l.id) : e.labelIds.push(l.id); drawLabelPick(); drawSummary(); } },
+          el('span', { className: 'gb-dot', style: { background: l.color } }), `${l.name}`, el('span', { className: 'gb-lp-n' }, String(n))));
+      });
+      const r = gbTargets(c, e.labelIds).length;
+      reachEl.textContent = e.labelIds.length ? `${r} unique group${r === 1 ? '' : 's'} — a group in two labels gets the offer once` : '';
+    };
+
+    // timing
+    const seg = el('div', { className: 'gb-seg' });
+    const timing = el('div', { className: 'gb-timing' });
+    const summary = el('div', { className: 'gb-summary' });
+    const drawSummary = () => {
+      const nr = gbNextRun(e);
+      const r = gbTargets(c, e.labelIds).length;
+      summary.textContent = !e.labelIds.length ? 'Choose at least one label.'
+        : !nr || (e.mode === 'once' && nr <= Date.now()) ? (e.mode === 'once' ? 'Pick a date and time in the future.' : 'Add at least one time' + (e.mode === 'weekly' ? ' and day.' : '.'))
+        : `Posts to ${r} group${r === 1 ? '' : 's'} · first post ${gbFmt(nr)} (${gbIn(nr - Date.now())})`;
+    };
+    const drawSeg = () => {
+      seg.innerHTML = '';
+      [['once', 'One time'], ['daily', 'Daily'], ['weekly', 'Weekly']].forEach(([m, t]) => seg.append(el('button', { className: 'gb-seg-btn' + (e.mode === m ? ' on' : ''), onclick: () => { e.mode = m; drawSeg(); drawTiming(); drawSummary(); } }, t)));
+    };
+    const drawTiming = () => {
+      timing.innerHTML = '';
+      if (e.mode === 'once') {
+        const dt = el('input', { type: 'datetime-local', value: e.at || '' });
+        dt.oninput = () => { e.at = dt.value; drawSummary(); };
+        const quick = el('div', { className: 'row', style: { gap: '6px', flexWrap: 'wrap' } });
+        const pad = (n) => String(n).padStart(2, '0');
+        const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        [['In 1 hour', () => new Date(Date.now() + 3600000)], ['Tonight 7 PM', () => { const d = new Date(); d.setHours(19, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d; }], ['Tomorrow 10 AM', () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0); return d; }]]
+          .forEach(([t, f]) => quick.append(el('button', { className: 'btn ghost small', onclick: () => { e.at = local(f()); dt.value = e.at; drawSummary(); } }, t)));
+        timing.append(lbl('Post at', dt), quick);
+        return;
+      }
+      if (e.mode === 'weekly') {
+        const days = el('div', { className: 'gb-days' });
+        GB_DAYS.forEach((d, i) => days.append(el('button', { className: 'gb-day' + (e.days.includes(i) ? ' on' : ''), onclick: () => { e.days.includes(i) ? e.days = e.days.filter((x) => x !== i) : e.days.push(i); drawTiming(); drawSummary(); } }, d)));
+        timing.append(el('div', { className: 'gb-sub' }, 'On these days'), days);
+      }
+      const times = el('div', { className: 'gb-times' });
+      e.times.slice().sort().forEach((t) => times.append(el('span', { className: 'gb-time' }, t, el('button', { title: 'Remove', onclick: () => { e.times = e.times.filter((x) => x !== t); drawTiming(); drawSummary(); } }, '✕'))));
+      const add = el('input', { type: 'time', value: '18:00', className: 'gb-time-in' });
+      times.append(add, el('button', { className: 'btn ghost small', onclick: () => { if (add.value && !e.times.includes(add.value)) e.times.push(add.value); drawTiming(); drawSummary(); } }, '＋ Add time'));
+      timing.append(el('div', { className: 'gb-sub' }, 'At these times (posts once at each)'), times);
+    };
+
+    const saveOffer = () => {
+      const f = att.get();
+      e.title = title.value.trim(); e.text = text.value.trim();
+      if (f) { e.data = f.data; e.filename = f.name; }
+      if (!e.text && !e.data) return toast('Write the offer or attach a file', 'err');
+      if (!e.labelIds.length) return toast('Choose at least one label', 'err');
+      const nr = gbNextRun(e);
+      if (!nr || (e.mode === 'once' && nr <= Date.now())) return toast(e.mode === 'once' ? 'Pick a future date and time' : 'Add at least one time', 'err');
+      e.on = true; e.status = ''; e.nextRun = nr;
+      if (e.id) { const i = c.offers.findIndex((x) => x.id === e.id); if (i >= 0) c.offers[i] = { ...c.offers[i], ...e }; else c.offers.push(e); }
+      else { e.id = gbId(); e.created = Date.now(); c.offers.push(e); }
+      if (save() === false) return;
+      toast(`Saved — first post ${gbFmt(nr)}. Nothing was sent now.`);
+      editing = null; drawTabs(); drawBody();
+    };
+
+    drawLabelPick(); drawSeg(); drawTiming(); drawSummary();
+    return el('div', { className: 'gb-composer' },
+      el('div', { className: 'gb-comp-head' }, el('b', {}, e.id ? 'Edit offer' : 'New offer'), el('span', { style: { flex: '1' } }), prod),
+      el('div', { className: 'gb-comp-grid' },
+        el('div', { className: 'gb-comp-col' },
+          lbl('Title (only you see this)', title),
+          lbl('Message', text),
+          att.node, keepFile),
+        el('div', { className: 'gb-comp-col' },
+          el('div', { className: 'gb-sub' }, 'Send to labels'), labelBox, reachEl,
+          el('div', { className: 'gb-sub', style: { marginTop: '6px' } }, 'When'), seg, timing)),
+      el('div', { className: 'gb-comp-foot' }, summary, el('span', { style: { flex: '1' } }),
+        el('button', { className: 'btn ghost small', onclick: () => { editing = null; drawBody(); } }, 'Cancel'),
+        el('button', { className: 'btn primary small', onclick: saveOffer }, e.id ? 'Save changes' : 'Save offer')));
+  }
+
+  // ================= Activity & Settings =================
+  function drawActivity() {
+    const accSel = el('select'); accounts.forEach((a) => accSel.append(el('option', { value: a.id }, a.name))); accSel.value = c.accId || activeId;
+    accSel.onchange = () => { c.accId = accSel.value; save(); };
+    const gmin = el('input', { type: 'number', min: '1', value: String(c.gapMin), style: { maxWidth: '90px' } });
+    const gmax = el('input', { type: 'number', min: '1', value: String(c.gapMax), style: { maxWidth: '90px' } });
+    [gmin, gmax].forEach((x) => x.onchange = () => { c.gapMin = Math.max(1, +gmin.value || 4); c.gapMax = Math.max(c.gapMin, +gmax.value || 10); gmax.value = String(c.gapMax); save(); });
+    const logs = el('div', { className: 'gb-logs' });
+    if (!c.logs.length) logs.append(el('div', { className: 'muted', style: { padding: '14px' } }, 'Nothing posted yet.'));
+    c.logs.forEach((l) => logs.append(el('div', { className: 'gb-log ' + (l.note ? 'skip' : l.fail ? 'partial' : 'ok') },
+      el('span', { className: 'gb-log-ts' }, gbFmt(l.ts)),
+      el('span', { className: 'gb-log-title' }, l.title + (l.manual ? ' · manual' : '')),
+      el('span', { className: 'gb-log-res' }, l.note || `${l.ok} sent${l.fail ? ` · ${l.fail} failed` : ''}`),
+      l.failed && l.failed.length ? el('span', { className: 'gb-log-fail' }, 'Failed: ' + l.failed.join(', ')) : null)));
+    body.append(
+      el('div', { className: 'row' }, lbl('Post from account', accSel), lbl('Gap between groups — min (s)', gmin), lbl('max (s)', gmax)),
+      el('div', { className: 'fp-note' }, 'Posts go out while the app is open. A random gap between groups keeps WhatsApp from treating it as spam. If the app was closed at a daily or weekly time, that slot is skipped; a one-time offer still posts if you open the app within 12 hours.'),
+      el('div', { className: 'row', style: { alignItems: 'center' } }, el('b', { style: { fontSize: '12.5px' } }, 'Recent posts'), el('span', { style: { flex: '1' } }),
+        el('button', { className: 'btn ghost small', onclick: () => { c.logs = []; save(); drawBody(); } }, 'Clear')),
+      logs);
+  }
+
+  // live countdowns and send progress without redrawing the panel
+  const iv = setInterval(() => {
+    if (!document.body.contains(body)) return clearInterval(iv);
+    body.querySelectorAll('.gb-next').forEach((n) => n._tick && n._tick());
+  }, 1000);
+
+  b.append(el('div', { className: 'gb' }, tabs, body));
+  drawTabs(); drawBody();
 };
 
 // ================= Lead Manager =================
@@ -2267,9 +2854,9 @@ function exportLeadsCsv(rows, from, to) {
 RENDER.leads = (b) => {
   migrateLeads();
   const mode = el('select'); [['leads', 'Leads'], ['report', 'Reports'], ['seqs', 'Follow-up Sequences']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
-  const boxc = el('div', {});
+  const boxc = el('div', { className: 'fp-stack' });
   mode.onchange = render;
-  b.append(el('div', { className: 'fp-note' }, 'Save any chat as a lead with the “＋ Lead” button in its header. Set a type & status, track the pipeline, and export reports.'), lbl('View', mode), boxc);
+  b.append(el('div', { className: 'fp-note' }, 'Save any chat as a lead with the “＋ Lead” button in its header. Set a type & status, track the pipeline, and export reports.'), segOf(mode), boxc);
   render();
   function render() { boxc.innerHTML = ''; mode.value === 'leads' ? leadsView() : mode.value === 'report' ? reportView() : seqsView(); }
 
@@ -2284,7 +2871,7 @@ RENDER.leads = (b) => {
       const leads = store.get('ott_leads', []).filter(L =>
         (f === 'all' || L.status === f) && (tf === 'all' || (L.type || 'new') === tf) &&
         (!q || (L.name || '').toLowerCase().includes(q) || L.number.includes(q)));
-      if (!leads.length) { list.append(el('div', { className: 'muted' }, 'No leads match. Open a chat and click “＋ Lead”.')); return; }
+      if (!leads.length) { list.append(el('div', { className: 'muted empty-state' }, 'No leads match. Open a chat and click “＋ Lead”.')); return; }
       list.append(el('div', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' } }, leads.length + ' lead(s)'));
       leads.forEach(L => list.append(leadCard(L, draw)));
     };
@@ -2363,9 +2950,9 @@ RENDER.leads = (b) => {
     const stepAtt = attachControl('*'); stepAtt.node.style.display = 'flex';
     const dval = el('input', { type: 'number', value: '1', min: '0', style: { maxWidth: '80px' } });
     const dunit = el('select'); ['minutes', 'hours', 'days'].forEach(u => dunit.append(el('option', { value: u }, u))); dunit.value = 'days';
-    const drawSteps = () => { stepsBox.innerHTML = ''; if (!steps.length) stepsBox.append(el('div', { className: 'muted' }, 'No steps yet.')); steps.forEach((s, i) => stepsBox.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, 'After ' + s.delayValue + ' ' + s.delayUnit), el('div', { className: 'muted', style: { fontSize: '12px' } }, (s.data ? '📎 ' : '') + (s.text || s.filename || '').slice(0, 50))), el('button', { className: 'btn small ghost', onclick: () => { steps.splice(i, 1); drawSteps(); } }, '✕')))); };
+    const drawSteps = () => { stepsBox.innerHTML = ''; if (!steps.length) stepsBox.append(el('div', { className: 'muted empty-state' }, 'No steps yet.')); steps.forEach((s, i) => stepsBox.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, 'After ' + s.delayValue + ' ' + s.delayUnit), el('div', { className: 'muted', style: { fontSize: '12px' } }, (s.data ? '📎 ' : '') + (s.text || s.filename || '').slice(0, 50))), el('button', { className: 'btn small ghost', onclick: () => { steps.splice(i, 1); drawSteps(); } }, '✕')))); };
     const listSeqs = el('div', {});
-    const drawList = () => { listSeqs.innerHTML = ''; const seqs = store.get('ott_lead_seqs', []); if (!seqs.length) { listSeqs.append(el('div', { className: 'muted' }, 'No sequences.')); return; } seqs.forEach(s => listSeqs.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, s.name), el('div', { className: 'muted', style: { fontSize: '12px' } }, s.steps.length + ' steps' + (s.stopOnReply ? ' · stops on reply' : ''))), el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_lead_seqs', store.get('ott_lead_seqs', []).filter(x => x.id !== s.id)); drawList(); } }, 'Delete')))); };
+    const drawList = () => { listSeqs.innerHTML = ''; const seqs = store.get('ott_lead_seqs', []); if (!seqs.length) { listSeqs.append(el('div', { className: 'muted empty-state' }, 'No sequences.')); return; } seqs.forEach(s => listSeqs.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, s.name), el('div', { className: 'muted', style: { fontSize: '12px' } }, s.steps.length + ' steps' + (s.stopOnReply ? ' · stops on reply' : ''))), el('button', { className: 'btn small ghost', onclick: () => { store.set('ott_lead_seqs', store.get('ott_lead_seqs', []).filter(x => x.id !== s.id)); drawList(); } }, 'Delete')))); };
     boxc.append(
       el('div', { className: 'fp-note' }, 'A sequence auto-sends its steps to a lead at the set delays, once you start it on that lead.'),
       lbl('Name', name), chkRow(stopReply, 'Stop follow-ups when the lead replies'),
@@ -2451,8 +3038,8 @@ RENDER.invoice = (b) => {
   const inp = (v, ph) => el('input', { value: v || '', placeholder: ph || '' });
   const ta = (v, ph) => { const t = el('textarea', { placeholder: ph || '' }); t.value = v || ''; return t; };
   const mode = el('select'); [['create', 'Create Invoice'], ['items', 'Saved Items'], ['templates', 'Templates'], ['business', 'Business Settings']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
-  const boxc = el('div', {}); mode.onchange = render;
-  b.append(el('div', { className: 'fp-note' }, 'Generate GST invoices and send them as a PDF on WhatsApp. Set up your business first.'), lbl('View', mode), boxc);
+  const boxc = el('div', { className: 'fp-stack' }); mode.onchange = render;
+  b.append(el('div', { className: 'fp-note' }, 'Generate GST invoices and send them as a PDF on WhatsApp. Set up your business first.'), segOf(mode), boxc);
   if (!cfg.name) mode.value = 'business';
   render();
   function render() { boxc.innerHTML = ''; const v = mode.value; if (v === 'create') createView(); else if (v === 'items') itemsView(); else if (v === 'templates') templatesView(); else businessView(); }
@@ -2464,7 +3051,7 @@ RENDER.invoice = (b) => {
     const list = el('div', { className: 'rules' });
     const draw = () => {
       list.innerHTML = ''; const its = store.get('ott_invoice_items', []);
-      if (!its.length) { list.append(el('div', { className: 'muted' }, 'No saved items yet.')); return; }
+      if (!its.length) { list.append(el('div', { className: 'muted empty-state' }, 'No saved items yet.')); return; }
       its.forEach((it, i) => list.append(el('div', { className: 'qr-item' }, el('div', { className: 'txt' }, el('b', {}, it.name), el('div', { className: 'muted', style: { fontSize: '12px' } }, '₹' + it.price + (cfg.gstEnabled && it.gst ? ' · GST ' + it.gst + '%' : '') + (it.hsn ? ' · HSN ' + it.hsn : ''))), el('button', { className: 'btn small ghost', onclick: () => { const a = store.get('ott_invoice_items', []); a.splice(i, 1); store.set('ott_invoice_items', a); draw(); } }, '✕'))));
     };
     boxc.append(el('div', { className: 'fp-note' }, 'Save your products/services once — then add them to any invoice in one click.'),
@@ -2591,6 +3178,7 @@ function startScheduler() {
     for (const job of store.get('ott_schedule', [])) if (job.status === 'pending' && new Date(job.when).getTime() <= now) { setJobStatus('ott_schedule', job.id, 'sending'); runSchedule(job); }
     for (const r of store.get('ott_reminders', [])) if (r.status === 'pending' && new Date(r.when).getTime() <= now) { setJobStatus('ott_reminders', r.id, 'firing'); fireReminder(r); }
     autopostTick();
+    gbTick();
     leadFollowupTick();
     dealTick();
     memberAddTick();
@@ -2777,7 +3365,7 @@ RENDER.schedule = (b) => {
   const list = el('div', { className: 'rules' });
   const draw = () => {
     list.innerHTML = ''; const jobs = store.get('ott_schedule', []).filter(j => j.accId === activeId).reverse();
-    if (!jobs.length) list.append(el('div', { className: 'muted' }, 'No scheduled broadcasts.'));
+    if (!jobs.length) list.append(el('div', { className: 'muted empty-state' }, 'No scheduled broadcasts.'));
     jobs.forEach(j => list.append(el('div', { className: 'qr-item' },
       el('div', { className: 'txt' }, el('b', {}, new Date(j.when).toLocaleString()),
         el('div', { className: 'muted', style: { fontSize: '12px' } }, `${j.numbers.length} recipients · ${j.status}${j.ok != null ? ` (${j.ok} sent)` : ''}`)),
@@ -2821,7 +3409,7 @@ RENDER.reminder = (b) => {
     list.innerHTML = '';
     const rs = store.get('ott_reminders', []).filter((r) => r.accId === activeId)
       .sort((a, c) => new Date(a.when) - new Date(c.when));
-    if (!rs.length) { list.append(el('div', { className: 'muted' }, 'No reminders yet.')); return; }
+    if (!rs.length) { list.append(el('div', { className: 'muted empty-state' }, 'No reminders yet.')); return; }
     rs.forEach((r) => {
       const due = new Date(r.when);
       const late = r.status === 'pending' && due < new Date();
@@ -2873,9 +3461,9 @@ async function loadGroupsInto(sel) {
 RENDER.grouputils = (b) => {
   const mode = el('select');
   [['manage', 'Manage / Message'], ['joiner', 'Group Joiner'], ['destroyer', 'Group Destroyer']].forEach(([v, n]) => mode.append(el('option', { value: v }, n)));
-  const box = el('div', {});
+  const box = el('div', { className: 'fp-stack' });
   mode.onchange = () => render();
-  b.append(el('div', { className: 'fp-note' }, 'Group tools for THIS account. Admin actions require the right permissions.'), lbl('Tool', mode), box);
+  b.append(el('div', { className: 'fp-note' }, 'Group tools for THIS account. Admin actions require the right permissions.'), segOf(mode), box);
   render();
 
   function render() {
@@ -2900,7 +3488,7 @@ RENDER.grouputils = (b) => {
       holder.innerHTML = '<div class="muted">Loading groups…</div>';
       groups = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
       holder.innerHTML = '';
-      if (!groups.length) { holder.append(el('div', { className: 'muted' }, 'No groups found.')); return; }
+      if (!groups.length) { holder.append(el('div', { className: 'muted empty-state' }, 'No groups found.')); return; }
       picker = checkList(groups);
       holder.append(picker.node);
       toast(groups.length + ' groups loaded');
@@ -3008,7 +3596,7 @@ RENDER.guard = (b) => {
   const on = chk(cfg.on);
   on.onchange = () => { cfg.on = on.checked; chip.className = 'chip ' + (cfg.on ? 'on' : 'off'); chip.textContent = cfg.on ? 'Guarding' : 'Off'; persist(); };
 
-  const gsel = el('select');
+  const gsel = el('select', {}, el('option', { value: '' }, 'Load groups to pick one…'));
   const dl = chk(true), warn = chk(false);
   const maxW = el('input', { type: 'number', value: '3', min: '1', style: { maxWidth: '90px' } });
   const banned = el('textarea', { placeholder: 'Banned words / phrases (one per line)' });
@@ -3017,7 +3605,7 @@ RENDER.guard = (b) => {
   const drawList = () => {
     listBox.innerHTML = '';
     const entries = Object.entries(cfg.groups);
-    if (!entries.length) { listBox.append(el('div', { className: 'muted' }, 'No groups guarded yet.')); return; }
+    if (!entries.length) { listBox.append(el('div', { className: 'muted empty-state' }, 'No groups guarded yet.')); return; }
     entries.forEach(([gid, g]) => listBox.append(el('div', { className: 'qr-item' },
       el('div', { className: 'txt' }, el('b', {}, g.name || gid),
         el('div', { className: 'muted', style: { fontSize: '12px' } }, `${g.deleteLinks ? 'del links' : ''}${g.banned && g.banned.length ? ' · ' + g.banned.length + ' words' : ''}${g.warn ? ' · remove after ' + (g.max || 3) : ''}`)),
@@ -3027,7 +3615,7 @@ RENDER.guard = (b) => {
   b.append(
     el('div', { className: 'fp-note' }, 'Protects groups where THIS account is admin. On a matching message it deletes it and (optionally) warns/removes the sender after N strikes. Requires admin rights.'),
     el('label', { style: { flexDirection: 'row', alignItems: 'center', gap: '10px' } }, on, 'Enable Group Guard', chip),
-    el('div', { className: 'fp-note' }, 'Configure a group:'),
+    el('div', { className: 'fp-sec' }, 'Configure a group'),
     el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel,
     chkRow(dl, 'Delete messages containing links'),
     lbl('Banned words / phrases', banned),
@@ -3667,7 +4255,7 @@ RENDER.deals = (b) => {
     const shown = filter === 'active' ? active : filter === 'soon' ? soon : filter === 'expired' ? expired : ds;
     const list = el('div', { className: 'rules', style: { marginTop: '10px' } });
     if (!shown.length) {
-      list.append(el('div', { className: 'muted' }, ds.length
+      list.append(el('div', { className: 'muted empty-state' }, ds.length
         ? 'No deals in this view.'
         : 'No deals yet — open a chat and use “Deal done” on the widget above the message box.'));
     }
@@ -4211,7 +4799,7 @@ function drawStatusPanel(b) {
     list.innerHTML = '';
     countLbl.textContent = pack.items.length + ' / ' + STATUS_MAX_ITEMS;
     if (!pack.items.length) {
-      list.append(el('div', { className: 'muted' }, 'No media yet. Upload images or videos, then tick the ones to post.'));
+      list.append(el('div', { className: 'muted empty-state' }, 'No media yet. Upload images or videos, then tick the ones to post.'));
       return;
     }
     pack.items.forEach((it, i) => {
@@ -4438,6 +5026,22 @@ RENDER.backup = (b) => {
 };
 
 function lbl(t, c) { return el('label', {}, t, c); }
+// Tabs for a small <select> that switches a panel's view. The select stays in the DOM
+// (hidden) so every existing mode.value / mode.onchange keeps working unchanged.
+function segOf(sel) {
+  const wrap = el('div', { className: 'fp-seg', role: 'tablist' });
+  const draw = () => {
+    wrap.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.v === sel.value));
+  };
+  [...sel.options].forEach((o) => wrap.append(el('button', { type: 'button', role: 'tab', textContent: o.textContent, onclick: () => {
+    if (sel.value === o.value) return;
+    sel.value = o.value; draw();
+    if (sel.onchange) sel.onchange(); else sel.dispatchEvent(new Event('change'));
+  } })));
+  wrap.querySelectorAll('button').forEach((b, i) => { b.dataset.v = sel.options[i].value; });
+  sel.style.display = 'none'; wrap.append(sel); draw();
+  return wrap;
+}
 function line(box, text, cls) { const s = el('span', cls ? { className: cls } : {}); s.textContent = text + '\n'; box.append(s); box.scrollTop = box.scrollHeight; }
 function quickInsert(target) {
   const qs = store.get('ott_quick', []);
@@ -4566,7 +5170,7 @@ RENDER.memberadd = (b) => {
     list.innerHTML = '';
     logBox.innerHTML = '';
     const jobs = memberJobs().filter((j) => j.accId === activeId).reverse();
-    if (!jobs.length) list.append(el('div', { className: 'muted' }, 'No add-member jobs yet.'));
+    if (!jobs.length) list.append(el('div', { className: 'muted empty-state' }, 'No add-member jobs yet.'));
     jobs.forEach((j) => {
       const left = (j.remaining || []).length;
       const total = left + (j.done || []).length;
@@ -4674,7 +5278,7 @@ RENDER.groupextract = (b) => {
     const groups = await loadGroupsAndCommunities();
     holder.innerHTML = '';
     if (!groups.length) {
-      holder.append(el('div', { className: 'muted' }, 'No groups found. Join a public group on this WhatsApp account first.'));
+      holder.append(el('div', { className: 'muted empty-state' }, 'No groups found. Join a public group on this WhatsApp account first.'));
       return;
     }
     picker = checkList(groups.map((g) => ({
