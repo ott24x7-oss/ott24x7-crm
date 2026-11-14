@@ -2,3 +2,8 @@ node_modules/
 release/
 .env
 *.log
+
+# UI preview screenshots (regenerate with preview/capture.js)
+preview/screens/
+preview/audit/
+preview/audit-after/

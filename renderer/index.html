@@ -17,6 +17,7 @@
       <button id="activateBtn" class="btn primary block">Activate</button>
       <div class="gate-or"><span>or</span></div>
       <button id="trialBtn" class="btn ghost block">Start 7-day Free Trial</button>
+      <button id="buyLicenseBtn" class="btn ghost block">View plans &amp; buy</button>
       <div id="gateMsg" class="msg" role="status" aria-live="polite"></div>
       <div class="gate-foot muted">Device: <span id="deviceId">…</span></div>
     </div>
@@ -27,6 +28,20 @@
     <span>Free trial — <b id="trialDays">7 days</b> left</span>
     <button id="trialBuyBtn" class="tb-buy">Buy license</button>
   </div>
+
+  <!-- PLANS (opened from the licence gate; filled from the licence server's live shop cards) -->
+  <section id="productCardSection" class="product-card-section hidden" role="dialog" aria-modal="true" aria-labelledby="plansTitle">
+    <div class="product-card-container">
+      <button class="pc-close" id="plansClose" aria-label="Close">&times;</button>
+      <h2 class="product-card-title" id="plansTitle">Choose your licence</h2>
+      <p class="product-card-sub muted">One-time payment. Your key arrives by email — paste it on the activation screen.</p>
+      <div class="product-cards-grid" id="plansGrid"><div class="muted pc-loading">Loading plans…</div></div>
+      <div class="product-card-footer">
+        <span class="muted">Not sure yet? Every device gets a 7-day free trial.</span>
+        <button class="btn ghost small" id="plansTrial">Start free trial</button>
+      </div>
+    </div>
+  </section>
 
   <!-- APP -->
   <section id="app" class="app hidden">
