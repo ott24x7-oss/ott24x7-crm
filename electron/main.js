@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell, dialog, net } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
@@ -276,7 +276,7 @@ ipcMain.handle('invoice:pdf', async (_e, html) => {
 ipcMain.handle('app:translate', async (_e, { text, tl }) => {
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(text)}`;
-    const r = await fetch(url);
+    const r = await net.fetch(url); // Node's fetch gets Google's bot page; Chromium's stack does not
     const j = await r.json();
     return { ok: true, text: (j[0] || []).map((x) => x[0]).join('') };
   } catch (e) {
