@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, session, shell, dialog, net } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const { Worker } = require('node:worker_threads');
 const config = require('../config.js');
 const brand = require('../brand.js');
@@ -303,6 +304,7 @@ async function checkManualUpdate() {
   const r = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
   if (!r.ok) throw new Error('releases feed ' + r.status);
   const latest = String((await r.json()).tag_name || '').replace(/^v/, '');
+  manualUpdateVersion = latest;
   if (latest && newer(latest, app.getVersion())) {
     win?.webContents.send('update:available', { version: latest, manual: true, url: RELEASES_PAGE });
   } else {
@@ -310,13 +312,79 @@ async function checkManualUpdate() {
   }
 }
 
+let manualUpdateVersion = '';
+let manualUpdatePath = '';
+
+function manualAssetName(version) {
+  if (process.platform === 'win32') return `WA-CRM-Setup-${version}.exe`;
+  if (process.platform === 'darwin') {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    return `WA-CRM-${version}-mac-${arch}.dmg`;
+  }
+  throw new Error('Built-in updates are currently supported on Windows and macOS.');
+}
+
+async function downloadManualUpdate() {
+  if (!manualUpdateVersion) throw new Error('Check for updates before downloading.');
+  const name = manualAssetName(manualUpdateVersion);
+  const url = `https://github.com/${brand.updateRepo}/releases/download/v${manualUpdateVersion}/${encodeURIComponent(name)}`;
+  const response = await net.fetch(url);
+  if (!response.ok) throw new Error(`update download ${response.status}`);
+
+  const downloadDir = app.getPath('downloads');
+  await fs.promises.mkdir(downloadDir, { recursive: true });
+  const ext = path.extname(name);
+  let destination = path.join(downloadDir, name);
+  if (fs.existsSync(destination)) {
+    destination = path.join(downloadDir, `${path.basename(name, ext)}-${Date.now()}${ext}`);
+  }
+  const partial = destination + '.part';
+  const total = Number(response.headers.get('content-length')) || 0;
+  let received = 0;
+  win?.webContents.send('update:progress', { percent: 0 });
+
+  try {
+    if (response.body && typeof Readable.fromWeb === 'function') {
+      const input = Readable.fromWeb(response.body);
+      const output = fs.createWriteStream(partial);
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const fail = (err) => { if (!settled) { settled = true; reject(err); } };
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        input.on('data', (chunk) => {
+          received += chunk.length;
+          if (total) win?.webContents.send('update:progress', { percent: Math.min(99, Math.floor(received * 100 / total)) });
+        });
+        input.once('error', fail);
+        output.once('error', fail);
+        output.once('close', done);
+        input.pipe(output);
+      });
+    } else {
+      const data = Buffer.from(await response.arrayBuffer());
+      received = data.length;
+      await fs.promises.writeFile(partial, data);
+    }
+    await fs.promises.rename(partial, destination);
+    manualUpdatePath = destination;
+    win?.webContents.send('update:progress', { percent: 100 });
+    win?.webContents.send('update:downloaded', { path: destination, manual: true });
+    return { ok: true, path: destination };
+  } catch (e) {
+    try { await fs.promises.rm(partial, { force: true }); } catch (_) {}
+    throw e;
+  }
+}
+
 function initManualUpdate() {
   ipcMain.handle('update:check', () => checkManualUpdate().catch((e) => {
     win?.webContents.send('update:error', { message: String((e && e.message) || e) });
   }));
-  // The download and install handlers must still exist so the preload bridge is complete.
-  ipcMain.handle('update:download', () => shell.openExternal(RELEASES_PAGE));
-  ipcMain.handle('update:install', () => shell.openExternal(RELEASES_PAGE));
+  ipcMain.handle('update:download', () => downloadManualUpdate().catch((e) => {
+    win?.webContents.send('update:error', { message: String((e && e.message) || e) });
+    return { ok: false };
+  }));
+  ipcMain.handle('update:install', () => manualUpdatePath ? shell.openPath(manualUpdatePath) : shell.openExternal(RELEASES_PAGE));
   setTimeout(() => checkManualUpdate().catch(() => {}), 6000);
   setInterval(() => checkManualUpdate().catch(() => {}), 6 * 3600 * 1000);
 }

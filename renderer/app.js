@@ -409,24 +409,22 @@ function showUpdatePopup(version, manual) {
   if (_upd) return;
   const bar = el('div', { className: 'progress', style: { display: 'none', width: '100%' } }); const barI = el('div', { className: 'bar' }); bar.append(barI);
   const pct = el('div', { className: 'muted', style: { fontSize: '12px', display: 'none' } }, '0%');
-  // On macOS the app is not code-signed, so it cannot replace itself — open the download
-  // page instead of pretending an in-app update is running.
+  // Unsigned/manual builds download the installer in-app and let the user open it when ready;
+  // packaged Windows builds use electron-updater and restart directly into the update.
   const here = APP_VERSION ? ('You are on v' + APP_VERSION + '. ') : '';
-  const updBtn = manual
-    ? el('button', { className: 'btn primary', onclick: () => { ott.downloadUpdate(); closeUpd(); } }, 'Download')
-    : el('button', { className: 'btn primary', onclick: () => beginUpdateDownload(updBtn, bar, pct) }, 'Update now');
+  const updBtn = el('button', { className: 'btn primary', onclick: () => beginUpdateDownload(updBtn, bar, pct) }, manual ? 'Download' : 'Update now');
   const box = el('div', { className: 'modal-box', style: { width: '400px', textAlign: 'center' } },
     el('h3', {}, 'Update available'),
     el('div', { className: 'ver-now' }, 'v' + (version || '')),
     el('div', { className: 'muted', style: { margin: '6px 0 8px', lineHeight: '1.5' } },
       here + 'Version ' + (version || '') + (manual
-        ? ' is out. Download it and drag ' + BRAND.name + ' into Applications to replace this copy.'
+        ? ' is out. Download the installer inside ' + BRAND.name + ' and open it when ready.'
         : ' is ready. Install it to get the latest features and fixes.')),
     bar, pct,
     el('div', { className: 'row', style: { justifyContent: 'center', marginTop: '8px' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), updBtn));
   const scrim = el('div', { className: 'modal-scrim' }, box);
   document.body.append(scrim);
-  _upd = { scrim, box, barI, pct, btn: updBtn, downloading: false };
+  _upd = { scrim, box, barI, pct, btn: updBtn, downloading: false, manual: !!manual };
 }
 function beginUpdateDownload(btn, bar, pct) {
   if (!_upd) return;
@@ -452,15 +450,19 @@ function showUpdateFailed(msg) {
     el('div', { className: 'msg err', style: { margin: '8px 0', lineHeight: '1.45', fontSize: '13px' } }, msg || 'The download stopped.'),
     el('div', { className: 'row', style: { justifyContent: 'center' } },
       el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'),
-      el('button', { className: 'btn primary', onclick: () => { closeUpd(); ott.downloadUpdate && ott.checkUpdate && ott.checkUpdate(); } }, 'Try again')));
+      el('button', { className: 'btn primary', onclick: () => { closeUpd(); ott.checkUpdate && ott.checkUpdate(); } }, 'Try again')));
 }
 function setUpdateDownloaded() {
   if (!_upd) showUpdatePopup('');
   if (!_upd || !_upd.box) return;
+  const manual = !!_upd.manual;
   _upd.downloading = false;
   _upd.box.innerHTML = '';
-  _upd.box.append(el('h3', {}, 'Update ready'), el('div', { className: 'muted', style: { margin: '4px 0 10px' } }, 'Restart to apply the update.'),
-    el('div', { className: 'row', style: { justifyContent: 'center' } }, el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'), el('button', { className: 'btn primary', onclick: () => ott.installUpdate() }, 'Restart & update')));
+  _upd.box.append(el('h3', {}, manual ? 'Installer downloaded' : 'Update ready'),
+    el('div', { className: 'muted', style: { margin: '4px 0 10px' } }, manual ? 'The installer is in your Downloads folder.' : 'Restart to apply the update.'),
+    el('div', { className: 'row', style: { justifyContent: 'center' } },
+      el('button', { className: 'btn ghost', onclick: closeUpd }, 'Later'),
+      el('button', { className: 'btn primary', onclick: () => ott.installUpdate() }, manual ? 'Open installer' : 'Restart & update')));
 }
 function closeUpd() { if (_upd) { _upd.scrim.remove(); _upd = null; } }
 
