@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "WA-CRM — WhatsApp CRM",
   "short_name": "WA-CRM",
-  "version": "3.11.0",
+  "version": "3.11.1",
   "description": "Turn WhatsApp Web into a CRM: product catalog, AI assistant, lead capture, follow-ups and bulk send — from the number you already use.",
   "icons": {
     "16": "icons/icon16.png",

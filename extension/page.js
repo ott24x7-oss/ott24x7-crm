@@ -8,6 +8,24 @@
   const TAG = 'WACRM';
   const digits = (s) => String(s || '').replace(/\D/g, '');
   const jidOf = (n) => (String(n).includes('@') ? String(n) : digits(n) + '@c.us');
+  const isGroup = (x) => {
+    const id = x && x.id;
+    return !!(id && (id.server === 'g.us' || String(id._serialized || '').endsWith('@g.us')
+      || (typeof id.isGroup === 'function' && id.isGroup()) || x.isGroup === true));
+  };
+  const listGroups = async () => {
+    let groups = [];
+    try {
+      if (WPP.group && typeof WPP.group.getAllGroups === 'function') groups = await WPP.group.getAllGroups();
+    } catch (e) {}
+    try {
+      if (!groups.length) groups = await WPP.chat.list({ onlyGroups: true });
+    } catch (e) {}
+    try {
+      if (!groups.length) groups = (await WPP.chat.list()).filter(isGroup);
+    } catch (e) {}
+    return (groups || []).filter(isGroup);
+  };
   const spin = (t) => String(t || '').replace(/\{([^{}]+)\}/g, (_, g) => {
     const o = g.split('|'); return o[Math.floor(Math.random() * o.length)];
   });
@@ -93,19 +111,25 @@
     async sendText({ to, text }) {
       // linkPreview:false — wa-js would otherwise send any URL in the message to
       // third-party preview servers. See wpp-config.js.
-      await WPP.chat.sendTextMessage(jidOf(to), spin(text), { createChat: true, linkPreview: false });
+      const r = await WPP.chat.sendTextMessage(jidOf(to), spin(text), { createChat: true, linkPreview: false });
+      const s = r && r.sendMsgResult && r.sendMsgResult.messageSendResult;
+      if (s && s !== 'OK') return { ok: false, err: String(s) };
+      if (r && Number(r.ack) < 0) return { ok: false, err: 'ACK_' + r.ack };
       return { ok: true };
     },
 
     async sendFile({ to, data, caption, filename }) {
-      await WPP.chat.sendFileMessage(jidOf(to), data, {
+      const r = await WPP.chat.sendFileMessage(jidOf(to), data, {
         type: 'auto', caption: spin(caption || ''), filename: filename || 'file', createChat: true,
       });
+      const s = r && r.sendMsgResult && r.sendMsgResult.messageSendResult;
+      if (s && s !== 'OK') return { ok: false, err: String(s) };
+      if (r && Number(r.ack) < 0) return { ok: false, err: 'ACK_' + r.ack };
       return { ok: true };
     },
 
     async groups() {
-      const g = await WPP.chat.list({ onlyGroups: true });
+      const g = await listGroups();
       return g.map((x) => ({
         jid: x.id && x.id._serialized,
         name: (x.groupMetadata && x.groupMetadata.subject) || x.name || x.formattedTitle || '',
@@ -167,7 +191,7 @@
     async groupMembers({ jids }) {
       const out = [];
       const seen = new Set();
-      const groups = await WPP.chat.list({ onlyGroups: true });
+      const groups = await listGroups();
       const wanted = jids && jids.length ? new Set(jids) : null;
       for (const g of groups) {
         const jid = g.id && g.id._serialized;

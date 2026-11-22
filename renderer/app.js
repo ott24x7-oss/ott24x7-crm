@@ -100,6 +100,36 @@ const FEATURES = [
 // ================= boot / license =================
 let engineSrc = '';
 let trialInfo = { isTrial: false, expiresAt: null };
+// WhatsApp's chat-list filter stopped returning groups on some current Web builds even though
+// the group store is populated. Keep the resolver in the webview so every group feature uses
+// the same compatibility path: the dedicated group query first, then the chat-list filter,
+// then a filtered full chat list for older WA-JS builds.
+const GROUPS_BOOTSTRAP = `(() => {
+  window.__ottListGroups = async function () {
+    const isGroup = (x) => {
+      const id = x && x.id;
+      return !!(id && (id.server === 'g.us' || String(id._serialized || '').endsWith('@g.us')
+        || (typeof id.isGroup === 'function' && id.isGroup()) || x.isGroup === true));
+    };
+    let groups = [];
+    try {
+      if (window.WPP && WPP.group && typeof WPP.group.getAllGroups === 'function') {
+        groups = await WPP.group.getAllGroups();
+      }
+    } catch (_) {}
+    try {
+      if ((!groups || !groups.length) && WPP.chat && typeof WPP.chat.list === 'function') {
+        groups = await WPP.chat.list({ onlyGroups: true });
+      }
+    } catch (_) {}
+    try {
+      if ((!groups || !groups.length) && WPP.chat && typeof WPP.chat.list === 'function') {
+        groups = (await WPP.chat.list()).filter(isGroup);
+      }
+    } catch (_) {}
+    return (groups || []).filter(isGroup);
+  };
+})();`;
 // Filled from ott.config() at boot; see brand.js. Defaults are only what shows in the
 // split second before config resolves.
 const BRAND = { name: 'WA-CRM', company: 'WA-CRM', slug: 'wa-crm', site: '', buyUrl: '', hasUpdates: true };
@@ -605,7 +635,13 @@ function createWebview(acc) {
   wv.addEventListener('dom-ready', async () => {
     applyMsgSound(wv);
     if (wv.dataset.injected) return;
-    try { await wv.executeJavaScript(engineSrc + ';void 0;', true); wv.dataset.injected = '1'; applyWaTheme(acc.id); applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id); applyQuickReplies(acc.id); applyLeadButton(acc.id); applyChatWidget(acc.id); } catch (e) { console.warn('inject', e); }
+    try {
+      await wv.executeJavaScript(engineSrc + ';void 0;', true);
+      await wv.executeJavaScript(GROUPS_BOOTSTRAP + ';void 0;', true);
+      wv.dataset.injected = '1';
+      applyWaTheme(acc.id); applyAutoreply(acc.id); applyGuard(acc.id); applyBlur(acc.id);
+      applyQuickReplies(acc.id); applyLeadButton(acc.id); applyChatWidget(acc.id);
+    } catch (e) { console.warn('inject', e); }
   });
   wv.addEventListener('did-navigate', () => { wv.dataset.injected = ''; });
   $('#waStage').append(wv);
@@ -838,7 +874,7 @@ function withSignature(t) { const s = store.get('ott_sig', { on: false, text: ''
 async function sendText(number, text) {
   const jid = JSON.stringify(digits(number) + '@c.us');
   const body = JSON.stringify(spin(withSignature(text)));
-  const expr = `(async()=>{try{await WPP.chat.sendTextMessage(${jid},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  const expr = `(async()=>{try{const r=await WPP.chat.sendTextMessage(${jid},${body},{createChat:true,linkPreview:false});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
   try { return await waExec(expr); } catch (e) { return { ok: false, err: String(e) }; }
 }
 async function isConnected() { try { return await waExec("(async()=>{try{return (await WPP.conn.isAuthenticated())===true}catch(e){return false}})()"); } catch { return false; } }
@@ -847,7 +883,7 @@ async function sendMedia(number, dataUrl, caption, filename) {
   const content = JSON.stringify(dataUrl);
   const cap = JSON.stringify(spin(withSignature(caption || '')));
   const fn = JSON.stringify(filename || 'file');
-  const expr = `(async()=>{try{await WPP.chat.sendFileMessage(${jid},${content},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  const expr = `(async()=>{try{const r=await WPP.chat.sendFileMessage(${jid},${content},{type:'auto',caption:${cap},filename:${fn},createChat:true});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
   try { return await waExec(expr); } catch (e) { return { ok: false, err: String(e) }; }
 }
 
@@ -870,7 +906,7 @@ RENDER.broadcast = (b) => {
     targetBox.innerHTML = ''; curList = null;
     if (mode.value === 'numbers') { targetBox.append(numbers, el('div', { className: 'row' }, importBtn(numbers))); }
     else if (mode.value === 'contacts') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const cs = await waExec("(async()=>{try{${PH_RESOLVER};const c=await WPP.contact.list();var o=[];for(var i=0;i<c.length;i++){var x=c[i];if(!x.isMyContact)continue;var ph=await _ph(x.id);if(!ph)continue;o.push({jid:ph+'@c.us',name:x.name||x.pushname||x.formattedName||''});}return o}catch(e){return[]}})()").catch(() => []); setList(cs, `${cs.length} contacts loaded`); } }, 'Load my contacts'), el('div', { id: 'tgtlist' })); }
-    else if (mode.value === 'groups') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []); setList(gs, `${gs.length} groups loaded`); } }, 'Load groups'), el('div', { id: 'tgtlist' })); }
+    else if (mode.value === 'groups') { targetBox.append(el('button', { className: 'btn small', onclick: async () => { if (!(await ensureConn())) return; const gs = await waExec("(async()=>{try{const g=await window.__ottListGroups();return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []); setList(gs, `${gs.length} groups loaded`); } }, 'Load groups'), el('div', { id: 'tgtlist' })); }
     else if (mode.value === 'groupmembers') { targetBox.append(el('div', { className: 'row' }, el('button', { className: 'btn small', onclick: async () => { const n = await loadGroupsInto(gsel); if (n) toast(`${n} groups`); } }, 'Load groups')), gsel, el('div', { className: 'row', style: { marginTop: '8px' } }, el('button', { className: 'btn small', onclick: async () => { const gid = gsel.value; if (!gid) return toast('Pick a group', 'err'); const ps = await waExec(`(async()=>{try{${PH_RESOLVER};const p=await WPP.group.getParticipants(${JSON.stringify(gid)});var o=[];for(var i=0;i<p.length;i++){var ph=await _ph(p[i].id);if(ph)o.push({jid:ph+'@c.us',name:''});}return o}catch(e){return[]}})()`).catch(() => []); setList(ps, `${ps.length} members`); } }, 'Load members')), el('div', { id: 'tgtlist' })); }
   }
   mode.onchange = renderTarget;
@@ -1438,7 +1474,7 @@ RENDER.extractor = (b) => {
     } else if (s === 'groups') {
       const saved = await savedSet(); let gids = [];
       if (scope.value === 'specific') { if (!gsel.value) return finish('Load & pick a group'); gids = [gsel.value]; }
-      else gids = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>x.id&&x.id._serialized).filter(Boolean)}catch(e){return[]}})()").catch(() => []);
+      else gids = await waExec("(async()=>{try{const g=await window.__ottListGroups();return g.map(x=>x.id&&x.id._serialized).filter(Boolean)}catch(e){return[]}})()").catch(() => []);
       const seen = new Set();
       for (const gid of gids) {
         const ms = await waExec(`(async()=>{try{${RES};const p=await WPP.group.getParticipants(${JSON.stringify(gid)});var o=[];for(var i=0;i<p.length;i++){var ph=await _ph(p[i].id);o.push({number:ph});}return o;}catch(e){return[]}})()`).catch(() => []);
@@ -1772,7 +1808,7 @@ RENDER.autopost = (b) => {
   const tsum = el('div', { className: 'muted', style: { fontSize: '12px' } }, cfg.targets.length ? cfg.targets.length + ' groups selected' : 'No target groups selected');
   async function loadTargets() {
     if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
-    const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
+    const gs = await waExec("(async()=>{try{const g=await window.__ottListGroups();return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
     if (!gs.length) return toast('No groups found', 'err');
     tlist = checkList(gs, new Set(cfg.targets)); gbox.innerHTML = ''; gbox.append(tlist.node); toast(`${gs.length} groups`);
   }
@@ -1939,6 +1975,9 @@ function gbInitials(name) {
   return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase();
 }
 function gbHue(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
+function gbFailureText(failed) {
+  return (failed || []).map((x) => typeof x === 'string' ? `${x}: failed` : `${x.name || 'Group'}: ${x.err || 'failed'}`).join(' · ');
+}
 
 // What the engine knows about each group. Member count and admin status come from the
 // group metadata WhatsApp has already loaded; on a group it has not opened yet they can be
@@ -1946,7 +1985,7 @@ function gbHue(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.char
 const GB_FETCH = `(async()=>{try{/*__ott_gb_fetch*/
   var me=WPP.conn.getMyUserId(),meS=me&&me._serialized,meL='';
   try{var l=WPP.conn.getMyUserLid&&WPP.conn.getMyUserLid();meL=l&&l._serialized||''}catch(e){}
-  var g=await WPP.chat.list({onlyGroups:true});
+  var g=await window.__ottListGroups();
   return g.map(function(x){
     var md=x.groupMetadata||{},pc=md.participants,ps=[];
     try{ps=pc?(pc.getModelsArray?pc.getModelsArray():(pc._models||[])):[]}catch(e){}
@@ -1992,7 +2031,13 @@ async function gbPost(offerId, manual) {
   try {
     for (const jid of jids) {
       const r = o.data ? await sendMediaToJidOn(accId, jid, o.data, o.text, o.filename) : await sendToJidOn(accId, jid, o.text);
-      if (r && r.ok) ok++; else { fail++; failed.push((c.groups[jid] && c.groups[jid].name) || jidNumber(jid)); }
+      if (r && r.ok) ok++; else {
+        fail++;
+        failed.push({
+          name: (c.groups[jid] && c.groups[jid].name) || jidNumber(jid),
+          err: (r && r.err) || 'failed',
+        });
+      }
       gbProgress.done++;
       if (gbProgress.done < jids.length) await sleep((c.gapMin + Math.random() * Math.max(0, c.gapMax - c.gapMin)) * 1000);
     }
@@ -2005,7 +2050,7 @@ async function gbPost(offerId, manual) {
       if (f.mode === 'once' && !manual) { f.on = false; f.status = 'sent'; f.nextRun = 0; }
       else if (f.mode !== 'once') f.nextRun = f.on ? gbNextRun(f) : 0;
     }
-    fresh.logs = [{ ts: Date.now(), title: o.title || deriveTitle(o.text || '') || o.filename || 'Offer', ok, fail, manual: !!manual, failed: failed.slice(0, 10) }, ...fresh.logs].slice(0, 80);
+    fresh.logs = [{ ts: Date.now(), title: o.title || deriveTitle(o.text || '') || o.filename || 'Offer', ok, fail, manual: !!manual, failed: failed.slice(0, 1000) }, ...fresh.logs].slice(0, 80);
     gbSave(fresh);
     refreshPanel('gbroadcast');
     toast(`${o.title || 'Offer'} posted to ${ok}/${jids.length} groups`, fail ? 'err' : 'ok');
@@ -2384,7 +2429,8 @@ RENDER.gbroadcast = (b) => {
       el('span', { className: 'gb-log-ts' }, gbFmt(l.ts)),
       el('span', { className: 'gb-log-title' }, l.title + (l.manual ? ' · manual' : '')),
       el('span', { className: 'gb-log-res' }, l.note || `${l.ok} sent${l.fail ? ` · ${l.fail} failed` : ''}`),
-      l.failed && l.failed.length ? el('span', { className: 'gb-log-fail' }, 'Failed: ' + l.failed.join(', ')) : null)));
+       l.failed && l.failed.length ? el('details', { className: 'gb-log-fail' },
+         el('summary', {}, `Failure details (${l.failed.length})`), el('div', {}, gbFailureText(l.failed))) : null)));
     body.append(
       el('div', { className: 'row' }, lbl('Post from account', accSel), lbl('Gap between groups — min (s)', gmin), lbl('max (s)', gmax)),
       el('div', { className: 'fp-note' }, 'Posts go out while the app is open. A random gap between groups keeps WhatsApp from treating it as spam. If the app was closed at a daily or weekly time, that slot is skipped; a one-time offer still posts if you open the app within 12 hours.'),
@@ -3164,7 +3210,7 @@ function applyAutoreply(accId) {
 async function waExecOn(accId, expr) { const w = document.querySelector(`webview[data-acc="${accId}"]`); if (!w) throw new Error('no account'); return w.executeJavaScript(expr); }
 async function sendTextOn(accId, number, text) {
   const jid = JSON.stringify(digits(number) + '@c.us'); const body = JSON.stringify(spin(withSignature(text)));
-  const expr = `(async()=>{try{await WPP.chat.sendTextMessage(${jid},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
+  const expr = `(async()=>{try{const r=await WPP.chat.sendTextMessage(${jid},${body},{createChat:true,linkPreview:false});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`;
   try { return await waExecOn(accId, expr); } catch (e) { return { ok: false, err: String(e) }; }
 }
 async function isConnectedOn(accId) { try { return await waExecOn(accId, "(async()=>{try{return (await WPP.conn.isAuthenticated())===true}catch(e){return false}})()"); } catch { return false; } }
@@ -3223,11 +3269,11 @@ async function postOffer(manual) {
 }
 async function sendToJidOn(accId, jid, text) {
   const body = JSON.stringify(spin(text || ''));
-  return waExecOn(accId, `(async()=>{try{await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+  return waExecOn(accId, `(async()=>{try{const r=await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true,linkPreview:false});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
 async function sendMediaToJidOn(accId, jid, dataUrl, caption, filename) {
   const c = JSON.stringify(dataUrl), cap = JSON.stringify(spin(caption || '')), fn = JSON.stringify(filename || 'file');
-  return waExecOn(accId, `(async()=>{try{await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+  return waExecOn(accId, `(async()=>{try{const r=await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
 function setJobStatus(key, id, status, extra) { const arr = store.get(key, []); const j = arr.find(x => x.id === id); if (j) { j.status = status; if (extra) Object.assign(j, extra); store.set(key, arr); } }
 async function runSchedule(job) {
@@ -3454,7 +3500,7 @@ RENDER.reminder = (b) => {
 // ================= Group Utilities =================
 async function loadGroupsInto(sel) {
   if (!(await isConnected())) { toast('WhatsApp not linked', 'err'); return 0; }
-  const gs = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({id:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||x.id._serialized}))}catch(e){return[]}})()").catch(() => []);
+  const gs = await waExec("(async()=>{try{const g=await window.__ottListGroups();return g.map(x=>({id:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||x.id._serialized}))}catch(e){return[]}})()").catch(() => []);
   sel.innerHTML = ''; if (!gs.length) { sel.append(el('option', {}, 'No groups')); return 0; }
   gs.forEach(g => sel.append(el('option', { value: g.id }, g.name))); return gs.length;
 }
@@ -3486,7 +3532,7 @@ RENDER.grouputils = (b) => {
     const load = async () => {
       if (!(await isConnected())) return toast('WhatsApp not linked', 'err');
       holder.innerHTML = '<div class="muted">Loading groups…</div>';
-      groups = await waExec("(async()=>{try{const g=await WPP.chat.list({onlyGroups:true});return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
+      groups = await waExec("(async()=>{try{const g=await window.__ottListGroups();return g.map(x=>({jid:x.id&&x.id._serialized,name:(x.groupMetadata&&x.groupMetadata.subject)||x.name||x.formattedTitle||''}))}catch(e){return[]}})()").catch(() => []);
       holder.innerHTML = '';
       if (!groups.length) { holder.append(el('div', { className: 'muted empty-state' }, 'No groups found.')); return; }
       picker = checkList(groups);
@@ -4409,11 +4455,11 @@ function wrapSel(ta, before, after) {
 }
 async function sendToJid(jid, text) {
   const body = JSON.stringify(spin(withSignature(text)));
-  return waExec(`(async()=>{try{await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+  return waExec(`(async()=>{try{const r=await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true,linkPreview:false});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
 async function sendMediaToJid(jid, dataUrl, caption, filename) {
   const c = JSON.stringify(dataUrl), cap = JSON.stringify(spin(withSignature(caption || ''))), fn = JSON.stringify(filename || 'file');
-  return waExec(`(async()=>{try{await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+  return waExec(`(async()=>{try{const r=await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
 }
 function checkList(items, preselect) {
   const all = chk(false);
@@ -5081,7 +5127,7 @@ function saveMemberJobs(arr) { store.set('ott_memberadd', arr); }
 async function loadGroupsAndCommunities() {
   if (!(await isConnected())) { toast('WhatsApp not linked', 'err'); return []; }
   return waExec(`(async()=>{try{
-    const g=await WPP.chat.list({onlyGroups:true});
+    const g=await window.__ottListGroups();
     return g.map(x=>{
       const md=x.groupMetadata||{};
       const community=!!(x.isParentGroup||md.isParentGroup||x.parentGroup);

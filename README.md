@@ -55,18 +55,22 @@ renderer/
   styles.css    ott24x7 dark theme
   app.js        gate flow, engine injection, status polling, send loop
 assets/
-  wa-js.js      WPPConnect engine (v4.4.2)
+  wa-js.js      WPPConnect engine (v4.8.2)
   ott24x7.ico, logo-mark.png, logo-lockup.png
 config.js
 ```
 
 ## Update the WhatsApp engine
 
-When WhatsApp Web changes and sending breaks, drop a newer build over `assets/wa-js.js`:
+When WhatsApp Web changes and sending breaks, update both bundled engine copies:
 
 ```bash
 curl -L -o assets/wa-js.js https://cdn.jsdelivr.net/npm/@wppconnect/wa-js@latest/dist/wppconnect-wa.js
+copy assets\wa-js.js extension\wa-js.js
 ```
+
+After copying, preserve the extension-only browser safety replacement documented in
+`extension/THIRD-PARTY.md`.
 
 ## White-label builds (for resellers)
 
