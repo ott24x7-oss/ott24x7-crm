@@ -102,8 +102,7 @@ let engineSrc = '';
 let trialInfo = { isTrial: false, expiresAt: null };
 // WhatsApp's chat-list filter stopped returning groups on some current Web builds even though
 // the group store is populated. Keep the resolver in the webview so every group feature uses
-// the same compatibility path: the dedicated group query first, then the chat-list filter,
-// then a filtered full chat list for older WA-JS builds.
+// the same compatibility path: the dedicated group query first, then a filtered full chat list.
 const GROUPS_BOOTSTRAP = `(() => {
   window.__ottListGroups = async function () {
     const isGroup = (x) => {
@@ -115,11 +114,6 @@ const GROUPS_BOOTSTRAP = `(() => {
     try {
       if (window.WPP && WPP.group && typeof WPP.group.getAllGroups === 'function') {
         groups = await WPP.group.getAllGroups();
-      }
-    } catch (_) {}
-    try {
-      if ((!groups || !groups.length) && WPP.chat && typeof WPP.chat.list === 'function') {
-        groups = await WPP.chat.list({ onlyGroups: true });
       }
     } catch (_) {}
     try {
@@ -1872,7 +1866,7 @@ RENDER.autopost = (b) => {
   // timer + logs
   const timerEl = el('div', { className: 'fp-note' }, '—');
   const logs = el('div', { className: 'log' });
-  const drawLogs = () => { logs.innerHTML = ''; if (!cfg.logs.length) { line(logs, 'No posts yet.'); return; } cfg.logs.slice(0, 30).forEach(l => line(logs, `${new Date(l.ts).toLocaleString()} — ${l.text} (${l.ok} ok${l.fail ? ', ' + l.fail + ' fail' : ''})${l.manual ? ' [manual]' : ''}`, l.ok ? 'ok' : 'bad')); };
+  const drawLogs = () => { logs.innerHTML = ''; if (!cfg.logs.length) { line(logs, 'No posts yet.'); return; } cfg.logs.slice(0, 30).forEach(l => { const mostly = l.fail && gbTopReason(l.errs); line(logs, `${new Date(l.ts).toLocaleString()} — ${l.text} (${l.ok} ok${l.fail ? ', ' + l.fail + ' fail' : ''}${mostly ? ' · mostly: ' + mostly : ''})${l.note ? ' · ' + l.note : ''}${l.manual ? ' [manual]' : ''}`, l.ok ? 'ok' : 'bad'); }); };
   function updateTimer() {
     const c = store.get('ott_offers', cfg);
     if (!c.on) return void (timerEl.textContent = 'Auto-post is off.');
@@ -1978,7 +1972,25 @@ function gbInitials(name) {
 }
 function gbHue(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
 function gbFailureText(failed) {
-  return (failed || []).map((x) => typeof x === 'string' ? `${x}: failed` : `${x.name || 'Group'}: ${x.err || 'failed'}`).join(' · ');
+  return (failed || []).map((x) => typeof x === 'string' ? x : `${x.name || 'Group'}: ${x.err || 'failed'}`).join(' · ');
+}
+function gbTopReason(errs) {
+  const a = Object.entries(errs || {}).sort((x, y) => y[1] - x[1]); if (!a.length) return '';
+  const n = a[0][1]; return a.filter((x) => x[1] === n).slice(0, 2).map((x) => x[0]).join(', ');
+}
+function gbShouldStop(results) {
+  const sent = (results || []).filter((x) => !x.skipped);
+  if (sent.length >= 5 && sent.slice(0, 5).every((x) => !x.ok)) return true;
+  let streak = 0; for (const x of sent) { streak = x.ok ? 0 : streak + 1; if (streak >= 8) return true; }
+  return false;
+}
+function gbFailureStreak(results) {
+  let n = 0; for (let i = (results || []).length - 1; i >= 0; i--) { const x = results[i]; if (x.skipped) continue; if (x.ok) break; n++; } return n;
+}
+function gbLogResult(l) {
+  if (l.note && !l.ok && !l.fail) return l.note;
+  const mostly = l.fail && gbTopReason(l.errs); const s = `${l.ok || 0} sent${l.fail ? ` · ${l.fail} failed` : ''}${mostly ? ` · mostly: ${mostly}` : ''}`;
+  return l.note ? `${s} · ${l.note}` : s;
 }
 
 // What the engine knows about each group. Member count and admin status come from the
@@ -2029,18 +2041,24 @@ async function gbPost(offerId, manual) {
   // Not linked: a scheduled post retries on the next tick until it is too late (see gbTick).
   if (!(await isConnectedOn(accId))) { if (manual) toast('WhatsApp not linked', 'err'); return; }
   _gbBusy = true; gbProgress = { offerId, done: 0, total: jids.length };
-  let ok = 0, fail = 0; const failed = [];
+  let ok = 0, fail = 0; const failed = [], errs = {}, results = []; let stopNote = '';
+  const addFailure = (jid, reason, skipped) => {
+    fail++; errs[reason] = (errs[reason] || 0) + 1;
+    if (failed.length < 10) failed.push(`${(c.groups[jid] && c.groups[jid].name) || jidNumber(jid)} — ${reason}`);
+    results.push({ ok: false, skipped: !!skipped });
+  };
   try {
     for (const jid of jids) {
+      const g = c.groups[jid];
+      if (g && g.announce && g.admin === false) { addFailure(jid, 'only admins can post', true); gbProgress.done++; continue; }
       const r = o.data ? await sendMediaToJidOn(accId, jid, o.data, o.text, o.filename) : await sendToJidOn(accId, jid, o.text);
-      if (r && r.ok) ok++; else {
-        fail++;
-        failed.push({
-          name: (c.groups[jid] && c.groups[jid].name) || jidNumber(jid),
-          err: (r && r.err) || 'failed',
-        });
-      }
+      if (r && r.ok) { ok++; results.push({ ok: true }); }
+      else { addFailure(jid, (r && r.err) || 'failed', false); }
       gbProgress.done++;
+      if (!(r && r.ok) && gbShouldStop(results)) {
+        stopNote = (await isConnectedOn(accId)) ? `stopped after ${gbFailureStreak(results)} failures in a row — ${gbTopReason(errs) || 'failed'}` : 'stopped — WhatsApp disconnected';
+        break;
+      }
       if (gbProgress.done < jids.length) await sleep((c.gapMin + Math.random() * Math.max(0, c.gapMax - c.gapMin)) * 1000);
     }
   } finally {
@@ -2049,13 +2067,13 @@ async function gbPost(offerId, manual) {
     const fresh = gbLoad(); const f = fresh.offers.find((x) => x.id === offerId);
     if (f) {
       f.lastRun = Date.now(); f.lastOk = ok; f.lastFail = fail; f.runs = (f.runs || 0) + 1;
-      if (f.mode === 'once' && !manual) { f.on = false; f.status = 'sent'; f.nextRun = 0; }
+      if (f.mode === 'once' && !manual) { f.on = false; f.status = stopNote ? 'stopped' : 'sent'; f.nextRun = 0; }
       else if (f.mode !== 'once') f.nextRun = f.on ? gbNextRun(f) : 0;
     }
-    fresh.logs = [{ ts: Date.now(), title: o.title || deriveTitle(o.text || '') || o.filename || 'Offer', ok, fail, manual: !!manual, failed: failed.slice(0, 1000) }, ...fresh.logs].slice(0, 80);
+    fresh.logs = [{ ts: Date.now(), title: o.title || deriveTitle(o.text || '') || o.filename || 'Offer', ok, fail, manual: !!manual, failed: failed.slice(0, 10), errs, note: stopNote }, ...fresh.logs].slice(0, 80);
     gbSave(fresh);
     refreshPanel('gbroadcast');
-    toast(`${o.title || 'Offer'} posted to ${ok}/${jids.length} groups`, fail ? 'err' : 'ok');
+    toast(stopNote || `${o.title || 'Offer'} posted to ${ok}/${jids.length} groups`, (stopNote || fail) ? 'err' : 'ok');
   }
 }
 
@@ -2430,7 +2448,7 @@ RENDER.gbroadcast = (b) => {
     c.logs.forEach((l) => logs.append(el('div', { className: 'gb-log ' + (l.note ? 'skip' : l.fail ? 'partial' : 'ok') },
       el('span', { className: 'gb-log-ts' }, gbFmt(l.ts)),
       el('span', { className: 'gb-log-title' }, l.title + (l.manual ? ' · manual' : '')),
-      el('span', { className: 'gb-log-res' }, l.note || `${l.ok} sent${l.fail ? ` · ${l.fail} failed` : ''}`),
+      el('span', { className: 'gb-log-res' }, gbLogResult(l)),
        l.failed && l.failed.length ? el('details', { className: 'gb-log-fail' },
          el('summary', {}, `Failure details (${l.failed.length})`), el('div', {}, gbFailureText(l.failed))) : null)));
     body.append(
@@ -3257,25 +3275,47 @@ async function postOffer(manual) {
     const idx = (cfg.nextIndex || 0) % cfg.offers.length;
     const offer = cfg.offers[idx];
     const accId = cfg.accId && document.querySelector(`webview[data-acc="${cfg.accId}"]`) ? cfg.accId : activeId;
-    let ok = 0, fail = 0;
+    let ok = 0, fail = 0; const failed = [], errs = {}, results = []; let stopNote = '';
+    const gb = gbLoad(); const groups = gb.accId === accId ? gb.groups : {};
+    const addFailure = (jid, reason, skipped) => {
+      fail++; errs[reason] = (errs[reason] || 0) + 1;
+      if (failed.length < 10) failed.push(`${(groups[jid] && groups[jid].name) || jidNumber(jid)} — ${reason}`);
+      results.push({ ok: false, skipped: !!skipped });
+    };
     for (const jid of cfg.targets) {
+      const g = groups[jid];
+      if (g && g.announce && g.admin === false) { addFailure(jid, 'only admins can post', true); continue; }
       const r = offer.data ? await sendMediaToJidOn(accId, jid, offer.data, offer.text, offer.filename) : await sendToJidOn(accId, jid, offer.text);
-      r.ok ? ok++ : fail++; await sleep(1500);
+      if (r && r.ok) { ok++; results.push({ ok: true }); }
+      else {
+        addFailure(jid, (r && r.err) || 'failed', false);
+        if (gbShouldStop(results)) {
+          stopNote = (await isConnectedOn(accId)) ? `stopped after ${gbFailureStreak(results)} failures in a row — ${gbTopReason(errs) || 'failed'}` : 'stopped — WhatsApp disconnected';
+          break;
+        }
+      }
+      await sleep(1500);
     }
     cfg.lastPostTs = Date.now(); cfg.nextIndex = (idx + 1) % cfg.offers.length;
-    cfg.logs = [{ ts: Date.now(), text: (offer.text || offer.filename || 'offer').slice(0, 40), ok, fail, manual: !!manual }, ...(cfg.logs || [])].slice(0, 60);
+    cfg.logs = [{ ts: Date.now(), text: (offer.text || offer.filename || 'offer').slice(0, 40), ok, fail, manual: !!manual, failed: failed.slice(0, 10), errs, note: stopNote }, ...(cfg.logs || [])].slice(0, 60);
     store.set('ott_offers', cfg);
     if (openFeatureId === 'autopost') refreshPanel('autopost');
-    if (manual) toast(`Posted to ${ok}/${cfg.targets.length} groups`);
+    if (stopNote) toast(stopNote, 'err'); else if (manual) toast(`Posted to ${ok}/${cfg.targets.length} groups`);
   } finally { _autopostBusy = false; }
 }
 async function sendToJidOn(accId, jid, text) {
   const body = JSON.stringify(spin(text || ''));
-  return waExecOn(accId, `(async()=>{try{const r=await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true,linkPreview:false});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+  return waExecOnTimed(accId, `(async()=>{try{const r=await WPP.chat.sendTextMessage(${JSON.stringify(jid)},${body},{createChat:true,linkPreview:false});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`);
 }
 async function sendMediaToJidOn(accId, jid, dataUrl, caption, filename) {
   const c = JSON.stringify(dataUrl), cap = JSON.stringify(spin(caption || '')), fn = JSON.stringify(filename || 'file');
-  return waExecOn(accId, `(async()=>{try{const r=await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`).catch(e => ({ ok: false, err: String(e) }));
+  return waExecOnTimed(accId, `(async()=>{try{const r=await WPP.chat.sendFileMessage(${JSON.stringify(jid)},${c},{type:'auto',caption:${cap},filename:${fn},createChat:true});const s=r&&r.sendMsgResult&&r.sendMsgResult.messageSendResult;if(s&&s!=='OK')return{ok:false,err:String(s)};if(r&&Number(r.ack)<0)return{ok:false,err:'ACK_'+r.ack};return{ok:true}}catch(e){return{ok:false,err:String(e&&e.message||e)}}})()`);
+}
+async function waExecOnTimed(accId, expr) {
+  let timer;
+  try {
+    return await Promise.race([waExecOn(accId, expr), new Promise((resolve) => { timer = setTimeout(() => resolve({ ok: false, err: 'timed out' }), 60000); })]);
+  } catch (e) { return { ok: false, err: String(e) }; } finally { clearTimeout(timer); }
 }
 function setJobStatus(key, id, status, extra) { const arr = store.get(key, []); const j = arr.find(x => x.id === id); if (j) { j.status = status; if (extra) Object.assign(j, extra); store.set(key, arr); } }
 async function runSchedule(job) {

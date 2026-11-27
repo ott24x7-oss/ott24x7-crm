@@ -19,9 +19,6 @@
       if (WPP.group && typeof WPP.group.getAllGroups === 'function') groups = await WPP.group.getAllGroups();
     } catch (e) {}
     try {
-      if (!groups.length) groups = await WPP.chat.list({ onlyGroups: true });
-    } catch (e) {}
-    try {
       if (!groups.length) groups = (await WPP.chat.list()).filter(isGroup);
     } catch (e) {}
     return (groups || []).filter(isGroup);
